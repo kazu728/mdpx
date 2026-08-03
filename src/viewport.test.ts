@@ -32,7 +32,7 @@ describe("tileHeightPx", () => {
   });
 
   test("the tile height stays positive even at contentRows=0 (which is what stops computeTiles)", () => {
-    expect(tileHeightPx(31, 0)).toBe(62);
+    expect<number>(tileHeightPx(31, 0)).toBe(62);
   });
 });
 
@@ -42,11 +42,11 @@ describe("computeTiles", () => {
     expect(truncated).toBe(false);
     let y = 0;
     for (const t of tiles) {
-      expect(t.y).toBe(y);
+      expect<number>(t.y).toBe(y);
       expect(t.height % 20).toBe(0); // aligned to 2*cellHpx
       y += t.height;
     }
-    expect(coveredHeight(tiles)).toBe(y);
+    expect<number>(coveredHeight(tiles)).toBe(y);
     expect(y).toBeGreaterThanOrEqual(9000);
     expect(y - 9000).toBeLessThan(20); // the padding is under one unit
   });
@@ -66,8 +66,8 @@ describe("computeTiles", () => {
       const { tiles, truncated } = computeTiles(10 ** 7, cellHpx!, contentRows!);
       expect(truncated).toBe(true);
       expect(tiles.length).toBe(128);
-      expect(coveredHeight(tiles)).toBe(128 * tileHeightPx(cellHpx!, contentRows!));
-      expect(tileHeightPx(cellHpx!, contentRows!)).toBe(contentRows! * cellHpx!); // one screenful
+      expect<number>(coveredHeight(tiles)).toBe(128 * tileHeightPx(cellHpx!, contentRows!));
+      expect<number>(tileHeightPx(cellHpx!, contentRows!)).toBe(contentRows! * cellHpx!); // one screenful
     }
   });
 

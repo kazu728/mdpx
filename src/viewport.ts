@@ -7,6 +7,31 @@
 // filled with the page background colour, so it looks unremarkable in the screenshot).
 
 /**
+ * Nominal brand that puts screen-px invariants into the type system.
+ *
+ * **Only the private helpers in this module mint them.** Every calculation that establishes an
+ * invariant (alignment, snapping, rounding up) lives here, so as long as no door is left open for
+ * outside code to lift a bare number into a brand, "it has the type" implies "it went through that
+ * calculation". A branded number is assignable to a plain number one way, so consumers taking
+ * `number` need no change.
+ *
+ * The brand does not carry **which cellHpx it was aligned to** (that would need a phantom type
+ * parameter, and with cellHpx being a runtime value the cost does not pay off). Passing the right
+ * cellHpx to the right place is not something the types protect.
+ */
+declare const brand: unique symbol;
+type Brand<Tag extends string> = { readonly [brand]: Tag };
+
+/** Screen px that is a multiple of the tile boundary unit `tileAlign` (= cellHpx × CSS_SCALE). */
+export type TilePx = number & Brand<"TilePx">;
+
+/** Document height covered by the tiles (bottom of the captured range, tile padding included). */
+export type CoveredHeight = number & Brand<"CoveredHeight">;
+
+const tilePx = (n: number): TilePx => n as TilePx;
+const covered = (n: number): CoveredHeight => n as CoveredHeight;
+
+/**
  * Tile cap per generation (§4.4); anything beyond it is not captured.
  * Now that a tile is one screenful tall (§4.3) the count roughly means "how many screens are
  * reachable", and a generation's capture count tops out at 128 too. Geometries where one screen
@@ -74,20 +99,20 @@ const MAX_TILE_PX = 4096;
  * (contentRows × cellHpx). Rounding up is what makes the viewport fit inside exactly one tile at
  * scrollPx=0, so nothing more than what is shown gets captured first.
  */
-export function tileHeightPx(cellHpx: number, contentRows: number): number {
+export function tileHeightPx(cellHpx: number, contentRows: number): TilePx {
   const unit = tileAlign(cellHpx);
   const capped = Math.floor(MAX_TILE_PX / unit) * unit;
   const screenful = Math.ceil((Math.max(0, contentRows) * cellHpx) / unit) * unit;
   // contentRows=0 (rows=1) makes screenful=0. computeTiles bails out before that, but §4.8's
   // resolution check divides by the tile height and would break on 0, so return at least one unit
-  return Math.max(unit, Math.min(screenful, capped));
+  return tilePx(Math.max(unit, Math.min(screenful, capped)));
 }
 
 export interface Tile {
-  /** Physical px offset of the tile's top within the document (a multiple of the cell height). */
-  y: number;
-  /** Tile height (physical px, a multiple of the cell height). */
-  height: number;
+  /** Offset of the tile's top within the document. */
+  y: TilePx;
+  /** Tile height. */
+  height: TilePx;
 }
 
 export interface TileLayout {
@@ -117,18 +142,18 @@ export function computeTiles(docHpx: number, cellHpx: number, contentRows: numbe
   const tiles: Tile[] = [];
   let y = 0;
   while (y < paddedH && tiles.length < MAX_TILES) {
+    // paddedH and th are both multiples of unit, so y / height stay unit-aligned including the tail
     const height = Math.min(th, paddedH - y);
-    tiles.push({ y, height });
+    tiles.push({ y: tilePx(y), height: tilePx(height) });
     y += height;
   }
   const cellPadded = Math.ceil(Math.max(0, docHpx) / cellHpx) * cellHpx;
   return { tiles, truncated: y < paddedH, contentHpx: Math.min(cellPadded, coveredHeight(tiles)) };
 }
 
-/** Document height covered by the tiles (bottom of the captured range, tile padding included). */
-export function coveredHeight(tiles: Tile[]): number {
+export function coveredHeight(tiles: Tile[]): CoveredHeight {
   const last = tiles[tiles.length - 1];
-  return last ? last.y + last.height : 0;
+  return covered(last ? last.y + last.height : 0);
 }
 
 /**
