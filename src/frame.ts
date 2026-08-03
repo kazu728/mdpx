@@ -28,11 +28,7 @@ export function renderFrame(
   filename: string,
   prevPlacements: number[],
 ): { escape: string; placements: number[] } {
-  const { geometry, scrollPx, tiles, resident, displayGen } = view;
-  const vis =
-    displayGen !== null
-      ? visibleTiles(scrollPx, contentRows(geometry.rows), geometry.cellHpx, tiles)
-      : [];
+  const { geometry } = view;
 
   let out = SYNC_START;
   for (const id of prevPlacements) out += deletePlacement(id);
@@ -40,9 +36,15 @@ export function renderFrame(
 
   const placed: number[] = [];
   let pendingVisible = false;
-  for (const p of vis) {
-    if (displayGen !== null && resident.has(p.tileIndex)) {
-      const id = imageId(displayGen, p.tileIndex);
+  // With no displayed generation there is no body to place (the frame is just a status bar)
+  if (view.displayGen !== null) {
+    const vis = visibleTiles(view.scrollPx, contentRows(geometry.rows), geometry.cellHpx, view.tiles);
+    for (const p of vis) {
+      if (!view.resident.has(p.tileIndex)) {
+        pendingVisible = true; // untransferred regions stay blank (the transfer event redraws)
+        continue;
+      }
+      const id = imageId(view.displayGen, p.tileIndex);
       out += cursorTo(p.row + 1, 1);
       // Only srcW is already in image px (the geometry carries the capture width). srcY/srcH come
       // out of the visibility math in screen px, so convert them here
@@ -56,8 +58,6 @@ export function renderFrame(
         rows: p.rows,
       });
       placed.push(id);
-    } else {
-      pendingVisible = true; // untransferred regions stay blank (the transfer event redraws)
     }
   }
 
@@ -68,18 +68,21 @@ export function renderFrame(
 }
 
 function statusBar(view: ViewState, filename: string, pendingVisible: boolean): string {
-  const { geometry, scrollPx, contentHpx, displayGen, truncated, phase } = view;
+  const { geometry, scrollPx, phase } = view;
+  const shown = view.displayGen !== null ? view : null;
   // Use the same max as clampScroll. Deriving it separately would leave scrollPx short of max when
   // downscaled, so neither "truncated" nor 100% would ever appear
-  const max = maxScrollPx(contentHpx, contentRows(geometry.rows), geometry.cellHpx, geometry.renderScale);
-  const pct = displayGen === null ? "--" : max > 0 ? String(Math.round((scrollPx / max) * 100)) : "100";
+  const max = shown
+    ? maxScrollPx(shown.contentHpx, contentRows(geometry.rows), geometry.cellHpx, geometry.renderScale)
+    : 0;
+  const pct = !shown ? "--" : max > 0 ? String(Math.round((scrollPx / max) * 100)) : "100";
   const state = pendingVisible
     ? "rendering…" // showing a region whose tile has not been transferred (§4.1)
     : phase === "rendering"
-      ? displayGen === null
-        ? "rendering…"
-        : "updating"
-      : truncated && displayGen !== null && scrollPx >= max
+      ? shown
+        ? "updating"
+        : "rendering…"
+      : shown && shown.truncated && scrollPx >= max
         ? "truncated" // the tile cap is reported once the end is reached (§4.4)
         : "";
   // The relay state is a standing property, independent of position and time, so it gets its own

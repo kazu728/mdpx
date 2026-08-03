@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Scheduler, type Action, type Geometry } from "./scheduler.ts";
+import { Scheduler, type Action, type GenView, type Geometry } from "./scheduler.ts";
 import { imageId } from "./kitty.ts";
 import { visibleTiles } from "./viewport.ts";
 
@@ -9,6 +9,12 @@ const GEO: Geometry = { rows: 51, cols: 10, cellHpx: 10, imgWidthPx: 200, cssWid
 const shoots = (as: Action[]) =>
   as.filter((a): a is Action & { type: "shoot" } => a.type === "shoot").map((a) => a.tileIndex);
 const has = (as: Action[], t: Action["type"]) => as.some((a) => a.type === t);
+/** For tests that inspect tiles / resident. With no displayed generation the premise is broken, so fail. */
+function shown(s: Scheduler): GenView {
+  const v = s.viewState();
+  if (v.displayGen === null) throw new Error("no generation is displayed");
+  return v;
+}
 
 function newDisplayedGen1(): Scheduler {
   const s = new Scheduler(GEO);
@@ -45,7 +51,7 @@ describe("pipeline basics", () => {
     expect(has(b, "deleteGen")).toBe(false);
     expect(shoots(b)).toEqual([1]);
     expect(s.viewState().displayGen).toBe(1);
-    expect(s.viewState().resident.has(0)).toBe(true);
+    expect(shown(s).resident.has(0)).toBe(true);
   });
 
   test("phase is ready once every tile is captured", () => {
@@ -99,7 +105,7 @@ describe("scrolling to an untransferred tile (§4.1)", () => {
 
     const k = s.dispatch({ type: "key", delta: { kind: "bottom" } });
     expect(has(k, "redraw")).toBe(true);
-    const vs = s.viewState();
+    const vs = shown(s);
     const vis = visibleTiles(vs.scrollPx, 50, 10, vs.tiles).map((p) => p.tileIndex);
     expect(vis).toContain(2);
     expect(vs.resident.has(2)).toBe(false); // untransferred → renderFrame shows blank + "rendering…"
@@ -108,7 +114,7 @@ describe("scrolling to an untransferred tile (§4.1)", () => {
     expect(shoots(s.dispatch({ type: "tileReady", gen: 1, tileIndex: 1 }))).toEqual([2]);
     const after = s.dispatch({ type: "tileReady", gen: 1, tileIndex: 2 });
     expect(has(after, "redraw")).toBe(true);
-    expect(s.viewState().resident.has(2)).toBe(true);
+    expect(shown(s).resident.has(2)).toBe(true);
   });
 });
 
@@ -292,7 +298,7 @@ describe("renderFailed", () => {
     const f = s.dispatch({ type: "renderFailed", gen: 1 });
     expect(has(f, "deleteGen")).toBe(false); // it is on screen, so nothing is deleted
     expect(s.viewState().displayGen).toBe(1);
-    expect(s.viewState().resident.has(0)).toBe(true);
+    expect(shown(s).resident.has(0)).toBe(true);
     expect(s.viewState().phase).toBe("ready"); // the pipeline folds
 
     // Moving to the end (non-resident tile2) starts a recapture, but the trigger yields to a new
@@ -322,20 +328,20 @@ describe("resident tile budget (§4.4)", () => {
 
   test("residency never exceeds the budget (nothing is left for the terminal to evict)", () => {
     const s = displayed();
-    expect(s.viewState().resident.size).toBeLessThanOrEqual(3);
+    expect(shown(s).resident.size).toBeLessThanOrEqual(3);
   });
 
   test("the pipeline completes once the budget is captured (it does not capture all ten)", () => {
     const s = displayed();
     expect(s.viewState().phase).toBe("ready");
-    expect(s.viewState().resident.size).toBeLessThan(10);
+    expect(shown(s).resident.size).toBeLessThan(10);
   });
 
   test("scrolling far frees old tiles, and that comes after the placement (redraw)", () => {
     // The initial fill only queues the budget, so it never overflows. Overflow happens when scrolling
     // brings in tiles from elsewhere
     const s = displayed();
-    const before = new Set(s.viewState().resident);
+    const before = new Set(shown(s).resident);
     let acts = s.dispatch({ type: "key", delta: { kind: "bottom" } });
     let sawEvict = false;
     for (let i = 0; i < 20; i++) {
@@ -349,14 +355,14 @@ describe("resident tile budget (§4.4)", () => {
       }
     }
     expect(sawEvict).toBe(true);
-    expect(s.viewState().resident.size).toBeLessThanOrEqual(3);
+    expect(shown(s).resident.size).toBeLessThanOrEqual(3);
     // Tiles near the top have been pushed out
-    expect([...before].some((t) => !s.viewState().resident.has(t))).toBe(true);
+    expect([...before].some((t) => !shown(s).resident.has(t))).toBe(true);
   });
 
   test("visible tiles are never freed (no black hole in what is on screen)", () => {
     const s = displayed();
-    const vs = s.viewState();
+    const vs = shown(s);
     const vis = visibleTiles(vs.scrollPx, 50, 10, vs.tiles).map((p) => p.tileIndex);
     expect(vis.length).toBeGreaterThan(0);
     for (const t of vis) expect(vs.resident.has(t)).toBe(true);
@@ -386,6 +392,6 @@ describe("resident tile budget (§4.4)", () => {
     s.dispatch({ type: "trigger" }); // gen2 starts (the gen1 capture is still in flight)
     const late = s.dispatch({ type: "tileReady", gen: 1, tileIndex: inFlight });
     expect(late.some((a) => a.type === "deleteGen" && a.imageIds.includes(imageId(1, inFlight)))).toBe(false);
-    expect(s.viewState().resident.has(inFlight)).toBe(true);
+    expect(shown(s).resident.has(inFlight)).toBe(true);
   });
 });

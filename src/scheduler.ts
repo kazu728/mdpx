@@ -82,19 +82,36 @@ export type Action =
 
 type Phase = "rendering" | "ready";
 
-export interface ViewState {
+/** State that exists whether or not a generation is displayed. */
+interface ViewBase {
   geometry: Geometry;
   scrollPx: ScrollPx;
-  /** Number of the displayed generation (null when nothing has been displayed yet). */
-  displayGen: number | null;
-  tiles: Tile[];
-  /** Indices of tiles resident in the terminal for displayGen. Visible regions that are not resident show "rendering…". */
-  resident: ReadonlySet<number>;
-  /** Whether the tile cap cut displayGen's tail off (§4.4's "truncated"). */
-  truncated: boolean;
-  contentHpx: ContentHeight;
   phase: Phase;
 }
+
+/** No generation has been promoted yet (the first render is in flight). There is no body to place. */
+export interface BlankView extends ViewBase {
+  displayGen: null;
+}
+
+/** A generation is displayed. Everything below belongs **to that generation** and means nothing alone. */
+export interface GenView extends ViewBase {
+  displayGen: number;
+  tiles: Tile[];
+  /** Indices of tiles resident in the terminal. Visible regions that are not resident show "rendering…". */
+  resident: ReadonlySet<number>;
+  /** Whether the tile cap cut the tail off (§4.4's "truncated"). */
+  truncated: boolean;
+  contentHpx: ContentHeight;
+}
+
+/**
+ * Discriminated on displayGen. Merging the two and giving the blank case an empty tile list, an
+ * empty resident set, and contentHpx=0 would make "no generation to display" look exactly like
+ * "displaying a generation whose body is 0 px tall", forcing every consumer to sort them out with a
+ * null check (there were five such checks in frame.ts).
+ */
+export type ViewState = BlankView | GenView;
 
 interface GenState {
   gen: number;
@@ -145,18 +162,22 @@ export class Scheduler {
   }
 
   viewState(): ViewState {
-    const g = this.displayGen;
-    return {
+    const base: ViewBase = {
       geometry: this.geometry,
       scrollPx: this.scrollPx,
-      displayGen: g ? g.gen : null,
-      tiles: g ? g.tiles : [],
-      resident: g ? g.resident : new Set(),
-      truncated: g ? g.truncated : false,
-      contentHpx: g ? g.contentHpx : NO_CONTENT,
       // "rendering" means a new generation is being built. Merely re-capturing tiles that fell out
       // of residency does not count (pendingVisible picks those up as "rendering…")
       phase: this.pipeGen && !this.refetching ? "rendering" : "ready",
+    };
+    const g = this.displayGen;
+    if (!g) return { ...base, displayGen: null };
+    return {
+      ...base,
+      displayGen: g.gen,
+      tiles: g.tiles,
+      resident: g.resident,
+      truncated: g.truncated,
+      contentHpx: g.contentHpx,
     };
   }
 
