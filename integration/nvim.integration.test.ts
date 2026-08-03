@@ -83,7 +83,7 @@ async function topLine(): Promise<number> {
 /**
  * Wait for NvimCursor's send to land. This is the one place that does not poll, because a sending
  * --remote-expr running at the same time as a reading one makes the headless nvim stop replying
- * (measured). mdv itself keeps in-flight sends to one, so this concurrency exists only in tests.
+ * (measured). mdpx itself keeps in-flight sends to one, so this concurrency exists only in tests.
  * The margin is generous against the 100ms debounce plus one round trip (14–16ms measured).
  */
 const settle = () => Bun.sleep(800);
@@ -98,10 +98,10 @@ async function waitFor(label: string, ok: () => boolean | Promise<boolean>): Pro
 
 describe.skipIf(!nvimPath)("nvim cursor following", () => {
   beforeAll(async () => {
-    root = await mkdtemp(join(SHORT_TMP, "mdv-nvim-"));
+    root = await mkdtemp(join(SHORT_TMP, "mdpx-nvim-"));
     const real = join(root, "doc.md");
     await writeFile(real, DOC);
-    // **nvim opens it through a symlink while mdv sends the real path.** mdv's path is already
+    // **nvim opens it through a symlink while mdpx sends the real path.** mdpx's path is already
     // realpath'd by main's resolveMdPath, so the design has to put both sides through realpath to
     // agree. Rather than rely on an OS-specific fact (macOS's /tmp → /private/tmp), the symlink is
     // created here and checked directly
@@ -150,7 +150,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
 
   // set_cursor alone never scrolls when the destination is on screen (the document is 10 lines and
   // the window over 20, so it always is, leaving w0 at 1). Where it shows up in nvim relative to
-  // mdv's top edge would be undetermined, so topline is set too. --clean leaves scrolloff at 0, so
+  // mdpx's top edge would be undetermined, so topline is set too. --clean leaves scrolloff at 0, so
   // the target line becomes the top line exactly
   test("the target line lands at the top of the window (moving the cursor alone does not line them up)", async () => {
     expect(await sendCursor(socket, mdPath, 5)).toBe("ok");
@@ -295,7 +295,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
     }
   }, POLL_TEST_TIMEOUT_MS);
 
-  test("MDV_NVIM=off sends nothing", async () => {
+  test("MDPX_NVIM=off sends nothing", async () => {
     await sendCursor(socket, mdPath, 4);
     const cursor = new NvimCursor(mdPath, { mode: "off" });
     try {

@@ -4,7 +4,7 @@
 // and relaying them base64-encoded to the outer terminal. A transfer (`a=t`) sends the whole image
 // and only a placement (`a=p`) can clip, so the relayed volume is a multiple of "one entire tile",
 // not "the visible area". Past 32 MiB herdr drops the images wholesale and sends only text, leaving
-// the body blank. mdv fills the whole screen with images by design, so whether the limit is hit
+// the body blank. mdpx fills the whole screen with images by design, so whether the limit is hit
 // depends purely on the geometry.
 
 /**
@@ -23,15 +23,15 @@ function relayBytes(imgWidthPx: number, tileHpx: number): number {
  *
  * herdr configures the pane terminal with 64 MiB (`KITTY_IMAGE_STORAGE_LIMIT_BYTES` in
  * `src/ghostty/mod.rs`). Plain Ghostty defaults `image-storage-limit` to 320 MB, so herdr narrows it
- * to a fifth. Both count images as **decoded pixels**, so even though mdv sends PNG, the amount held
+ * to a fifth. Both count images as **decoded pixels**, so even though mdpx sends PNG, the amount held
  * is `width × height × 4`.
  */
 const IMAGE_STORAGE_LIMIT = { herdr: 64 * 1024 * 1024, ghostty: 320_000_000 };
 
 /**
  * How many tiles may stay resident in the terminal (§4.4). Past the limit the terminal evicts the
- * oldest images, but mdv has no way to learn that an image was evicted and the region silently
- * stays black. So rather than leave it to the terminal, mdv keeps the working set inside a budget
+ * oldest images, but mdpx has no way to learn that an image was evicted and the region silently
+ * stays black. So rather than leave it to the terminal, mdpx keeps the working set inside a budget
  * and frees images itself before overflowing.
  *
  * `minTiles` is the number of simultaneously visible tiles. Going below it would make the visible
@@ -65,7 +65,7 @@ export function inHerdrPane(env: NodeJS.ProcessEnv = process.env): boolean {
  * what determines each frame's relay volume is not "visible tiles" but "visible tiles **not yet
  * sent**".
  *
- * **Count what it takes to cover one screen; do not add for straddling a boundary.** mdv captures
+ * **Count what it takes to cover one screen; do not add for straddling a boundary.** mdpx captures
  * tiles from Chrome one at a time and transfers each before the next, and herdr always draws a frame
  * within that round trip — so several tiles landing in the same frame does not actually happen
  * (measured: six generation switches in a 216-column pane, zero drops). Adding +1 for the straddle
@@ -111,7 +111,7 @@ export interface RelayGeometry {
  * Decide the capture resolution and whether it overflows even downscaled (§4.8).
  * Terminals without a relay (plain Ghostty and friends) always stay at 1:1. Only when relayed, and
  * only when 1:1 does not fit, does it drop to 1. There is just one reduction step, so if that still
- * does not fit there is nothing mdv can do — that fact is surfaced as `relayOverflow` to explain the
+ * does not fit there is nothing mdpx can do — that fact is surfaced as `relayOverflow` to explain the
  * blank screen.
  */
 export function pickRenderScale(g: RelayGeometry): { renderScale: number; relayOverflow: boolean } {

@@ -9,7 +9,7 @@
 // struct winsize is four unsigned shorts (ws_row, ws_col, ws_xpixel, ws_ypixel).
 int ioctl(int, unsigned long, ...);
 
-int mdv_winsize(int fd, unsigned short *out) {
+int mdpx_winsize(int fd, unsigned short *out) {
   unsigned short ws[4] = {0, 0, 0, 0};
   if (ioctl(fd, 0x40087468UL, ws) != 0) return -1; // TIOCGWINSZ (Darwin)
   out[0] = ws[0];

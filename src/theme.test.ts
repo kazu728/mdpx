@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { pickTheme } from "./theme.ts";
 
 describe("pickTheme", () => {
-  test("MDV_THEME=light/dark wins over the system verdict", () => {
+  test("MDPX_THEME=light/dark wins over the system verdict", () => {
     expect(pickTheme("dark", false)).toBe("dark");
     expect(pickTheme("light", true)).toBe("light");
   });

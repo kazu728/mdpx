@@ -7,7 +7,7 @@ int ioctl(int, unsigned long, ...);
 int close(int);
 
 /** Open a PTY with the given rows/cols/xpixel/ypixel and return [master, slave] in out. -1 on failure. */
-int mdv_test_pty(unsigned short rows, unsigned short cols, unsigned short xp, unsigned short yp,
+int mdpx_test_pty(unsigned short rows, unsigned short cols, unsigned short xp, unsigned short yp,
                  int *out) {
   int m, s;
   if (openpty(&m, &s, 0, 0, 0) != 0) return -1;

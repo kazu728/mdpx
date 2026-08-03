@@ -18,7 +18,7 @@ if (!exe) {
   // A skip exits 0 and goes unnoticed, so always state the reason (§4.3's resolution order is shared with production)
   process.stderr.write(
     "skipping the integration tests because chrome-headless-shell was not found" +
-      " (set PUPPETEER_EXECUTABLE_PATH, or let mdv install it on first launch)\n",
+      " (set PUPPETEER_EXECUTABLE_PATH, or let mdpx install it on first launch)\n",
   );
 }
 
@@ -40,7 +40,7 @@ function pngSize(data: Uint8Array): { width: number; height: number } {
 
 describe.skipIf(!exe)("chrome + html pipeline", () => {
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), "mdv-it-"));
+    dir = await mkdtemp(join(tmpdir(), "mdpx-it-"));
     htmlPath = join(dir, "view.html");
     const md = await readFile(FIXTURE, "utf8");
     const built = await buildHtml({

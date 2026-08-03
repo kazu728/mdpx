@@ -42,7 +42,7 @@ export interface Geometry {
   renderScale: number;
   /**
    * A geometry that exceeds herdr's relay limit even downscaled (§4.8). Nothing can be done on the
-   * mdv side, so this exists only to explain the blank screen in the status bar.
+   * mdpx side, so this exists only to explain the blank screen in the status bar.
    */
   relayOverflow: boolean;
   /** How many tiles may stay resident in the terminal at once. Derived and justified in herdr.maxResidentTiles (§4.4). */

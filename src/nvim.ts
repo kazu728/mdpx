@@ -1,10 +1,10 @@
-// Sending side of nvim cursor following (§4.9). Projects mdv's scroll position one way onto the
+// Sending side of nvim cursor following (§4.9). Projects mdpx's scroll position one way onto the
 // cursor line of an nvim that has the same file open. An I/O module on par with chrome.ts.
 //
-// Because the direction is only mdv → nvim, the mutual-trigger suppression a two-way sync needs
+// Because the direction is only mdpx → nvim, the mutual-trigger suppression a two-way sync needs
 // (crossnote keeps a 500ms suppression window) is structurally unnecessary: no loop exists.
 //
-// The path goes through neither the terminal nor a pane: mdv connects straight to the unix socket
+// The path goes through neither the terminal nor a pane: mdpx connects straight to the unix socket
 // nvim has opened, unconfigured, since startup (v:servername). The only condition for connecting is
 // "has the same file open"; pane adjacency is irrelevant. No nvim-side config or plugin is required.
 //
@@ -35,7 +35,7 @@ export type JumpResult =
   | "nowin" // the buffer exists but is not in a window (never :edit on our own initiative)
   | "failed"; // unreachable, timed out, or an unexpected reply
 
-/** Result of interpreting MDV_NVIM (§5). */
+/** Result of interpreting MDPX_NVIM (§5). */
 export type NvimTarget =
   | { mode: "auto" } // search the default locations
   | { mode: "socket"; path: string } // socket given explicitly
@@ -47,7 +47,7 @@ export function socketPathFits(path: string): boolean {
 }
 
 /**
- * Interpret MDV_NVIM. `0`/`off` disables it, a path pins that socket, unset means auto-discovery.
+ * Interpret MDPX_NVIM. `0`/`off` disables it, a path pins that socket, unset means auto-discovery.
  * An over-long path is disabled with a stated reason rather than silently misconnecting (§6).
  */
 export function parseNvimEnv(value: string | undefined): NvimTarget {
@@ -57,7 +57,7 @@ export function parseNvimEnv(value: string | undefined): NvimTarget {
   if (!socketPathFits(v)) {
     return {
       mode: "off",
-      warning: `ignoring MDV_NVIM (unix socket path is ${SUN_PATH_MAX} bytes or longer): ${v}`,
+      warning: `ignoring MDPX_NVIM (unix socket path is ${SUN_PATH_MAX} bytes or longer): ${v}`,
     };
   }
   return { mode: "socket", path: v };
@@ -88,7 +88,7 @@ export function socketPid(fileName: string): number | null {
  *  - **Set topline as well as the cursor** (winrestview). nvim_win_set_cursor alone does not scroll
  *    at all when the destination is already on screen, and centres it when it is far away (measured:
  *    in a 23-row window the target line landed on screen rows 10, 20, and 12). Where the line shows
- *    up in nvim relative to mdv's top edge would be undetermined, so hitting the right line number
+ *    up in nvim relative to mdpx's top edge would be undetermined, so hitting the right line number
  *    still would not line the two up visually
  *  - `scrolloff` is not overridden, though. As long as the cursor sits on the target line nvim always
  *    reserves that many rows above it, so `topline = cursor line` is by definition incompatible
@@ -253,7 +253,7 @@ export async function listSockets(root: string): Promise<string[]> {
  */
 export class NvimCursor {
   private readonly enabled: boolean;
-  /** Socket pinned by MDV_NVIM. Null means search the default locations. */
+  /** Socket pinned by MDPX_NVIM. Null means search the default locations. */
   private readonly forced: string | null;
   /** Socket that last accepted a send. On failure it is dropped and rediscovered at the next settle. */
   private socket: string | null = null;

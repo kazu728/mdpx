@@ -33,7 +33,7 @@ type ShootAction = Extract<Action, { type: "shoot" }>;
 // stripped of control characters first (text.sanitizeLine for one-liners, sanitizeBlock for
 // multi-line stacks, which keeps newlines).
 function warn(msg: string): void {
-  process.stderr.write(sanitizeLine(`mdv: ${msg}`) + "\n");
+  process.stderr.write(sanitizeLine(`mdpx: ${msg}`) + "\n");
 }
 
 function usageExit(msg: string): never {
@@ -43,9 +43,9 @@ function usageExit(msg: string): never {
 
 function unsupportedTerminalExit(): never {
   process.stderr.write(
-    "mdv: run this in a terminal that supports kitty graphics (Ghostty/Kitty)\n" +
-      'hint: open -na Ghostty --args --command="mdv <path>"\n' +
-      "terminals that do not report cell metrics (some multiplexers) can set MDV_CELL=<heightPx>,<widthPx>\n",
+    "mdpx: run this in a terminal that supports kitty graphics (Ghostty/Kitty)\n" +
+      'hint: open -na Ghostty --args --command="mdpx <path>"\n' +
+      "terminals that do not report cell metrics (some multiplexers) can set MDPX_CELL=<heightPx>,<widthPx>\n",
   );
   process.exit(1);
 }
@@ -67,7 +67,7 @@ function resolveMdPath(arg: string): string {
 
 async function main(): Promise<void> {
   const arg = process.argv[2];
-  if (!arg) usageExit("usage: mdv <file.md>");
+  if (!arg) usageExit("usage: mdpx <file.md>");
   const mdPath = resolveMdPath(arg);
   const mdDir = dirname(mdPath);
   const fileName = basename(mdPath);
@@ -78,17 +78,17 @@ async function main(): Promise<void> {
   // too. Checking stdout alone would leave a running viewer that cannot be operated.
   if (!process.stdout.isTTY || !process.stdin.isTTY) unsupportedTerminalExit();
 
-  // MDV_CELL is the §4.7 last resort (the escape hatch for terminals that pass graphics through
+  // MDPX_CELL is the §4.7 last resort (the escape hatch for terminals that pass graphics through
   // but never answer), so silently dropping a malformed value would exit as "unsupported terminal"
   // with the override never taking effect. Warn here, before raw mode turns a bare LF into a staircase.
-  const mdvCell = process.env.MDV_CELL;
-  const cellOverride = parseCellSize(mdvCell);
-  if (mdvCell && !cellOverride) {
-    warn(`ignoring MDV_CELL (malformed <heightPx>,<widthPx> or out-of-range value): ${mdvCell}`);
+  const mdpxCell = process.env.MDPX_CELL;
+  const cellOverride = parseCellSize(mdpxCell);
+  if (mdpxCell && !cellOverride) {
+    warn(`ignoring MDPX_CELL (malformed <heightPx>,<widthPx> or out-of-range value): ${mdpxCell}`);
   }
 
-  // MDV_NVIM is parsed here for the same reason (past raw mode the warning's newline staircases).
-  const nvimTarget = parseNvimEnv(process.env.MDV_NVIM);
+  // MDPX_NVIM is parsed here for the same reason (past raw mode the warning's newline staircases).
+  const nvimTarget = parseNvimEnv(process.env.MDPX_NVIM);
   if (nvimTarget.mode === "off" && nvimTarget.warning) warn(nvimTarget.warning);
 
   const term = new Term();
@@ -136,12 +136,12 @@ async function main(): Promise<void> {
   // the default handling, so leaving it out orphans a process still holding raw stdin, the watcher,
   // and the tmpdir.
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => void shutdown(0));
-  process.on("uncaughtException", (e) => void shutdown(1, `mdv: ${e?.stack ?? e}\n`));
+  process.on("uncaughtException", (e) => void shutdown(1, `mdpx: ${e?.stack ?? e}\n`));
   process.on("unhandledRejection", (e) => {
-    void shutdown(1, `mdv: ${e instanceof Error ? e.stack : e}\n`);
+    void shutdown(1, `mdpx: ${e instanceof Error ? e.stack : e}\n`);
   });
 
-  // Cell px resolution (§4.7): explicit MDV_CELL → CSI 16t → TIOCGWINSZ. Startup and resize both
+  // Cell px resolution (§4.7): explicit MDPX_CELL → CSI 16t → TIOCGWINSZ. Startup and resize both
   // go through resolveCell, keeping the order in one place.
   //
   // Whether to try 16t at all is decided once, here at startup. Chrome has not launched and nothing
@@ -157,7 +157,7 @@ async function main(): Promise<void> {
   // terminal name). Auto-detected terminals are judged by a real graphics query reply — that rejects
   // terminals which answer 16t but lack graphics, and lets multiplexers that do not relay 16t
   // (herdr and friends, whose winsize and graphics replies do get through) run unconfigured.
-  // An explicit MDV_CELL counts as the user declaring support and skips the probe (the escape hatch
+  // An explicit MDPX_CELL counts as the user declaring support and skips the probe (the escape hatch
   // for environments that pass graphics through but never reply; closing it removes the only workaround).
   const cell = await resolveCell();
   if (!cell) {
@@ -169,16 +169,16 @@ async function main(): Promise<void> {
     unsupportedTerminalExit();
   }
 
-  // The theme is decided once, at startup (MDV_THEME override → macOS appearance → light).
+  // The theme is decided once, at startup (MDPX_THEME override → macOS appearance → light).
   const theme = resolveTheme();
 
   // Do the initialization that can fail before alt-screen (Chrome's auto-install notice shows here too)
   let assets: Assets;
   try {
     assets = resolveAssets(theme);
-    dir = await mkdtemp(join(tmpdir(), "mdv-"));
+    dir = await mkdtemp(join(tmpdir(), "mdpx-"));
   } catch (e) {
-    return shutdown(1, `mdv: ${e instanceof Error ? e.stack : e}\n`);
+    return shutdown(1, `mdpx: ${e instanceof Error ? e.stack : e}\n`);
   }
   try {
     await chrome.launch();
@@ -189,7 +189,7 @@ async function main(): Promise<void> {
     // mkdtemp failures (folding them together would print unrelated steps for an unrelated failure).
     return shutdown(
       1,
-      `mdv: cannot launch Chrome: ${e instanceof Error ? e.stack : e}\n` +
+      `mdpx: cannot launch Chrome: ${e instanceof Error ? e.stack : e}\n` +
         "chrome-headless-shell could not be installed automatically, or the binary is broken. " +
         "Point PUPPETEER_EXECUTABLE_PATH at a working binary and try again\n",
     );
@@ -213,12 +213,12 @@ async function main(): Promise<void> {
         if (e instanceof ContentError) throw e; // a restart fails the same way on the same content; keep the classes apart
         consecutiveFailures += 1;
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          return shutdown(1, "mdv: Chrome failed repeatedly\n");
+          return shutdown(1, "mdpx: Chrome failed repeatedly\n");
         }
         try {
           await chrome.restart();
         } catch {
-          return shutdown(1, "mdv: could not restart Chrome\n");
+          return shutdown(1, "mdpx: could not restart Chrome\n");
         }
         restarted = true;
       }
@@ -359,9 +359,9 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     if (k.type === "quit") return void shutdown(0);
     execute(scheduler.dispatch({ type: "key", delta: k.delta }));
-    // Only key-driven scrolls trigger a send (§4.9). Saves and resizes do not — having mdv's
+    // Only key-driven scrolls trigger a send (§4.9). Saves and resizes do not — having mdpx's
     // re-render move the cursor right after someone saved an edit in nvim would tug at the hand
-    // that is typing. Keep the causality intact: nvim moves only when mdv is operated.
+    // that is typing. Keep the causality intact: nvim moves only when mdpx is operated.
     // Do not narrow this to "scrollPx changed" either: a document that fits on one screen keeps
     // scrollPx at 0, and narrowing would mean `G` never sends anything
     syncCursor(k.delta);
@@ -391,7 +391,7 @@ async function main(): Promise<void> {
       }, WATCH_DEBOUNCE_MS);
     });
   } catch (e) {
-    return shutdown(1, `mdv: cannot watch the directory: ${e instanceof Error ? e.message : e}\n`);
+    return shutdown(1, `mdpx: cannot watch the directory: ${e instanceof Error ? e.message : e}\n`);
   }
 
   term.enterAltScreen();
@@ -400,11 +400,11 @@ async function main(): Promise<void> {
   try {
     execute(scheduler.dispatch({ type: "trigger" })); // first render
   } catch (e) {
-    return shutdown(1, `mdv: ${e instanceof Error ? e.stack : e}\n`);
+    return shutdown(1, `mdpx: ${e instanceof Error ? e.stack : e}\n`);
   }
 }
 
 main().catch((e) => {
-  process.stderr.write(sanitizeBlock(`mdv: ${e?.stack ?? e}\n`));
+  process.stderr.write(sanitizeBlock(`mdpx: ${e?.stack ?? e}\n`));
   process.exit(1);
 });

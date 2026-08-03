@@ -1,4 +1,4 @@
-// Theme resolution (§4.2). By default it follows the macOS appearance; MDV_THEME overrides it
+// Theme resolution (§4.2). By default it follows the macOS appearance; MDPX_THEME overrides it
 // explicitly. The decision logic (pure) is kept apart from the OS lookup (I/O) so it can be tested.
 
 import { execFileSync } from "node:child_process";
@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 export type Theme = "light" | "dark";
 
 /**
- * An override (MDV_THEME) of light/dark wins outright. Otherwise the system's dark-mode verdict
+ * An override (MDPX_THEME) of light/dark wins outright. Otherwise the system's dark-mode verdict
  * applies; unknown and unset values both fall back to it.
  */
 export function pickTheme(override: string | undefined, systemDark: boolean): Theme {
@@ -31,7 +31,7 @@ function systemPrefersDark(): boolean {
   }
 }
 
-/** The effective theme: MDV_THEME override → macOS appearance → light. */
+/** The effective theme: MDPX_THEME override → macOS appearance → light. */
 export function resolveTheme(): Theme {
-  return pickTheme(process.env.MDV_THEME, systemPrefersDark());
+  return pickTheme(process.env.MDPX_THEME, systemPrefersDark());
 }

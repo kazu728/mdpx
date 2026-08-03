@@ -49,7 +49,7 @@ function openWinsize() {
       // URL.pathname returns spaces and non-ASCII still percent-encoded, and tcc then fails with
       // "file not found" (breaking startup under "~/my apps/" or with a non-ASCII user name).
       source: fileURLToPath(new URL("./winsize.c", import.meta.url)),
-      symbols: { mdv_winsize: { args: ["int", "ptr"], returns: "int" } },
+      symbols: { mdpx_winsize: { args: ["int", "ptr"], returns: "int" } },
     }).symbols;
   } catch {
     return null;
@@ -57,13 +57,13 @@ function openWinsize() {
 }
 let winsizeSyms: ReturnType<typeof openWinsize> | undefined;
 
-/** Whether a cell px value is usable by the geometry math. Every path — 16t reply, TIOCGWINSZ, MDV_CELL — goes through this. */
+/** Whether a cell px value is usable by the geometry math. Every path — 16t reply, TIOCGWINSZ, MDPX_CELL — goes through this. */
 function withinCellBounds(n: number): boolean {
   return Number.isFinite(n) && n > 0 && n <= MAX_CELL_PX;
 }
 
 /**
- * Parse MDV_CELL=<heightPx>,<widthPx> (an `x` separator also works). The escape hatch for setting
+ * Parse MDPX_CELL=<heightPx>,<widthPx> (an `x` separator also works). The escape hatch for setting
  * the cell size by hand on terminals that never answer CSI 16t (some multiplexers, which do not
  * report pixels either). Malformed, out of range, or unset all yield null.
  */
@@ -84,7 +84,7 @@ export function winsizeCell(fd: number): CellSize | null {
   if (winsizeSyms === undefined) winsizeSyms = openWinsize();
   if (!winsizeSyms) return null;
   const ws = new Uint16Array(4); // ws_row, ws_col, ws_xpixel, ws_ypixel
-  if (winsizeSyms.mdv_winsize(fd, ptr(ws)) !== 0) return null;
+  if (winsizeSyms.mdpx_winsize(fd, ptr(ws)) !== 0) return null;
   return cellFromWinsize(ws[0]!, ws[1]!, ws[2]!, ws[3]!);
 }
 

@@ -1,4 +1,4 @@
-# mdv fixture
+# mdpx fixture
 
 Paragraph text with **bold**, `inline code`, and ~~strikethrough~~,
 continued on a second source line of the same paragraph.

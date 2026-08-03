@@ -1,5 +1,5 @@
 // Regression tests for terminal control: the initial clear on entering alt-screen (CSI 2J),
-// MDV_CELL parsing, and the stdin parser (where key input and terminal replies share one stream).
+// MDPX_CELL parsing, and the stdin parser (where key input and terminal replies share one stream).
 
 import { describe, expect, test } from "bun:test";
 import { cc, ptr } from "bun:ffi";
@@ -52,10 +52,10 @@ describe("winsizeCell", () => {
   test.skipIf(process.platform !== "darwin")("derives the cell px from a PTY's dimensions, and a non-TTY fd yields null", () => {
     const pty = cc({
       source: fileURLToPath(new URL("./winsize.test.c", import.meta.url)),
-      symbols: { mdv_test_pty: { args: ["u16", "u16", "u16", "u16", "ptr"], returns: "int" } },
+      symbols: { mdpx_test_pty: { args: ["u16", "u16", "u16", "u16", "ptr"], returns: "int" } },
     }).symbols;
     const fds = new Int32Array(2); // [master, slave]
-    expect(pty.mdv_test_pty(40, 100, 1400, 1240, ptr(fds))).toBe(0);
+    expect(pty.mdpx_test_pty(40, 100, 1400, 1240, ptr(fds))).toBe(0);
     const file = openSync(fileURLToPath(import.meta.url), "r");
     try {
       expect(winsizeCell(fds[1]!)).toEqual({ cellHpx: 31, cellWpx: 14 });

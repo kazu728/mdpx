@@ -4,7 +4,7 @@
   "description": "A Markdown viewer for Ghostty, driven by Chrome snapshots",
   "type": "module",
   "bin": {
-    "mdv": "src/main.ts"
+    "mdpx": "src/main.ts"
   },
   "scripts": {
     "test": "bun test src/",

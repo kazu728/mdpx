@@ -78,7 +78,7 @@ describe("listSockets", () => {
   let root: string;
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), "mdv-sock-"));
+    root = await mkdtemp(join(tmpdir(), "mdpx-sock-"));
     await writeFile(join(root, `nvim.${ALIVE}.0`), ""); // the layout when XDG is set
     await writeFile(join(root, `nvim.${DEAD}.0`), ""); // a stale socket from a dead nvim
     await writeFile(join(root, "other.sock"), ""); // not an nvim socket
@@ -138,7 +138,7 @@ describe("jumpExpr", () => {
   });
 
   // set_cursor alone does not scroll when the destination is on screen and centres it when it is far
-  // away. Where it shows up in nvim relative to mdv's top edge would be undetermined, so topline is
+  // away. Where it shows up in nvim relative to mdpx's top edge would be undetermined, so topline is
   // set too (§4.9)
   test("aligns topline with the target line, not just the cursor", () => {
     const expr = jumpExpr("/tmp/a.md", 42);

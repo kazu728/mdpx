@@ -7,7 +7,7 @@
 //
 // crossnote (the MPE core) expands the same information into a dense "every source line → px" array,
 // but the dense form exists to serve editor → preview lookups of "arbitrary line → px" by array
-// index. mdv only ever needs the reverse (px → line), so binary-searching a sparse anchor list and
+// index. mdpx only ever needs the reverse (px → line), so binary-searching a sparse anchor list and
 // interpolating on lookup yields mathematically the same value.
 
 export interface Anchor {
