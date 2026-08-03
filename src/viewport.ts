@@ -28,8 +28,24 @@ export type TilePx = number & Brand<"TilePx">;
 /** Document height covered by the tiles (bottom of the captured range, tile padding included). */
 export type CoveredHeight = number & Brand<"CoveredHeight">;
 
+/**
+ * Effective document height used for the scroll limit (screen px, a multiple of the cell height).
+ *
+ * Tiles are padded out to a `tileAlign` boundary, but that trailing padding (page background) is
+ * not somewhere to scroll to, so this is the real document height rounded to a cell multiple rather
+ * than `CoveredHeight`. Only when truncated does it cap at the bottom of what was captured (there
+ * is nowhere to go in a region never shot). Confusing the two would either allow scrolling one unit
+ * into the background padding or promote a generation with zero visible tiles and show a blank
+ * screen — which is why they carry different brands.
+ */
+export type ContentHeight = number & Brand<"ContentHeight">;
+
+/** Effective document height when there is no document yet. 0 is a multiple of every alignment unit. */
+export const NO_CONTENT = 0 as ContentHeight;
+
 const tilePx = (n: number): TilePx => n as TilePx;
 const covered = (n: number): CoveredHeight => n as CoveredHeight;
+const contentHeight = (n: number): ContentHeight => n as ContentHeight;
 
 /**
  * Tile cap per generation (§4.4); anything beyond it is not captured.
@@ -119,13 +135,7 @@ export interface TileLayout {
   tiles: Tile[];
   /** True when MAX_TILES cut the document short (drives §4.4's "truncated" indicator). */
   truncated: boolean;
-  /**
-   * Effective document height used for the scroll limit (a multiple of the cell height). Tiles are
-   * padded out to a 2*cellHpx boundary, but that trailing padding (background colour) is not
-   * somewhere to scroll to, so this is the real document height rounded to a cell multiple rather
-   * than coveredHeight. When truncated it caps at the bottom of what was captured (coveredHeight).
-   */
-  contentHpx: number;
+  contentHpx: ContentHeight;
 }
 
 /**
@@ -135,7 +145,7 @@ export interface TileLayout {
 export function computeTiles(docHpx: number, cellHpx: number, contentRows: number): TileLayout {
   // With no content area (rows=1, all status bar) there is nowhere to place a tile, and a capture
   // would never be displayed, so take none
-  if (contentRows <= 0) return { tiles: [], truncated: false, contentHpx: 0 };
+  if (contentRows <= 0) return { tiles: [], truncated: false, contentHpx: NO_CONTENT };
   const th = tileHeightPx(cellHpx, contentRows);
   const unit = tileAlign(cellHpx);
   const paddedH = Math.ceil(Math.max(0, docHpx) / unit) * unit;
@@ -148,7 +158,11 @@ export function computeTiles(docHpx: number, cellHpx: number, contentRows: numbe
     y += height;
   }
   const cellPadded = Math.ceil(Math.max(0, docHpx) / cellHpx) * cellHpx;
-  return { tiles, truncated: y < paddedH, contentHpx: Math.min(cellPadded, coveredHeight(tiles)) };
+  return {
+    tiles,
+    truncated: y < paddedH,
+    contentHpx: contentHeight(Math.min(cellPadded, coveredHeight(tiles))),
+  };
 }
 
 export function coveredHeight(tiles: Tile[]): CoveredHeight {
@@ -157,14 +171,14 @@ export function coveredHeight(tiles: Tile[]): CoveredHeight {
 }
 
 /**
- * Maximum scrollPx for a content area of rows-1 lines. contentHpx is computeTiles' effective document height.
+ * Maximum scrollPx for a content area of rows-1 lines.
  * It **rounds up** to the scroll unit — rounding down would put the last unit of real content out of
  * reach. Whatever the rounding adds lands on the document's trailing tile padding (background
  * colour) or gets trimmed by the visibility math. At 1:1 both contentHpx and contentRows*cellHpx are
  * cell multiples, so the rounding is a no-op.
  */
 export function maxScrollPx(
-  contentHpx: number,
+  contentHpx: ContentHeight,
   contentRows: number,
   cellHpx: number,
   renderScale: number,
@@ -181,7 +195,7 @@ export function maxScrollPx(
 /** Snap scrollPx to the scroll unit and clamp it to [0, maxScrollPx] (§4.5; also used to carry the position across generations). */
 export function clampScroll(
   scrollPx: number,
-  contentHpx: number,
+  contentHpx: ContentHeight,
   contentRows: number,
   cellHpx: number,
   renderScale: number,

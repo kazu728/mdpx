@@ -112,21 +112,21 @@ describe("computeTiles", () => {
     const { tiles, truncated, contentHpx } = computeTiles(10 ** 8, 31, 0);
     expect(tiles).toEqual([]);
     expect(truncated).toBe(false);
-    expect(contentHpx).toBe(0);
+    expect<number>(contentHpx).toBe(0);
   });
 
   test("contentHpx is the real document height rounded to a cell multiple (tile padding excluded)", () => {
     // docHpx=489, cellHpx=10 → tiles cover up to 500 at the 2*cellHpx=20 boundary, but the scroll
     // limit uses the real document height's cell multiple, 490 (no scrolling into the trailing padding).
     const { contentHpx } = computeTiles(489, 10, 50);
-    expect(contentHpx).toBe(490);
+    expect<number>(contentHpx).toBe(490);
     // contentRows=49 → it fits the 490px viewport, so there is nothing to scroll
     expect(maxScrollPx(contentHpx, 49, 10, 2)).toBe(0);
   });
 
   test("when truncated, contentHpx caps at the captured bottom (coveredHeight)", () => {
     const { tiles, contentHpx } = computeTiles(4080 * 100, 10, 50);
-    expect(contentHpx).toBe(coveredHeight(tiles));
+    expect<number>(contentHpx).toBe(coveredHeight(tiles));
   });
 });
 
@@ -182,7 +182,8 @@ describe("coordinates when downscaled (§4.8)", () => {
     // cellHpx=31, contentRows=64 → unit 62. At contentHpx=3131 the raw max is 1147.
     // Rounding down (1116) puts the bottom edge at 3100 and leaves the last 31px unreachable, so it
     // rounds up to 1178
-    const contentHpx = 3131;
+    const { contentHpx } = computeTiles(3131, 31, 64);
+    expect<number>(contentHpx).toBe(3131);
     const max = maxScrollPx(contentHpx, 64, 31, 1);
     expect(max).toBe(1178);
     expect(max % 62).toBe(0); // srcY maps to integer image px
@@ -223,14 +224,14 @@ describe("coordinates when downscaled (§4.8)", () => {
   });
 
   test("a line step advances by one unit and returns on the way back (no sticking on midpoint rounding)", () => {
-    const contentHpx = 3131;
+    const { contentHpx } = computeTiles(3131, 31, 64);
     const down = clampScroll(0 + 62, contentHpx, 64, 31, 1);
     expect(down).toBe(62);
     expect(clampScroll(down - 62, contentHpx, 64, 31, 1)).toBe(0);
   });
 
   test("at 1:1 the round-up in max is a no-op (as before)", () => {
-    const contentHpx = 3131;
+    const { contentHpx } = computeTiles(3131, 31, 64);
     expect(maxScrollPx(contentHpx, 64, 31, 2)).toBe(3131 - 64 * 31);
   });
 });

@@ -17,8 +17,10 @@ import {
   contentRows,
   CSS_SCALE,
   maxScrollPx,
+  NO_CONTENT,
   scrollUnitPx,
   visibleTiles,
+  type ContentHeight,
   type Tile,
 } from "./viewport.ts";
 import { imageId } from "./kitty.ts";
@@ -88,16 +90,14 @@ export interface ViewState {
   resident: ReadonlySet<number>;
   /** Whether the tile cap cut displayGen's tail off (§4.4's "truncated"). */
   truncated: boolean;
-  /** displayGen's effective document height. Definition and rounding rationale: viewport.TileLayout.contentHpx. */
-  contentHpx: number;
+  contentHpx: ContentHeight;
   phase: Phase;
 }
 
 interface GenState {
   gen: number;
   tiles: Tile[];
-  /** This generation's effective document height (viewport.TileLayout.contentHpx, held as is). */
-  contentHpx: number;
+  contentHpx: ContentHeight;
   /** Indices of tiles resident in the terminal (kept inside §4.4's budget). */
   resident: Set<number>;
   truncated: boolean;
@@ -151,7 +151,7 @@ export class Scheduler {
       tiles: g ? g.tiles : [],
       resident: g ? g.resident : new Set(),
       truncated: g ? g.truncated : false,
-      contentHpx: g ? g.contentHpx : 0,
+      contentHpx: g ? g.contentHpx : NO_CONTENT,
       // "rendering" means a new generation is being built. Merely re-capturing tiles that fell out
       // of residency does not count (pendingVisible picks those up as "rendering…")
       phase: this.pipeGen && !this.refetching ? "rendering" : "ready",
@@ -200,7 +200,7 @@ export class Scheduler {
     this.pipeGen = {
       gen: this.genCounter,
       tiles: [],
-      contentHpx: 0,
+      contentHpx: NO_CONTENT,
       resident: new Set(),
       truncated: false,
       stale: false,
