@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "kazu728-dotfiles": {
+      "source": {
+        "source": "github",
+        "repo": "kazu728/dotfiles"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "personal-skills@kazu728-dotfiles": true
+  }
+}
