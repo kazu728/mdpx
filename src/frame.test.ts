@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderFrame } from "./frame.ts";
-import { computeTiles } from "./viewport.ts";
+import { computeTiles, SCROLL_TOP } from "./viewport.ts";
 import type { ViewState } from "./scheduler.ts";
 
 const ESC = "\x1b";
@@ -13,7 +13,7 @@ function makeView(): ViewState {
   const { tiles, contentHpx } = computeTiles(300, 10, 50);
   return {
     geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 800, cssWidth: 400, renderScale: 2, relayOverflow: false, maxResident: 64 },
-    scrollPx: 0,
+    scrollPx: SCROLL_TOP,
     displayGen: 1,
     tiles,
     resident: new Set([0]),
@@ -97,7 +97,7 @@ describe("source rect when downscaled (§4.8)", () => {
     const { tiles, contentHpx } = computeTiles(3000, 10, 50);
     return {
       geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 400, cssWidth: 400, renderScale: 1, relayOverflow: false, maxResident: 64 },
-      scrollPx: 0,
+      scrollPx: SCROLL_TOP,
       displayGen: 1,
       tiles,
       resident: new Set([0]),

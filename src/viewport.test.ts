@@ -4,6 +4,7 @@ import {
   computeTiles,
   coveredHeight,
   maxScrollPx,
+  SCROLL_TOP,
   scrollUnitPx,
   tileHeightPx,
   toImagePx,
@@ -104,7 +105,7 @@ describe("computeTiles", () => {
   test("an empty document yields zero tiles", () => {
     const { tiles, contentHpx } = computeTiles(0, 10, 50);
     expect(tiles.length).toBe(0);
-    expect(maxScrollPx(contentHpx, 50, 10, 2)).toBe(0);
+    expect<number>(maxScrollPx(contentHpx, 50, 10, 2)).toBe(0);
   });
 
   test("a zero-row content area captures nothing", () => {
@@ -121,7 +122,7 @@ describe("computeTiles", () => {
     const { contentHpx } = computeTiles(489, 10, 50);
     expect<number>(contentHpx).toBe(490);
     // contentRows=49 → it fits the 490px viewport, so there is nothing to scroll
-    expect(maxScrollPx(contentHpx, 49, 10, 2)).toBe(0);
+    expect<number>(maxScrollPx(contentHpx, 49, 10, 2)).toBe(0);
   });
 
   test("when truncated, contentHpx caps at the captured bottom (coveredHeight)", () => {
@@ -133,14 +134,14 @@ describe("computeTiles", () => {
 describe("visibleTiles", () => {
   test("a document fitting one screen uses a single tile whose rows are the content height", () => {
     const { tiles } = computeTiles(300, 10, 50);
-    const p = visibleTiles(0, 50, 10, tiles);
+    const p = visibleTiles(SCROLL_TOP, 50, 10, tiles);
     expect(p).toHaveLength(1);
     expect(p[0]).toMatchObject({ tileIndex: 0, srcY: 0, srcH: 300, row: 0, rows: 30 });
   });
 
   test("across a tile boundary, two tiles are placed back to back and fill the rows", () => {
-    const { tiles } = computeTiles(8000, 10, 50); // sixteen 500px tiles
-    const p = visibleTiles(3800, 50, 10, tiles);
+    const { tiles, contentHpx } = computeTiles(8000, 10, 50); // sixteen 500px tiles
+    const p = visibleTiles(clampScroll(3800, contentHpx, 50, 10, 2), 50, 10, tiles);
     expect(p).toHaveLength(2);
     expect(p[0]).toMatchObject({ tileIndex: 7, srcY: 300, srcH: 200, row: 0, rows: 20 });
     expect(p[1]).toMatchObject({ tileIndex: 8, srcY: 0, srcH: 300, row: 20, rows: 30 });
@@ -185,7 +186,7 @@ describe("coordinates when downscaled (§4.8)", () => {
     const { contentHpx } = computeTiles(3131, 31, 64);
     expect<number>(contentHpx).toBe(3131);
     const max = maxScrollPx(contentHpx, 64, 31, 1);
-    expect(max).toBe(1178);
+    expect<number>(max).toBe(1178);
     expect(max % 62).toBe(0); // srcY maps to integer image px
     expect(max + 64 * 31).toBeGreaterThanOrEqual(contentHpx); // the tail is inside the viewport
     expect(clampScroll(99999, contentHpx, 64, 31, 1)).toBe(max);
@@ -226,13 +227,13 @@ describe("coordinates when downscaled (§4.8)", () => {
   test("a line step advances by one unit and returns on the way back (no sticking on midpoint rounding)", () => {
     const { contentHpx } = computeTiles(3131, 31, 64);
     const down = clampScroll(0 + 62, contentHpx, 64, 31, 1);
-    expect(down).toBe(62);
-    expect(clampScroll(down - 62, contentHpx, 64, 31, 1)).toBe(0);
+    expect<number>(down).toBe(62);
+    expect<number>(clampScroll(down - 62, contentHpx, 64, 31, 1)).toBe(0);
   });
 
   test("at 1:1 the round-up in max is a no-op (as before)", () => {
     const { contentHpx } = computeTiles(3131, 31, 64);
-    expect(maxScrollPx(contentHpx, 64, 31, 2)).toBe(3131 - 64 * 31);
+    expect<number>(maxScrollPx(contentHpx, 64, 31, 2)).toBe(3131 - 64 * 31);
   });
 });
 
@@ -240,17 +241,17 @@ describe("clampScroll", () => {
   const { contentHpx } = computeTiles(8000, 10, 50); // maxScroll 7500
 
   test("negative goes to 0 and anything past the end to max", () => {
-    expect(clampScroll(-100, contentHpx, 50, 10, 2)).toBe(0);
-    expect(clampScroll(999999, contentHpx, 50, 10, 2)).toBe(7500);
+    expect<number>(clampScroll(-100, contentHpx, 50, 10, 2)).toBe(0);
+    expect<number>(clampScroll(999999, contentHpx, 50, 10, 2)).toBe(7500);
   });
 
   test("snaps to a multiple of the cell height", () => {
-    expect(clampScroll(37, contentHpx, 50, 10, 2)).toBe(40);
-    expect(clampScroll(34, contentHpx, 50, 10, 2)).toBe(30);
+    expect<number>(clampScroll(37, contentHpx, 50, 10, 2)).toBe(40);
+    expect<number>(clampScroll(34, contentHpx, 50, 10, 2)).toBe(30);
   });
 
   test("a short document always stays at 0", () => {
     const short = computeTiles(300, 10, 50).contentHpx;
-    expect(clampScroll(100, short, 50, 10, 2)).toBe(0);
+    expect<number>(clampScroll(100, short, 50, 10, 2)).toBe(0);
   });
 });

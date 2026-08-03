@@ -18,9 +18,11 @@ import {
   CSS_SCALE,
   maxScrollPx,
   NO_CONTENT,
+  SCROLL_TOP,
   scrollUnitPx,
   visibleTiles,
   type ContentHeight,
+  type ScrollPx,
   type Tile,
 } from "./viewport.ts";
 import { imageId } from "./kitty.ts";
@@ -82,7 +84,7 @@ type Phase = "rendering" | "ready";
 
 export interface ViewState {
   geometry: Geometry;
-  scrollPx: number;
+  scrollPx: ScrollPx;
   /** Number of the displayed generation (null when nothing has been displayed yet). */
   displayGen: number | null;
   tiles: Tile[];
@@ -107,7 +109,7 @@ interface GenState {
 
 export class Scheduler {
   private geometry: Geometry;
-  private scrollPx = 0;
+  private scrollPx: ScrollPx = SCROLL_TOP;
   private genCounter = 0;
   private displayGen: GenState | null = null;
   private pipeGen: GenState | null = null;
@@ -218,7 +220,7 @@ export class Scheduler {
     if (!this.displayGen) return [];
     const { cellHpx, renderScale } = this.geometry;
     const contentHpx = this.displayGen.contentHpx;
-    let px = this.scrollPx;
+    let px: number = this.scrollPx;
     // Every movement must be a multiple of the scroll unit. Adding anything else makes clampScroll's
     // snap land on a midpoint, so a round trip does not return to where it started and the position
     // drifts one way (§4.5)
@@ -263,7 +265,7 @@ export class Scheduler {
    * Take as much of the capture order (§4.1's visible-first) as the residency budget allows.
    * Capturing beyond the budget would only mean freeing the image before it is ever placed.
    */
-  private queueAround(g: GenState, scroll: number): number[] {
+  private queueAround(g: GenState, scroll: ScrollPx): number[] {
     const order = backfillOrder(scroll, this.contentRows, this.geometry.cellHpx, g.tiles);
     return order.slice(0, this.geometry.maxResident);
   }
@@ -358,7 +360,7 @@ export class Scheduler {
   private evictBeyondBudget(g: GenState): number[] {
     const budget = this.geometry.maxResident;
     if (g.resident.size <= budget) return [];
-    const scroll = g === this.displayGen ? this.scrollPx : 0;
+    const scroll = g === this.displayGen ? this.scrollPx : SCROLL_TOP;
     const visible = new Set(
       visibleTiles(scroll, this.contentRows, this.geometry.cellHpx, g.tiles).map((p) => p.tileIndex),
     );
@@ -447,7 +449,7 @@ export class Scheduler {
     };
   }
 
-  private allVisibleResident(g: GenState, scroll: number): boolean {
+  private allVisibleResident(g: GenState, scroll: ScrollPx): boolean {
     const vis = visibleTiles(scroll, this.contentRows, this.geometry.cellHpx, g.tiles);
     return vis.every((p) => g.resident.has(p.tileIndex));
   }

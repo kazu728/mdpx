@@ -57,7 +57,7 @@ describe("generation switch (§4.6 rule 4)", () => {
   test("deletes the old generation after placing the new one and clamps scrollPx to the new document height", () => {
     const s = newDisplayedGen1();
     s.dispatch({ type: "key", delta: { kind: "bottom" } });
-    expect(s.viewState().scrollPx).toBe(1000);
+    expect<number>(s.viewState().scrollPx).toBe(1000);
 
     s.dispatch({ type: "trigger" }); // gen2
     expect(shoots(s.dispatch({ type: "renderDone", gen: 2, docHpx: 500 }))).toEqual([0]);
@@ -72,7 +72,7 @@ describe("generation switch (§4.6 rule 4)", () => {
       [imageId(1, 0), imageId(1, 1), imageId(1, 2)].sort(),
     );
     expect(s.viewState().displayGen).toBe(2);
-    expect(s.viewState().scrollPx).toBe(0); // gen2 fits one screen (maxScroll=0), so it clamps there
+    expect<number>(s.viewState().scrollPx).toBe(0); // gen2 fits one screen (maxScroll=0), so it clamps there
   });
 });
 
