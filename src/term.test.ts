@@ -1,6 +1,3 @@
-// Regression tests for terminal control: the initial clear on entering alt-screen (CSI 2J),
-// MDPX_CELL parsing, and the stdin parser (where key input and terminal replies share one stream).
-
 import { describe, expect, test } from "bun:test";
 import { cc, ptr } from "bun:ffi";
 import { closeSync, openSync } from "node:fs";
@@ -9,7 +6,6 @@ import { Term, cellFromWinsize, parseCellSize, winsizeCell, type Key } from "./t
 
 const ESC = "\x1b";
 
-/** Swap out process.stdout.write to capture one run's writes as a string. */
 function capture(fn: () => void): string {
   const orig = process.stdout.write;
   let out = "";
@@ -39,8 +35,8 @@ describe("parseCellSize", () => {
     expect(parseCellSize("0,14")).toBeNull();
     expect(parseCellSize("31,-1")).toBeNull();
     expect(parseCellSize("abc")).toBeNull();
-    expect(parseCellSize("2000,14")).toBeNull(); // past the cap
-    expect(parseCellSize("999999999999999999999,14")).toBeNull(); // huge magnitudes (1e21) are rejected too
+    expect(parseCellSize("2000,14")).toBeNull();
+    expect(parseCellSize("999999999999999999999,14")).toBeNull();
   });
 });
 
@@ -59,7 +55,7 @@ describe("winsizeCell", () => {
     const file = openSync(fileURLToPath(import.meta.url), "r");
     try {
       expect(winsizeCell(fds[1]!)).toEqual({ cellHpx: 31, cellWpx: 14 });
-      expect(winsizeCell(file)).toBeNull(); // ioctl fails with ENOTTY
+      expect(winsizeCell(file)).toBeNull();
     } finally {
       for (const fd of [fds[1]!, fds[0]!, file]) closeSync(fd);
     }
@@ -98,7 +94,6 @@ describe("Term.enterAltScreen", () => {
   });
 });
 
-/** Drive the parser by injecting reply bytes into the private feed (testing queries without a real stdin). */
 function inject(term: Term, seq: string): void {
   (term as unknown as { feed(b: Buffer): void }).feed(Buffer.from(seq, "latin1"));
 }
@@ -112,8 +107,8 @@ describe("Term.queryKittyGraphics", () => {
     });
     expect(out).toContain(`${ESC}_G`);
     expect(out).toContain("a=q");
-    expect(out.endsWith(`${ESC}[c`)).toBe(true); // the DA goes along at the end
-    inject(term, `${ESC}[?62;c`); // answer so the promise and timer are cleaned up
+    expect(out.endsWith(`${ESC}[c`)).toBe(true);
+    inject(term, `${ESC}[?62;c`);
     await p;
   });
 
@@ -123,7 +118,7 @@ describe("Term.queryKittyGraphics", () => {
     capture(() => {
       p = term.queryKittyGraphics(1000);
     });
-    inject(term, `${ESC}_Gi=31;OK${ESC}\\${ESC}[?62;c`); // a supporting terminal returns _G before the DA
+    inject(term, `${ESC}_Gi=31;OK${ESC}\\${ESC}[?62;c`);
     expect(await p).toBe(true);
   });
 
@@ -133,7 +128,7 @@ describe("Term.queryKittyGraphics", () => {
     capture(() => {
       p = term.queryKittyGraphics(1000);
     });
-    inject(term, `${ESC}[?62;c`); // a non-supporting terminal ignores the APC and returns only the DA
+    inject(term, `${ESC}[?62;c`);
     expect(await p).toBe(false);
   });
 
@@ -147,7 +142,6 @@ describe("Term.queryKittyGraphics", () => {
   });
 });
 
-/** A Term with a key subscription. Collects the keys emitted from the fed input in order. */
 function keyRecorder(): { term: Term; keys: Key[]; feed(s: string): void } {
   const term = new Term();
   const keys: Key[] = [];

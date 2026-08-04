@@ -12,7 +12,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@puppeteer/browsers": "^2.4.0",
     "@vscode/markdown-it-katex": "^1.1.1",
     "github-markdown-css": "^5.8.1",
     "katex": "^0.16.11",

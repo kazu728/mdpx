@@ -28,14 +28,14 @@ describe("truncateToWidth", () => {
       for (let max = 0; max <= 12; max++) {
         const { text, width } = truncateToWidth(s, max);
         expect(width).toBeLessThanOrEqual(max);
-        expect(Bun.stringWidth(text)).toBe(width); // the accumulated width agrees with the whole string's width
+        expect(Bun.stringWidth(text)).toBe(width);
       }
     }
   });
 
   test("a VS16 emoji is treated as one grapheme (its width is not lost to decomposition)", () => {
     expect(truncateToWidth("❤️", 2)).toEqual({ text: "❤️", width: 2 });
-    expect(truncateToWidth("❤️", 1)).toEqual({ text: "", width: 0 }); // width 2 does not fit in 1
+    expect(truncateToWidth("❤️", 1)).toEqual({ text: "", width: 0 });
   });
 
   test("truncates without splitting a full-width boundary", () => {

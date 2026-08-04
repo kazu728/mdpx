@@ -151,8 +151,6 @@ export class Term {
     this.out.write(data);
   }
 
-  // --- Input ------------------------------------------------------------------
-
   /** Enter raw mode and start consuming key input. Assumes stdin is a TTY (§4.7's gate). */
   enableInput(): void {
     process.stdin.setRawMode(true);
@@ -214,8 +212,8 @@ export class Term {
         clearTimeout(timer);
         resolve(v);
       };
-      const onGraphics = () => finish(true); // the `_G` reply came first = supported
-      const onDa = () => finish(false); // the DA came first (no `_G`) = unsupported
+      const onGraphics = () => finish(true);
+      const onDa = () => finish(false);
       const timer = setTimeout(() => finish(false), timeoutMs);
       this.graphicsHandler = onGraphics;
       this.daHandler = onDa;
@@ -252,7 +250,7 @@ export class Term {
         // middle and make it impossible to exit.
         let j = i + 2;
         while (j < buf.length && buf[j]! >= 0x20 && buf[j]! <= 0x3f) j++;
-        if (j >= buf.length) break; // incomplete
+        if (j >= buf.length) break;
         if (!isFinalByte(buf[j]!)) {
           i += 1;
           continue;
@@ -261,7 +259,7 @@ export class Term {
         i = j + 1;
       } else if (kind === 0x4f) {
         // SS3 (ESC O <final>): application cursor keys. Only the arrows are picked up.
-        if (i + 2 >= buf.length) break; // incomplete
+        if (i + 2 >= buf.length) break;
         if (!isFinalByte(buf[i + 2]!)) {
           i += 1;
           continue;
@@ -281,7 +279,7 @@ export class Term {
         // on) is discarded — transfers are fire-and-forget with no success tracking (§4.4, and the
         // note in main.ts runShoot).
         const end = stringTerminatorEnd(buf, i + 2);
-        if (end === -1) break; // incomplete
+        if (end === -1) break;
         if (kind === 0x5f && buf[i + 2] === 0x47) this.graphicsHandler?.(); // "_G" = graphics reply
         i = end;
       } else {
@@ -327,7 +325,6 @@ export class Term {
     }
     if (ch === "A") this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } });
     else if (ch === "B") this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
-    // C/D (left/right) and everything else are ignored
   }
 
   /** SS3 (ESC O <final>) arrows: ↑/↓ in application cursor key mode. */
@@ -368,8 +365,6 @@ export class Term {
     this.keyHandler?.(k);
   }
 
-  // --- Geometry ---------------------------------------------------------------
-
   /**
    * Build a Geometry from the terminal size and the cell px. The image is laid out to exactly the
    * terminal's cols columns. Inside a herdr pane, a geometry whose 1:1 capture would not fit the
@@ -408,15 +403,11 @@ export class Term {
     };
   }
 
-  // --- Screen -----------------------------------------------------------------
-
   enterAltScreen(): void {
     this.alt = true;
     // Nothing has been transferred yet, so a full clear (CSI 2J) is safe here.
     this.write(ALT_ENTER + HIDE_CURSOR + CLEAR_SCREEN);
   }
-
-  // --- Restore ----------------------------------------------------------------
 
   restore(): void {
     if (this.alt) {

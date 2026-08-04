@@ -5,10 +5,6 @@ import { execFileSync } from "node:child_process";
 
 export type Theme = "light" | "dark";
 
-/**
- * An override (MDPX_THEME) of light/dark wins outright. Otherwise the system's dark-mode verdict
- * applies; unknown and unset values both fall back to it.
- */
 export function pickTheme(override: string | undefined, systemDark: boolean): Theme {
   const o = override?.trim().toLowerCase();
   if (o === "light" || o === "dark") return o;
@@ -31,7 +27,6 @@ function systemPrefersDark(): boolean {
   }
 }
 
-/** The effective theme: MDPX_THEME override → macOS appearance → light. */
 export function resolveTheme(): Theme {
   return pickTheme(process.env.MDPX_THEME, systemPrefersDark());
 }

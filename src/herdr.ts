@@ -44,7 +44,6 @@ export function maxResidentTiles(tileBytes: number, relayed: boolean, minTiles: 
   return Math.max(minTiles, budget);
 }
 
-/** Simultaneously visible tiles (= the most that can be newly uploaded in one frame). */
 export function visibleTileCount(viewportHpx: number, tileHpx: number): number {
   return maxTilesInFrame(viewportHpx, tileHpx);
 }
@@ -78,7 +77,6 @@ function maxTilesInFrame(viewportHpx: number, tileHpx: number): number {
   return Math.max(1, Math.ceil(Math.max(0, viewportHpx) / tileHpx));
 }
 
-/** Whether it fits the limit. `tilesInFrame` is how many tiles could be newly uploaded at once. */
 export function fitsGraphicsFrame(imgWidthPx: number, tileHpx: number, tilesInFrame: number): boolean {
   return tilesInFrame * relayBytes(imgWidthPx, tileHpx) <= GRAPHICS_FRAME_LIMIT;
 }

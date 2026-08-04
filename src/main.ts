@@ -9,7 +9,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { resolveAssets, type Assets } from "./assets.ts";
 import { buildHtml } from "./html.ts";
 import { resolveTheme } from "./theme.ts";
-import { Chrome, ContentError } from "./chrome.ts";
+import { Chrome, ContentError, parseExecutableEnv, resolveExecutable } from "./chrome.ts";
 import { renderFrame } from "./frame.ts";
 import { deleteImage, imageId, transmit } from "./kitty.ts";
 import { buildLineMap, countLines, lineAt, type Anchor, type LineMap } from "./linemap.ts";
@@ -91,6 +91,13 @@ async function main(): Promise<void> {
   const nvimTarget = parseNvimEnv(process.env.MDPX_NVIM);
   if (nvimTarget.mode === "off" && nvimTarget.warning) warn(nvimTarget.warning);
 
+  // Dropping a bad PUPPETEER_EXECUTABLE_PATH in silence is worse than for the two above: resolution
+  // continues to the installed Chromium, so the viewer comes up on a browser the user did not pick.
+  const chromeEnv = process.env.PUPPETEER_EXECUTABLE_PATH;
+  if (chromeEnv && !parseExecutableEnv(chromeEnv)) {
+    warn(`ignoring PUPPETEER_EXECUTABLE_PATH (not an executable file): ${chromeEnv}`);
+  }
+
   const term = new Term();
   term.enableInput();
 
@@ -128,7 +135,7 @@ async function main(): Promise<void> {
   }
 
   // Wire the exit paths before the geometry is settled and the scheduler exists, so q/Ctrl-C and
-  // SIGTERM get out cleanly during startup and Chrome's auto-download (scrolling stays inert until then).
+  // SIGTERM get out cleanly during startup's Chrome launch (scrolling stays inert until then).
   term.onKey((k) => {
     if (k.type === "quit") void shutdown(0);
   });
@@ -169,10 +176,9 @@ async function main(): Promise<void> {
     unsupportedTerminalExit();
   }
 
-  // The theme is decided once, at startup (MDPX_THEME override → macOS appearance → light).
   const theme = resolveTheme();
 
-  // Do the initialization that can fail before alt-screen (Chrome's auto-install notice shows here too)
+  // Do the initialization that can fail before alt-screen, so a startup that exits never flashes it
   let assets: Assets;
   try {
     assets = resolveAssets(theme);
@@ -183,15 +189,13 @@ async function main(): Promise<void> {
   try {
     await chrome.launch();
   } catch (e) {
-    // Reaching here means §4.3's resolution order (env var → cache → auto-install) is exhausted. A
-    // bare stack leaves no next step, so attach the one manual workaround that remains (§6).
-    // Chrome launch gets its own catch because that advice does not apply to asset resolution or
-    // mkdtemp failures (folding them together would print unrelated steps for an unrelated failure).
+    // Absence is an actionable setup problem; a found binary's launch failure needs its stack for diagnosis.
+    const tried = resolveExecutable();
     return shutdown(
       1,
-      `mdpx: cannot launch Chrome: ${e instanceof Error ? e.stack : e}\n` +
-        "chrome-headless-shell could not be installed automatically, or the binary is broken. " +
-        "Point PUPPETEER_EXECUTABLE_PATH at a working binary and try again\n",
+      tried
+        ? `mdpx: cannot launch Chrome (${tried}): ${e instanceof Error ? e.stack : e}\n`
+        : "mdpx: no Chromium found. Install Google Chrome, or point PUPPETEER_EXECUTABLE_PATH at a Chromium binary\n",
     );
   }
   const htmlPath = join(dir, "view.html");
@@ -217,15 +221,15 @@ async function main(): Promise<void> {
         }
         try {
           await chrome.restart();
-        } catch {
-          return shutdown(1, "mdpx: could not restart Chrome\n");
+        } catch (restartError) {
+          const reason = restartError instanceof Error ? restartError.message : restartError;
+          return shutdown(1, `mdpx: could not restart Chrome: ${reason}\n`);
         }
         restarted = true;
       }
     }
   }
 
-  /** Load the HTML at the current geometry. The geometry carries the capture scale (§4.8). */
   function loadCurrentGeometry(): Promise<number> {
     const g = scheduler.viewState().geometry;
     return chrome.load(htmlPath, g.cssWidth, g.renderScale);
@@ -270,8 +274,7 @@ async function main(): Promise<void> {
     try {
       loaded = await attempt(loadWithAnchors);
     } catch (e) {
-      // Only ContentError reaches here (attempt already handled the rest by restarting or exiting).
-      // Keep the current frame on screen.
+      // Only ContentError reaches here; attempt handles the rest by restarting or exiting.
       if (e instanceof ContentError && !shuttingDown) {
         execute(scheduler.dispatch({ type: "renderFailed", gen }));
         return;

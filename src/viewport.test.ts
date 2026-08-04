@@ -22,12 +22,12 @@ describe("tileHeightPx", () => {
   test.each([10, 14, 31])("cellHpx=%i gives the smallest aligned unit covering one screenful", (cellHpx) => {
     const unit = cellHpx * 2;
     const th = tileHeightPx(cellHpx, 50);
-    expect(th).toBeGreaterThanOrEqual(50 * cellHpx); // covers the viewport
-    expect(th - 50 * cellHpx).toBeLessThan(unit); // and is the smallest that does
+    expect(th).toBeGreaterThanOrEqual(50 * cellHpx);
+    expect(th - 50 * cellHpx).toBeLessThan(unit);
   });
 
   test("never exceeds the sanity cap of 4096", () => {
-    const th = tileHeightPx(31, 1000); // a viewport of about 31000px
+    const th = tileHeightPx(31, 1000);
     expect(th).toBeLessThanOrEqual(4096);
     expect(th % 62).toBe(0);
   });
@@ -44,7 +44,7 @@ describe("computeTiles", () => {
     let y = 0;
     for (const t of tiles) {
       expect<number>(t.y).toBe(y);
-      expect(t.height % 20).toBe(0); // aligned to 2*cellHpx
+      expect(t.height % 20).toBe(0);
       y += t.height;
     }
     expect<number>(coveredHeight(tiles)).toBe(y);
@@ -68,7 +68,7 @@ describe("computeTiles", () => {
       expect(truncated).toBe(true);
       expect(tiles.length).toBe(128);
       expect<number>(coveredHeight(tiles)).toBe(128 * tileHeightPx(cellHpx!, contentRows!));
-      expect<number>(tileHeightPx(cellHpx!, contentRows!)).toBe(contentRows! * cellHpx!); // one screenful
+      expect<number>(tileHeightPx(cellHpx!, contentRows!)).toBe(contentRows! * cellHpx!);
     }
   });
 
@@ -109,7 +109,6 @@ describe("computeTiles", () => {
   });
 
   test("a zero-row content area captures nothing", () => {
-    // rows=1 (all status bar). There is nowhere to place a capture, so skip the pointless capture and transfer
     const { tiles, truncated, contentHpx } = computeTiles(10 ** 8, 31, 0);
     expect(tiles).toEqual([]);
     expect(truncated).toBe(false);
@@ -140,17 +139,17 @@ describe("visibleTiles", () => {
   });
 
   test("across a tile boundary, two tiles are placed back to back and fill the rows", () => {
-    const { tiles, contentHpx } = computeTiles(8000, 10, 50); // sixteen 500px tiles
+    const { tiles, contentHpx } = computeTiles(8000, 10, 50);
     const p = visibleTiles(clampScroll(3800, contentHpx, 50, 10, 2), 50, 10, tiles);
     expect(p).toHaveLength(2);
     expect(p[0]).toMatchObject({ tileIndex: 7, srcY: 300, srcH: 200, row: 0, rows: 20 });
     expect(p[1]).toMatchObject({ tileIndex: 8, srcY: 0, srcH: 300, row: 20, rows: 30 });
-    expect(p[0]!.rows + p[1]!.rows).toBe(50); // contentRows is filled with no gaps
+    expect(p[0]!.rows + p[1]!.rows).toBe(50);
   });
 
   test("end of the document: the bottom stops at the covered height and no row overflows", () => {
     const { tiles, contentHpx } = computeTiles(8000, 10, 50);
-    const max = maxScrollPx(contentHpx, 50, 10, 2); // 7500
+    const max = maxScrollPx(contentHpx, 50, 10, 2);
     const p = visibleTiles(max, 50, 10, tiles);
     const bottom = tiles[p.at(-1)!.tileIndex]!.y + p.at(-1)!.srcY + p.at(-1)!.srcH;
     expect(bottom).toBe(coveredHeight(tiles));
@@ -167,8 +166,8 @@ describe("coordinates when downscaled (§4.8)", () => {
 
   test("downscaled, the image px halves and an odd cell height makes the unit two cells", () => {
     expect(toImagePx(1984, 1)).toBe(992);
-    expect(scrollUnitPx(31, 1)).toBe(62); // odd → one cell leaves half a px over
-    expect(scrollUnitPx(30, 1)).toBe(30); // even → one cell stands
+    expect(scrollUnitPx(31, 1)).toBe(62);
+    expect(scrollUnitPx(30, 1)).toBe(30);
   });
 
   test("scroll unit boundaries always map to integer image px", () => {
@@ -187,8 +186,8 @@ describe("coordinates when downscaled (§4.8)", () => {
     expect<number>(contentHpx).toBe(3131);
     const max = maxScrollPx(contentHpx, 64, 31, 1);
     expect<number>(max).toBe(1178);
-    expect(max % 62).toBe(0); // srcY maps to integer image px
-    expect(max + 64 * 31).toBeGreaterThanOrEqual(contentHpx); // the tail is inside the viewport
+    expect(max % 62).toBe(0);
+    expect(max + 64 * 31).toBeGreaterThanOrEqual(contentHpx);
     expect(clampScroll(99999, contentHpx, 64, 31, 1)).toBe(max);
   });
 
@@ -220,7 +219,7 @@ describe("coordinates when downscaled (§4.8)", () => {
       expect(contentRows! * cellHpx!).toBeGreaterThanOrEqual(unit); // the precondition for downscaling
       const { contentHpx } = computeTiles(docHpx!, cellHpx!, contentRows!);
       const max = maxScrollPx(contentHpx, contentRows!, cellHpx!, 1);
-      expect(max + contentRows! * cellHpx!).toBeGreaterThanOrEqual(contentHpx); // the tail is inside the viewport
+      expect(max + contentRows! * cellHpx!).toBeGreaterThanOrEqual(contentHpx);
     }
   });
 

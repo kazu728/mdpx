@@ -172,7 +172,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
   test("a session with a different file open is left alone (nobuf)", async () => {
     await sendCursor(socket, mdPath, 5);
     expect(await sendCursor(socket, "/nonexistent/other.md", 2)).toBe("nobuf");
-    expect(await cursorLine()).toBe(5); // unmoved
+    expect(await cursorLine()).toBe(5);
   });
 
   test("a current window not in normal mode is skipped, and following resumes back in normal (busy)", async () => {
@@ -180,7 +180,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
     await query('nvim_input("i")');
     await waitFor("insert mode", async () => (await query("mode()")) === "i");
     expect(await sendCursor(socket, mdPath, 8)).toBe("busy");
-    expect(await cursorLine()).toBe(5); // an edit in progress is not disturbed
+    expect(await cursorLine()).toBe(5);
 
     await query('nvim_input("\\<Esc>")');
     await waitFor("normal mode", async () => (await query("mode()")) === "n");
@@ -197,7 +197,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
     const aborter = new AbortController();
     aborter.abort();
     expect(await sendCursor(socket, mdPath, 2, aborter.signal)).toBe("failed");
-    expect(await cursorLine()).toBe(4); // nothing was sent
+    expect(await cursorLine()).toBe(4);
   });
 
   test("aborting mid-flight kills the child process so nothing lands (the shutdown path)", async () => {
@@ -208,7 +208,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
     await Bun.sleep(2);
     aborter.abort();
     expect(await inFlight).toBe("failed");
-    expect(await cursorLine()).toBe(4); // the cursor did not move
+    expect(await cursorLine()).toBe(4);
   });
 
   test("NvimCursor finds the socket through default-location discovery and sends", async () => {
@@ -279,7 +279,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
     });
     try {
       await waitFor("decoy socket", async () => (await listSockets(runDir)).length === 2);
-      expect((await listSockets(runDir))[0]).toContain("/aa/"); // the decoy is tried first
+      expect((await listSockets(runDir))[0]).toContain("/aa/");
       await sendCursor(socket, mdPath, 1);
       const cursor = new NvimCursor(mdPath, { mode: "auto" });
       try {
@@ -311,8 +311,8 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
     await sendCursor(socket, mdPath, 4);
     const cursor = new NvimCursor(mdPath, { mode: "auto" });
     cursor.send(9);
-    cursor.close(); // close before the debounce fires
-    cursor.send(7); // a send after close is ignored too (no re-armed timer keeping it alive)
+    cursor.close();
+    cursor.send(7);
     await settle();
     expect(await cursorLine()).toBe(4);
   });

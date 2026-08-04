@@ -148,7 +148,6 @@ export function tileHeightPx(cellHpx: number, contentRows: number): TilePx {
 export interface Tile {
   /** Offset of the tile's top within the document. */
   y: TilePx;
-  /** Tile height. */
   height: TilePx;
 }
 

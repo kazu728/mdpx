@@ -8,7 +8,6 @@ import type { ViewState } from "./scheduler.ts";
 
 const ESC = "\x1b";
 
-/** The smallest ViewState where tile 0 is transferred and visible (yielding exactly one placement command). */
 function makeView(): ViewState {
   const { tiles, contentHpx } = computeTiles(300, 10, 50);
   return {
@@ -30,29 +29,27 @@ describe("renderFrame", () => {
   });
 
   test("home and CSI 0J follow the deletion of the old placements", () => {
-    // Passing the previous frame's placement IDs emits the delete commands at the head of the next frame.
     const first = renderFrame(makeView(), "SPEC.md", []);
     const { escape } = renderFrame(makeView(), "SPEC.md", first.placements);
 
-    const del = escape.indexOf("a=d,d=i"); // deletePlacement
-    const clear = escape.indexOf(`${ESC}[H${ESC}[J`); // HOME + CSI 0J (emitted adjacently)
+    const del = escape.indexOf("a=d,d=i");
+    const clear = escape.indexOf(`${ESC}[H${ESC}[J`);
 
     expect(del).toBeGreaterThanOrEqual(0);
-    expect(clear).toBeGreaterThan(del); // home and erase-below come after the deletion
+    expect(clear).toBeGreaterThan(del);
   });
 
   test("the placement command for a transferred tile comes after the screen erase", () => {
     const { escape } = renderFrame(makeView(), "SPEC.md", []);
 
     const erase = escape.indexOf(`${ESC}[J`);
-    const place = escape.indexOf("a=p,"); // place
+    const place = escape.indexOf("a=p,");
 
     expect(erase).toBeGreaterThanOrEqual(0);
     expect(place).toBeGreaterThan(erase);
   });
 });
 
-/** Extract only the status bar (the reverse-video last row). */
 function statusLine(filename: string, cols = 80): string {
   const view = makeView();
   const { escape } = renderFrame({ ...view, geometry: { ...view.geometry, cols } }, filename, []);
@@ -92,7 +89,6 @@ describe("status bar", () => {
 });
 
 describe("source rect when downscaled (§4.8)", () => {
-  /** renderScale=1: the image is half in both directions. The source rect halves too; the cell count does not. */
   function reducedView(): ViewState {
     const { tiles, contentHpx } = computeTiles(3000, 10, 50);
     return {

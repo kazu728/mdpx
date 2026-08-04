@@ -1,13 +1,3 @@
-// markdown → a complete HTML document (§4.2). String generation only (no terminal or fs I/O).
-//
-// - markdown-it (tables and strikethrough are built in, task lists come from a plugin)
-// - KaTeX rendered server-side (@vscode/markdown-it-katex calls renderToString during render)
-// - code highlighted server-side by shiki (inline styles, theme follows the effective theme)
-// - mermaid fences become <pre class="mermaid"> and are drawn in the page (injected only when used)
-// - block tokens get data-source-line (1-based) for §4.9's line anchors (no effect on rendering)
-// - CSP: disables markdown-derived JS and blocks outbound traffic; only mermaid is allowed via nonce/file:
-// CSS and JS are referenced through file:// link/script at the absolute paths the caller resolved.
-
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import MarkdownIt from "markdown-it";
@@ -21,7 +11,6 @@ import type { Theme } from "./theme.ts";
 /** markdown-it ships no types and @types does not export this one either, so take it from parse's return. */
 type Token = ReturnType<MarkdownIt["parse"]>[number];
 
-// Per-theme rendering settings, keeping the shiki theme, the page background, and mermaid's theme in step.
 const SHIKI_THEME: Record<Theme, string> = { light: "github-light", dark: "github-dark" };
 const PAGE_BG: Record<Theme, string> = { light: "#ffffff", dark: "#0d1117" };
 const MERMAID_THEME: Record<Theme, string> = { light: "default", dark: "dark" };
@@ -65,7 +54,6 @@ const LANGS = [
 let highlighterPromise: Promise<Highlighter> | null = null;
 function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
-    // Load both the light and dark themes so the render can pick either.
     highlighterPromise = createHighlighter({
       themes: Object.values(SHIKI_THEME),
       langs: LANGS,
@@ -89,7 +77,6 @@ function stripMetaTags(html: string): string {
   return html.replace(/<meta\b[^>]*>/gi, "");
 }
 
-/** md.render's env. The renderer reports whether a mermaid fence appeared (which decides bundle injection). */
 interface RenderEnv {
   hasMermaid?: boolean;
 }

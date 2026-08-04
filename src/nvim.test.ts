@@ -53,9 +53,9 @@ describe("socketPid", () => {
   const cases: [string, number | null][] = [
     ["nvim.85294.0", 85294],
     ["nvim.1.0", 1],
-    ["nvim.85294.1", 85294], // a second socket of the same nvim
+    ["nvim.85294.1", 85294],
     ["nvim.sock", null],
-    ["nvim.0.0", null], // there is no pid 0
+    ["nvim.0.0", null],
     ["nvim.-5.0", null],
     ["nvim.85294", null],
     ["notnvim.85294.0", null],

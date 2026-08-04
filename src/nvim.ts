@@ -35,13 +35,11 @@ export type JumpResult =
   | "nowin" // the buffer exists but is not in a window (never :edit on our own initiative)
   | "failed"; // unreachable, timed out, or an unexpected reply
 
-/** Result of interpreting MDPX_NVIM (§5). */
 export type NvimTarget =
   | { mode: "auto" } // search the default locations
   | { mode: "socket"; path: string } // socket given explicitly
   | { mode: "off"; warning?: string }; // disabled; if warning is set the caller prints a one-line warning
 
-/** Whether the path is short enough to work as a unix socket (§4.9's misconnection guard). */
 export function socketPathFits(path: string): boolean {
   return Buffer.byteLength(path) < SUN_PATH_MAX;
 }
@@ -340,7 +338,6 @@ export class NvimCursor {
       if (socket === cached) continue; // it just missed
       if (await this.trySend(socket, line)) return;
     }
-    // No target around (nvim was closed, moved to another file, or never had it open). Stay dormant
   }
 
   /**

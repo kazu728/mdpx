@@ -41,7 +41,7 @@ describe("buildLineMap", () => {
   test("drops anchors whose line goes backwards (elements like footnotes, where document order diverges from source order)", () => {
     const out = build([
       { line: 3, top: 100 },
-      { line: 2, top: 150 }, // backwards
+      { line: 2, top: 150 },
       { line: 5, top: 200 },
     ]);
     expect(out.map((a) => a.line)).toEqual([1, 3, 5, 7]);
@@ -50,7 +50,7 @@ describe("buildLineMap", () => {
   test("drops duplicates pointing at the same line (a list_item and the paragraph inside it)", () => {
     const out = build([
       { line: 3, top: 100 },
-      { line: 3, top: 110 }, // same line
+      { line: 3, top: 110 },
       { line: 4, top: 130 },
     ]);
     expect(out.map((a) => a.top)).toEqual([0, 100, 130, 400]);
@@ -59,7 +59,7 @@ describe("buildLineMap", () => {
   test("drops anchors whose top goes backwards", () => {
     const out = build([
       { line: 3, top: 200 },
-      { line: 4, top: 150 }, // moves back up
+      { line: 4, top: 150 },
       { line: 5, top: 250 },
     ]);
     expect(out.map((a) => a.line)).toEqual([1, 3, 5, 7]);
@@ -68,7 +68,7 @@ describe("buildLineMap", () => {
   test("drops anchors whose top exceeds docCssH", () => {
     const out = build([
       { line: 3, top: 100 },
-      { line: 4, top: 500 }, // outside the document
+      { line: 4, top: 500 },
     ]);
     expect(out.map((a) => a.line)).toEqual([1, 3, 7]);
   });
@@ -173,7 +173,7 @@ describe("lineAt's laidOut snapping", () => {
   const bare = buildLineMap(anchors, 6, 400);
 
   test("landing on a line with no height falls back to the previous real line", () => {
-    expect(lineAt(bare, 50, false)).toBe(2); // the interpolation itself points at line 2
+    expect(lineAt(bare, 50, false)).toBe(2);
     expect(lineAt(map, 50, false)).toBe(1);
     expect(lineAt(bare, 200, false)).toBe(4);
     expect(lineAt(map, 200, false)).toBe(3);

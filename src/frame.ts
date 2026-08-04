@@ -18,11 +18,6 @@ const HOME = `${ESC}[H`;
 const ERASE_BELOW = `${ESC}[J`;
 const cursorTo = (row: number, col: number) => `${ESC}[${row};${col}H`;
 
-/**
- * Draw one frame: delete the old placements, clear, place the visible tiles, then the status bar
- * (§4.5). `escape` is the write string wrapped in a synchronized update; `placements` are the image
- * IDs placed by this frame.
- */
 export function renderFrame(
   view: ViewState,
   filename: string,
@@ -36,12 +31,11 @@ export function renderFrame(
 
   const placed: number[] = [];
   let pendingVisible = false;
-  // With no displayed generation there is no body to place (the frame is just a status bar)
   if (view.displayGen !== null) {
     const vis = visibleTiles(view.scrollPx, contentRows(geometry.rows), geometry.cellHpx, view.tiles);
     for (const p of vis) {
       if (!view.resident.has(p.tileIndex)) {
-        pendingVisible = true; // untransferred regions stay blank (the transfer event redraws)
+        pendingVisible = true;
         continue;
       }
       const id = imageId(view.displayGen, p.tileIndex);
@@ -77,13 +71,13 @@ function statusBar(view: ViewState, filename: string, pendingVisible: boolean): 
     : 0;
   const pct = !shown ? "--" : max > 0 ? String(Math.round((scrollPx / max) * 100)) : "100";
   const state = pendingVisible
-    ? "rendering…" // showing a region whose tile has not been transferred (§4.1)
+    ? "rendering…"
     : phase === "rendering"
       ? shown
         ? "updating"
         : "rendering…"
       : shown && shown.truncated && scrollPx >= max
-        ? "truncated" // the tile cap is reported once the end is reached (§4.4)
+        ? "truncated"
         : "";
   // The relay state is a standing property, independent of position and time, so it gets its own
   // slot rather than joining the transient states above (§4.8). Folding it into that exclusive chain

@@ -13,12 +13,12 @@ import { Chrome, resolveExecutable } from "../src/chrome.ts";
 import { buildLineMap, countLines, lineAt } from "../src/linemap.ts";
 import { CSS_SCALE, tileHeightPx } from "../src/viewport.ts";
 
-const exe = await resolveExecutable();
+const exe = resolveExecutable();
 if (!exe) {
   // A skip exits 0 and goes unnoticed, so always state the reason (§4.3's resolution order is shared with production)
   process.stderr.write(
-    "skipping the integration tests because chrome-headless-shell was not found" +
-      " (set PUPPETEER_EXECUTABLE_PATH, or let mdpx install it on first launch)\n",
+    "skipping the integration tests because no Chromium was found" +
+      " (install Google Chrome, or set PUPPETEER_EXECUTABLE_PATH)\n",
   );
 }
 
@@ -97,8 +97,8 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
     );
     await chrome.load(evil, CSS_WIDTH, CSS_SCALE);
     expect(await chrome.evaluate(() => location.protocol)).toBe("file:");
-    expect(await chrome.evaluate(() => document.querySelectorAll("meta[http-equiv]").length)).toBe(1); // only the CSP one
-    await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE); // back to the fixture for the tests that follow
+    expect(await chrome.evaluate(() => document.querySelectorAll("meta[http-equiv]").length)).toBe(1);
+    await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
   }, 30000);
 
   // §4.9's seam. The DOM works in CSS px and the scheduler in physical px, and getting the conversion
@@ -113,10 +113,10 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
         expect(a.line).toBeGreaterThanOrEqual(1);
       }
       const lines = anchors.map((a) => a.line);
-      expect(lines).toEqual([...lines].sort((x, y) => x - y)); // document order matches source order
+      expect(lines).toEqual([...lines].sort((x, y) => x - y));
       const tops = anchors.map((a) => a.top);
       expect(tops).toEqual([...tops].sort((x, y) => x - y));
-      expect(anchors[0]!.line).toBe(1); // the leading heading (line 1 of the fixture)
+      expect(anchors[0]!.line).toBe(1);
     });
 
     test("a scroll px resolves to the fixture's heading line (including the physical px → CSS px conversion)", async () => {
@@ -134,8 +134,8 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
       // What main.ts holds is a scrollPx in physical px; divide by CSS_SCALE before handing it to the LineMap
       const scrollPx = top! * CSS_SCALE;
       expect(lineAt(map, scrollPx / CSS_SCALE, false)).toBe(14);
-      expect(lineAt(map, 0, false)).toBe(1); // top of the document
-      expect(lineAt(map, 0, true)).toBe(countLines(md)); // jump to the end
+      expect(lineAt(map, 0, false)).toBe(1);
+      expect(lineAt(map, 0, true)).toBe(countLines(md));
     });
 
     // A blank line takes a line in the source but has no place in the rendering. The interpolation
@@ -186,7 +186,7 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
     const reduced = await chrome.load(htmlPath, CSS_WIDTH, 1);
     const reducedPng = pngSize(Buffer.from(await chrome.shoot({ x: 0, y: 0, width: CSS_WIDTH, height: 100 }), "base64"));
 
-    expect(reduced).toBe(full); // the document height (CSS layout) does not depend on the dsf
+    expect(reduced).toBe(full);
     expect(reducedPng.width * 2).toBe(fullPng.width);
     expect(reducedPng.height * 2).toBe(fullPng.height);
 

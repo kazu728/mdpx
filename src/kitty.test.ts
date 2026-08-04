@@ -49,8 +49,8 @@ describe("transmit", () => {
     expect(apcs[2]!.payload.length).toBe(10);
     expect(keys(apcs[0]!.control)).toMatchObject({ a: "t", f: "100", t: "d", i: String(imageId(3, 1)), q: "1", m: "1" });
     expect(keys(apcs[1]!.control).m).toBe("1");
-    expect(keys(apcs[2]!.control).m).toBe("0"); // the final chunk
-    expect(apcs[1]!.control).toBe("m=1"); // continuation chunks do not repeat the keys
+    expect(keys(apcs[2]!.control).m).toBe("0");
+    expect(apcs[1]!.control).toBe("m=1");
   });
 
   test("4096 or fewer is one chunk with m=0", () => {

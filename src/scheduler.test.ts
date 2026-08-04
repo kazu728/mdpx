@@ -65,14 +65,14 @@ describe("generation switch (§4.6 rule 4)", () => {
     s.dispatch({ type: "key", delta: { kind: "bottom" } });
     expect<number>(s.viewState().scrollPx).toBe(1000);
 
-    s.dispatch({ type: "trigger" }); // gen2
+    s.dispatch({ type: "trigger" });
     expect(shoots(s.dispatch({ type: "renderDone", gen: 2, docHpx: 500 }))).toEqual([0]);
     const p = s.dispatch({ type: "tileReady", gen: 2, tileIndex: 0 });
 
     const idxRedraw = p.findIndex((a) => a.type === "redraw");
     const idxDelete = p.findIndex((a) => a.type === "deleteGen");
     expect(idxRedraw).toBeGreaterThanOrEqual(0);
-    expect(idxDelete).toBeGreaterThan(idxRedraw); // place, then delete
+    expect(idxDelete).toBeGreaterThan(idxRedraw);
     const del = p.find((a): a is Action & { type: "deleteGen" } => a.type === "deleteGen");
     expect(del!.imageIds.slice().sort()).toEqual(
       [imageId(1, 0), imageId(1, 1), imageId(1, 2)].sort(),
@@ -108,7 +108,7 @@ describe("scrolling to an untransferred tile (§4.1)", () => {
     const vs = shown(s);
     const vis = visibleTiles(vs.scrollPx, 50, 10, vs.tiles).map((p) => p.tileIndex);
     expect(vis).toContain(2);
-    expect(vs.resident.has(2)).toBe(false); // untransferred → renderFrame shows blank + "rendering…"
+    expect(vs.resident.has(2)).toBe(false);
 
     // Reordered by proximity to the visible (bottom) region: after ti1 completes, ti2 is captured
     expect(shoots(s.dispatch({ type: "tileReady", gen: 1, tileIndex: 1 }))).toEqual([2]);
@@ -177,7 +177,7 @@ describe("resize", () => {
     s.dispatch({ type: "renderDone", gen: 1, docHpx: 1500 }); // shoot ti0 gen1
     const bigger: Geometry = { ...GEO, rows: 61, cellHpx: 12 };
     const r = s.dispatch({ type: "resize", geometry: bigger });
-    expect(r).toEqual([{ type: "redraw" }]); // drop the display and show "rendering…"
+    expect(r).toEqual([{ type: "redraw" }]);
     expect(s.viewState().displayGen).toBe(null);
     // When the in-flight shoot(ti0/gen1) comes back, free the transferred image and start the new pipeline
     const back = s.dispatch({ type: "tileReady", gen: 1, tileIndex: 0 });
@@ -222,25 +222,25 @@ describe("consuming the capture queue", () => {
     expect(shoots(s.dispatch({ type: "tileReady", gen: 1, tileIndex: 1 }))).toEqual([2]);
 
     const last = s.dispatch({ type: "tileReady", gen: 1, tileIndex: 2 });
-    expect(shoots(last)).toEqual([]); // everything left is transferred → capture nothing
-    expect(s.viewState().phase).toBe("ready"); // pipeline complete
+    expect(shoots(last)).toEqual([]);
+    expect(s.viewState().phase).toBe("ready");
   });
 
   test("a tileReady that promotes redraws exactly once (never re-placing what it just placed)", () => {
     const s = newDisplayedGen1();
-    s.dispatch({ type: "trigger" }); // gen2
+    s.dispatch({ type: "trigger" });
     s.dispatch({ type: "renderDone", gen: 2, docHpx: 1500 });
-    const p = s.dispatch({ type: "tileReady", gen: 2, tileIndex: 0 }); // promote to gen2
+    const p = s.dispatch({ type: "tileReady", gen: 2, tileIndex: 0 });
     expect(p.filter((a) => a.type === "redraw").length).toBe(1);
-    expect(p[0]).toEqual({ type: "redraw" }); // placement first, old generation deleted after
+    expect(p[0]).toEqual({ type: "redraw" });
   });
 });
 
 describe("scrolling during an unpromoted pipeline", () => {
   test("the capture order is rebuilt around the new scroll position and promotion needs only the visible tiles", () => {
-    const s = newDisplayedGen1(); // gen1 displayed
-    s.dispatch({ type: "trigger" }); // gen2
-    expect(shoots(s.dispatch({ type: "renderDone", gen: 2, docHpx: 1500 }))).toEqual([0]); // based at the top
+    const s = newDisplayedGen1();
+    s.dispatch({ type: "trigger" });
+    expect(shoots(s.dispatch({ type: "renderDone", gen: 2, docHpx: 1500 }))).toEqual([0]);
     s.dispatch({ type: "key", delta: { kind: "bottom" } }); // jump to the end on gen1 (1000)
     // After ti0, the next is ti2, nearest the end (without the rebuild it would be ti1)
     expect(shoots(s.dispatch({ type: "tileReady", gen: 2, tileIndex: 0 }))).toEqual([2]);
@@ -254,12 +254,12 @@ describe("scrolling during an unpromoted pipeline", () => {
 describe("renderFailed", () => {
   test("folds the pipeline, keeps the current frame, and lets the next trigger through normally", () => {
     const s = newDisplayedGen1();
-    s.dispatch({ type: "trigger" }); // gen2
+    s.dispatch({ type: "trigger" });
     const f = s.dispatch({ type: "renderFailed", gen: 2 });
     expect(has(f, "redraw")).toBe(true);
     expect(has(f, "render")).toBe(false);
     expect(s.viewState().phase).toBe("ready");
-    expect(s.viewState().displayGen).toBe(1); // the frame stays
+    expect(s.viewState().displayGen).toBe(1);
     expect(s.dispatch({ type: "trigger" }).filter((a) => a.type === "render")).toEqual([
       { type: "render", gen: 3 },
     ]);
@@ -267,26 +267,26 @@ describe("renderFailed", () => {
 
   test("a trigger coalesced during the run re-runs immediately after the failure", () => {
     const s = newDisplayedGen1();
-    s.dispatch({ type: "trigger" }); // gen2
-    s.dispatch({ type: "trigger" }); // rerun pending
+    s.dispatch({ type: "trigger" });
+    s.dispatch({ type: "trigger" });
     const f = s.dispatch({ type: "renderFailed", gen: 2 });
     expect(f.filter((a) => a.type === "render")).toEqual([{ type: "render", gen: 3 }]);
   });
 
   test("an unpromoted generation failing mid-backfill frees its transferred images (no leak)", () => {
-    const s = newDisplayedGen1(); // gen1 displayed, scroll 0
+    const s = newDisplayedGen1();
     // Scroll gen1 to a boundary-straddling position (visible = tile0 + tile1, so promotion needs both)
     s.dispatch({ type: "key", delta: { kind: "lines", n: 10 } }); // scroll 100
     s.dispatch({ type: "trigger" }); // gen2
     s.dispatch({ type: "renderDone", gen: 2, docHpx: 1500 }); // shoot tile0
     s.dispatch({ type: "tileReady", gen: 2, tileIndex: 0 }); // tile1 untransferred → gen2 stays unpromoted
-    expect(s.viewState().displayGen).toBe(1); // still showing gen1
+    expect(s.viewState().displayGen).toBe(1);
 
     const f = s.dispatch({ type: "renderFailed", gen: 2 });
     expect(f.filter((a) => a.type === "deleteGen")).toEqual([
-      { type: "deleteGen", imageIds: [imageId(2, 0)] }, // free the transferred tile0
+      { type: "deleteGen", imageIds: [imageId(2, 0)] },
     ]);
-    expect(s.viewState().displayGen).toBe(1); // the current frame stays
+    expect(s.viewState().displayGen).toBe(1);
   });
 
   test("a promoted generation failing keeps the displayed images, recapturable by a later trigger", () => {
@@ -296,10 +296,10 @@ describe("renderFailed", () => {
     s.dispatch({ type: "tileReady", gen: 1, tileIndex: 0 }); // gen1 promoted (tile1 in flight)
 
     const f = s.dispatch({ type: "renderFailed", gen: 1 });
-    expect(has(f, "deleteGen")).toBe(false); // it is on screen, so nothing is deleted
+    expect(has(f, "deleteGen")).toBe(false);
     expect(s.viewState().displayGen).toBe(1);
     expect(shown(s).resident.has(0)).toBe(true);
-    expect(s.viewState().phase).toBe("ready"); // the pipeline folds
+    expect(s.viewState().phase).toBe("ready");
 
     // Moving to the end (non-resident tile2) starts a recapture, but the trigger yields to a new
     // generation (§4.4)
@@ -356,7 +356,6 @@ describe("resident tile budget (§4.4)", () => {
     }
     expect(sawEvict).toBe(true);
     expect(shown(s).resident.size).toBeLessThanOrEqual(3);
-    // Tiles near the top have been pushed out
     expect([...before].some((t) => !shown(s).resident.has(t))).toBe(true);
   });
 
@@ -371,7 +370,6 @@ describe("resident tile budget (§4.4)", () => {
   test("scrolling outside residency goes back to capturing (nothing is left black)", () => {
     const s = displayed();
     const acts = s.dispatch({ type: "key", delta: { kind: "bottom" } });
-    // The tiles at the end are no longer resident, so capturing resumes
     expect(shoots(acts).length).toBeGreaterThan(0);
     // A recapture is not building a new generation, so it must not show "updating"
     expect(s.viewState().phase).toBe("ready");

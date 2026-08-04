@@ -56,9 +56,9 @@ describe("buildHtml", () => {
     const html = await build("/tmp/docs");
     // Pick out shiki's opening pre tag without depending on attribute order
     const preTag = html.match(/<pre\b[^>]*class="shiki[^>]*>/)?.[0];
-    expect(preTag).toBeDefined(); // a shiki-highlighted pre exists
-    expect(preTag).not.toContain("background-color"); // no background burned into the pre (GitHub's light grey box shows through)
-    expect(html).toMatch(/<span style="color:/); // token colours are inline
+    expect(preTag).toBeDefined();
+    expect(preTag).not.toContain("background-color");
+    expect(html).toMatch(/<span style="color:/);
   });
 
   test("light uses the GitHub-light CSS and a white background", async () => {
@@ -70,10 +70,10 @@ describe("buildHtml", () => {
 
   test("dark keeps shiki, the background, mermaid, and the CSS all dark", async () => {
     const html = await build("/tmp/docs", "dark");
-    expect(html).toContain("github-markdown-dark.css"); // the dark GitHub CSS
-    expect(html).toMatch(/<pre class="shiki github-dark/); // shiki's dark theme
-    expect(html).toContain("background: #0d1117"); // dark page background
-    expect(html).toContain('theme: "dark"'); // mermaid dark
+    expect(html).toContain("github-markdown-dark.css");
+    expect(html).toMatch(/<pre class="shiki github-dark/);
+    expect(html).toContain("background: #0d1117");
+    expect(html).toContain('theme: "dark"');
   });
 });
 
@@ -110,7 +110,6 @@ describe("data-source-line", () => {
       assets: resolveAssets("light"),
       theme: "light",
     });
-    // Collect [tag name, line number] in document order
     return [...html.matchAll(/<(\w+)\b[^>]*\sdata-source-line="(\d+)"/g)].map((m) => [m[1]!, m[2]!]);
   }
 
@@ -121,13 +120,13 @@ describe("data-source-line", () => {
     expect(found).toContainEqual(["blockquote", "5"]);
     expect(found).toContainEqual(["ul", "19"]);
     expect(found).toContainEqual(["li", "19"]);
-    expect(found).toContainEqual(["li", "20"]); // a nested item gets its own
+    expect(found).toContainEqual(["li", "20"]);
   });
 
   test("fences get theirs on the pre, on both the shiki and mermaid paths", async () => {
     const found = await anchors();
-    expect(found).toContainEqual(["pre", "7"]); // shiki (not an _open token, so it is attached by hand)
-    expect(found).toContainEqual(["pre", "11"]); // mermaid
+    expect(found).toContainEqual(["pre", "7"]);
+    expect(found).toContainEqual(["pre", "11"]);
   });
 
   test("math_block gets none (interpolation from its neighbours absorbs it)", async () => {

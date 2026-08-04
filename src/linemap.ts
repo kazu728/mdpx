@@ -102,7 +102,6 @@ function snapToLaidOut(laidOut: readonly boolean[], line: number): number {
 export function lineAt(map: LineMap, cssY: number, atEnd: boolean): number {
   if (atEnd) return map.lineCount;
   const a = map.anchors;
-  // The last anchor with top <= cssY (a[0].top is 0, so there is always at least one)
   let lo = 0;
   let hi = a.length - 1;
   while (lo < hi) {
@@ -112,8 +111,6 @@ export function lineAt(map: LineMap, cssY: number, atEnd: boolean): number {
   }
   const cur = a[lo]!;
   const next = a[lo + 1];
-  // Inside a block the estimate is "start line + proportional px", so the line advances smoothly even
-  // through a long paragraph or the middle of a fence
   const line = next
     ? cur.line + ((cssY - cur.top) / (next.top - cur.top)) * (next.line - cur.line)
     : cur.line;

@@ -2,23 +2,12 @@
 // lifetime, and a reload is just a goto of the temporary HTML. Resolve executablePath → wait for the
 // render to settle → screenshot tiles.
 
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { accessSync, constants, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import puppeteer, { TimeoutError, type Browser, type Page } from "puppeteer-core";
-import {
-  Browser as BrowsersBrowser,
-  detectBrowserPlatform,
-  getInstalledBrowsers,
-  install,
-  resolveBuildId,
-} from "@puppeteer/browsers";
 import type { Anchor } from "./linemap.ts";
 import type { Clip } from "./scheduler.ts";
 import { CSS_SCALE } from "./viewport.ts";
-
-const CACHE_DIR = join(homedir(), ".cache", "puppeteer");
 
 /** A render failure caused by the page content (not a Chrome fault). The caller keeps the current frame. */
 export class ContentError extends Error {}
@@ -26,34 +15,32 @@ export class ContentError extends Error {}
 /** Cap on domcontentloaded. Cuts off a parse that never returns (an infinite-loop script, say). */
 const NAV_TIMEOUT_MS = 15000;
 
-/** §4.3's resolution order: env var → the highest cached chrome-headless-shell version → null if none. */
-export async function resolveExecutable(): Promise<string | null> {
-  const env = process.env.PUPPETEER_EXECUTABLE_PATH;
-  if (env && existsSync(env)) return env;
-  if (!existsSync(CACHE_DIR)) return null;
-  const shells = (await getInstalledBrowsers({ cacheDir: CACHE_DIR }))
-    .filter((b) => b.browser === BrowsersBrowser.CHROMEHEADLESSSHELL)
-    // Lexicographic order puts 142 before 99, so sort descending with numeric-aware natural order and
-    // take the highest (@puppeteer/browsers does not validate the buildId format, so use a comparison
-    // that is a total order even for non-numeric values)
-    .sort((a, b) => b.buildId.localeCompare(a.buildId, undefined, { numeric: true }));
-  return shells[0]?.executablePath ?? null;
+// Non-standard installs stay available through PUPPETEER_EXECUTABLE_PATH instead of being duplicated here.
+const APP_PATHS = [
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+];
+
+// accessSync alone also accepts directories, which cannot be spawned as Chromium.
+function isExecutableFile(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
-async function autoInstall(quiet: boolean): Promise<string> {
-  const platform = detectBrowserPlatform();
-  if (!platform) throw new Error("cannot determine the browser platform");
-  // The notice is printed only on the first launch, before entering alt-screen. The restart path
-  // (inside alt-screen) stays silent so it does not corrupt the screen.
-  if (!quiet) process.stderr.write("downloading chrome-headless-shell…\n");
-  const buildId = await resolveBuildId(BrowsersBrowser.CHROMEHEADLESSSHELL, platform, "stable");
-  const installed = await install({
-    browser: BrowsersBrowser.CHROMEHEADLESSSHELL,
-    buildId,
-    cacheDir: CACHE_DIR,
-    platform,
-  });
-  return installed.executablePath;
+export function parseExecutableEnv(raw: string | undefined): string | null {
+  return raw && isExecutableFile(raw) ? raw : null;
+}
+
+export function resolveExecutable(): string | null {
+  return (
+    parseExecutableEnv(process.env.PUPPETEER_EXECUTABLE_PATH) ??
+    APP_PATHS.find(isExecutableFile) ??
+    null
+  );
 }
 
 const STABLE_IMG_DECODE_MS = 1000;
@@ -65,9 +52,9 @@ export class Chrome {
   private browser: Browser | null = null;
   private page: Page | null = null;
 
-  /** quiet=true (the restart path) suppresses the download notice, so alt-screen stays clean. */
-  async launch(quiet = false): Promise<void> {
-    const executablePath = (await resolveExecutable()) ?? (await autoInstall(quiet));
+  async launch(): Promise<void> {
+    const executablePath = resolveExecutable();
+    if (!executablePath) throw new Error("no Chromium found");
     // --hide-scrollbars and --force-color-profile=srgb are already in
     // puppeteer.defaultArgs({ headless: true }) and ignoreDefaultArgs is not set, so they are not
     // repeated. --allow-file-access-from-files is deliberately absent: it would let JS in raw HTML
@@ -113,7 +100,7 @@ export class Chrome {
       if (e instanceof TimeoutError) {
         throw new ContentError(`load timed out: ${e.message}`);
       }
-      throw e; // Page/Chrome fault → let the caller restart
+      throw e;
     }
     await page.evaluate(() => document.fonts.ready);
     // Image decode (1s cap; images that miss it are captured missing)
@@ -151,7 +138,6 @@ export class Chrome {
     );
   }
 
-  /** Screenshot a tile region and return base64 PNG (passed straight to the kitty transmit). */
   async shoot(clip: Clip): Promise<string> {
     const data = await this.page!.screenshot({
       clip: { x: clip.x, y: clip.y, width: clip.width, height: clip.height },
@@ -170,7 +156,7 @@ export class Chrome {
 
   async restart(): Promise<void> {
     await this.close();
-    await this.launch(true); // inside alt-screen, so suppress the download notice
+    await this.launch();
   }
 
   async close(): Promise<void> {

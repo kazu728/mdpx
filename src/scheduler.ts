@@ -30,7 +30,6 @@ import { imageId } from "./kitty.ts";
 export interface Geometry {
   /** Total terminal rows (the last one is the status bar). */
   rows: number;
-  /** Total terminal columns. */
   cols: number;
   /** Physical px height of one row (from CSI 16t). */
   cellHpx: number;
@@ -60,12 +59,12 @@ export type ScrollDelta =
   | { kind: "bottom" };
 
 export type SchedulerEvent =
-  | { type: "trigger" } // watch fired (re-render)
-  | { type: "resize"; geometry: Geometry } // terminal resize
-  | { type: "key"; delta: ScrollDelta } // scroll key
-  | { type: "renderDone"; gen: number; docHpx: number } // HTML rendered, document height known
-  | { type: "renderFailed"; gen: number } // render failed (missing file etc.); the current generation stays on screen
-  | { type: "tileReady"; gen: number; tileIndex: number }; // tile captured and transferred
+  | { type: "trigger" }
+  | { type: "resize"; geometry: Geometry }
+  | { type: "key"; delta: ScrollDelta }
+  | { type: "renderDone"; gen: number; docHpx: number }
+  | { type: "renderFailed"; gen: number }
+  | { type: "tileReady"; gen: number; tileIndex: number };
 
 export interface Clip {
   x: number;
@@ -82,7 +81,6 @@ export type Action =
 
 type Phase = "rendering" | "ready";
 
-/** State that exists whether or not a generation is displayed. */
 interface ViewBase {
   geometry: Geometry;
   scrollPx: ScrollPx;
@@ -181,14 +179,12 @@ export class Scheduler {
     };
   }
 
-  // --- Triggers ---------------------------------------------------------------
-
   private onTrigger(): Action[] {
     // Re-capturing the displayed generation (§4.4) occupies the pipeline slot, but a new generation
     // recaptures everything anyway, so it yields. Deferring to rerun here would make a save wait on
     // images that are about to be thrown away
     if (this.pipeGen && !this.refetching) {
-      this.rerun = true; // rule 2: only the newest is kept while one is running
+      this.rerun = true;
       return [];
     }
     return this.startPipeline();
@@ -235,8 +231,6 @@ export class Scheduler {
     return [{ type: "render", gen: this.genCounter }, { type: "redraw" }];
   }
 
-  // --- Keys -------------------------------------------------------------------
-
   private onKey(delta: ScrollDelta): Action[] {
     if (!this.displayGen) return [];
     const { cellHpx, renderScale } = this.geometry;
@@ -273,7 +267,6 @@ export class Scheduler {
         pg === this.displayGen
           ? this.scrollPx
           : clampScroll(this.scrollPx, pg.contentHpx, this.contentRows, cellHpx, renderScale);
-      // Skipping already-resident tiles is the consumer's job (nextShoot)
       this.shootQueue = this.queueAround(pg, pgScroll);
       return [{ type: "redraw" }];
     }
@@ -291,7 +284,6 @@ export class Scheduler {
     return order.slice(0, this.geometry.maxResident);
   }
 
-  /** If any visible tile is not resident, resume capturing within the displayed generation. */
   private refetchVisible(): Action[] {
     const g = this.displayGen;
     if (!g || this.pipeGen || g.tiles.length === 0) return [];
@@ -301,8 +293,6 @@ export class Scheduler {
     this.shootQueue = this.queueAround(g, this.scrollPx);
     return this.drive();
   }
-
-  // --- Pipeline completion ----------------------------------------------------
 
   private onRenderDone(gen: number, docHpx: number): Action[] {
     const g = this.pipeGen;
@@ -437,7 +427,7 @@ export class Scheduler {
         this.shootInFlight = true;
         actions.push(this.shootAction(g, next));
       } else if (this.displayGen === g) {
-        this.pipeGen = null; // the whole budget is captured, so the pipeline is done
+        this.pipeGen = null;
         this.refetching = false;
         if (this.rerun) actions.push(...this.startPipeline());
       }
