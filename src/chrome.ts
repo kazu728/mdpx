@@ -2,7 +2,6 @@
 // lifetime, and a reload is just a goto of the temporary HTML. Resolve executablePath → wait for the
 // render to settle → screenshot tiles.
 
-import { accessSync, constants, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import puppeteer, { TimeoutError, type Browser, type Page } from "puppeteer-core";
 import type { Anchor } from "./linemap.ts";
@@ -15,32 +14,16 @@ export class ContentError extends Error {}
 /** Cap on domcontentloaded. Cuts off a parse that never returns (an infinite-loop script, say). */
 const NAV_TIMEOUT_MS = 15000;
 
-// Non-standard installs stay available through PUPPETEER_EXECUTABLE_PATH instead of being duplicated here.
-const APP_PATHS = [
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/Applications/Chromium.app/Contents/MacOS/Chromium",
-];
-
-// accessSync alone also accepts directories, which cannot be spawned as Chromium.
-function isExecutableFile(path: string): boolean {
+// puppeteer-core ignores environment variables, so apply the explicit override before its standard
+// Chrome-channel lookup.
+export async function resolveExecutable(): Promise<string | null> {
+  const override = process.env.PUPPETEER_EXECUTABLE_PATH;
+  if (override) return override;
   try {
-    accessSync(path, constants.X_OK);
-    return statSync(path).isFile();
+    return await puppeteer.executablePath("chrome");
   } catch {
-    return false;
+    return null;
   }
-}
-
-export function parseExecutableEnv(raw: string | undefined): string | null {
-  return raw && isExecutableFile(raw) ? raw : null;
-}
-
-export function resolveExecutable(): string | null {
-  return (
-    parseExecutableEnv(process.env.PUPPETEER_EXECUTABLE_PATH) ??
-    APP_PATHS.find(isExecutableFile) ??
-    null
-  );
 }
 
 const STABLE_IMG_DECODE_MS = 1000;
@@ -52,16 +35,17 @@ export class Chrome {
   private browser: Browser | null = null;
   private page: Page | null = null;
 
+  constructor(private readonly executablePath: string | null) {}
+
   async launch(): Promise<void> {
-    const executablePath = resolveExecutable();
-    if (!executablePath) throw new Error("no Chromium found");
+    if (!this.executablePath) throw new Error("no Chromium found");
     // --hide-scrollbars and --force-color-profile=srgb are already in
     // puppeteer.defaultArgs({ headless: true }) and ignoreDefaultArgs is not set, so they are not
     // repeated. --allow-file-access-from-files is deliberately absent: it would let JS in raw HTML
     // inside the md read arbitrary local files over XHR (measured). Loading CSS/JS/font subresources
     // over file:// has been confirmed to work without the flag.
     this.browser = await puppeteer.launch({
-      executablePath,
+      executablePath: this.executablePath,
       headless: true,
       // Speak CDP over a stdio pipe. The default (pipe=false) adds --remote-debugging-port=0 and
       // leaves an unauthenticated CDP listening on 127.0.0.1 (for the whole session, since Chrome is

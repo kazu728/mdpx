@@ -13,7 +13,7 @@ import { Chrome, resolveExecutable } from "../src/chrome.ts";
 import { buildLineMap, countLines, lineAt } from "../src/linemap.ts";
 import { CSS_SCALE, tileHeightPx } from "../src/viewport.ts";
 
-const exe = resolveExecutable();
+const exe = await resolveExecutable();
 if (!exe) {
   // A skip exits 0 and goes unnoticed, so always state the reason (§4.3's resolution order is shared with production)
   process.stderr.write(
@@ -52,7 +52,7 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
     await writeFile(htmlPath, built.html);
     laidOut = built.laidOut;
 
-    chrome = new Chrome();
+    chrome = new Chrome(exe);
     await chrome.launch();
     const docHpx = await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
     expect(docHpx).toBeGreaterThan(0);

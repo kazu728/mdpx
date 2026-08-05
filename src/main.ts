@@ -9,7 +9,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { resolveAssets, type Assets } from "./assets.ts";
 import { buildHtml } from "./html.ts";
 import { resolveTheme } from "./theme.ts";
-import { Chrome, ContentError, parseExecutableEnv, resolveExecutable } from "./chrome.ts";
+import { Chrome, ContentError, resolveExecutable } from "./chrome.ts";
 import { renderFrame } from "./frame.ts";
 import { deleteImage, imageId, transmit } from "./kitty.ts";
 import { buildLineMap, countLines, lineAt, type Anchor, type LineMap } from "./linemap.ts";
@@ -91,17 +91,12 @@ async function main(): Promise<void> {
   const nvimTarget = parseNvimEnv(process.env.MDPX_NVIM);
   if (nvimTarget.mode === "off" && nvimTarget.warning) warn(nvimTarget.warning);
 
-  // Dropping a bad PUPPETEER_EXECUTABLE_PATH in silence is worse than for the two above: resolution
-  // continues to the installed Chromium, so the viewer comes up on a browser the user did not pick.
-  const chromeEnv = process.env.PUPPETEER_EXECUTABLE_PATH;
-  if (chromeEnv && !parseExecutableEnv(chromeEnv)) {
-    warn(`ignoring PUPPETEER_EXECUTABLE_PATH (not an executable file): ${chromeEnv}`);
-  }
+  const chromeExecutable = await resolveExecutable();
 
   const term = new Term();
   term.enableInput();
 
-  const chrome = new Chrome();
+  const chrome = new Chrome(chromeExecutable);
   const nvim = new NvimCursor(mdPath, nvimTarget);
   // Line anchors per generation (§4.9). Lookups always use displayGen's map — never resolve a
   // position in the displayed generation against a newer map that has not been promoted yet.
@@ -190,11 +185,10 @@ async function main(): Promise<void> {
     await chrome.launch();
   } catch (e) {
     // Absence is an actionable setup problem; a found binary's launch failure needs its stack for diagnosis.
-    const tried = resolveExecutable();
     return shutdown(
       1,
-      tried
-        ? `mdpx: cannot launch Chrome (${tried}): ${e instanceof Error ? e.stack : e}\n`
+      chromeExecutable
+        ? `mdpx: cannot launch Chrome (${chromeExecutable}): ${e instanceof Error ? e.stack : e}\n`
         : "mdpx: no Chromium found. Install Google Chrome, or point PUPPETEER_EXECUTABLE_PATH at a Chromium binary\n",
     );
   }
