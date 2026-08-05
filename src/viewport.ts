@@ -1,258 +1,164 @@
-// Pure viewport and scroll math (§4.5). No I/O.
-//
-// The coordinate system is "physical px offset from the top of the document". scrollPx is always a
-// multiple of the scroll unit (scrollUnitPx: one cell at 1:1, up to two cells when downscaled).
-// Tile heights are integer multiples of the cell height (§4.3), so the overlap between the viewport
+// Tile heights are integer multiples of the cell height, so the overlap between the viewport
 // and a tile is always cell-aligned except at the end of the document — computeTiles pads the tail
 // to a cell multiple to guarantee alignment there too (the padding is filled with the page
 // background colour, so it looks unremarkable in the screenshot).
 
 /**
- * Nominal brand that puts screen-px invariants into the type system.
- *
- * **Only the private helpers in this module mint them.** Every calculation that establishes an
- * invariant (alignment, snapping, rounding up) lives here, so as long as no door is left open for
- * outside code to lift a bare number into a brand, "it has the type" implies "it went through that
- * calculation". A branded number is assignable to a plain number one way, so consumers taking
- * `number` need no change.
- *
- * The brand does not carry **which cellHpx it was aligned to** (that would need a phantom type
- * parameter, and with cellHpx being a runtime value the cost does not pay off). Passing the right
- * cellHpx to the right place is not something the types protect.
+ * Only this module mints aligned-pixel brands. They deliberately do not encode which runtime
+ * cellHpx established the alignment; doing so would require a phantom type that adds more
+ * conversion overhead than protection.
  */
 declare const brand: unique symbol;
-/**
- * The invariants are expressed as a **set of tags**. A larger set is a stronger constraint, and
- * assignment only goes from stronger to weaker (`ScrollPx` → `CellPx` passes, the reverse does not).
- */
 type Brand<Tags extends string> = { readonly [brand]: Record<Tags, true> };
 
-/** Screen px that is a multiple of the tile boundary unit `tileAlign` (= cellHpx × CSS_SCALE). */
-export type TilePx = number & Brand<"tileAligned">;
+export type TileAlignedPx = number & Brand<"tileAligned">;
 
-/** Document height covered by the tiles (bottom of the captured range, tile padding included). */
-export type CoveredHeight = number & Brand<"covered">;
+export type CoveredHeightPx = number & Brand<"covered">;
 
-/** Screen px that is a multiple of the cell height, so it divides evenly into rows. */
-export type CellPx = number & Brand<"cellAligned">;
+export type CellAlignedPx = number & Brand<"cellAligned">;
 
-/**
- * Screen px usable as a scroll position: a multiple of `scrollUnitPx(cellHpx, renderScale)`, which
- * is stronger than `CellPx` (one cell at 1:1, two cells when downscaled with an odd cell height —
- * §4.5). The only mints are `clampScroll` / `maxScrollPx` and `SCROLL_TOP`; a bare sum carries no
- * guarantee of landing on the unit, so it must go through one of them.
- */
-export type ScrollPx = number & Brand<"cellAligned" | "scrollUnitAligned">;
+export type ScrollAlignedPx = number & Brand<"cellAligned" | "scrollUnitAligned">;
 
-/** Top of the document. 0 is a multiple of every alignment unit. */
-export const SCROLL_TOP = 0 as ScrollPx;
+export const SCROLL_TOP = 0 as ScrollAlignedPx;
 
 /**
- * Effective document height used for the scroll limit (screen px, a multiple of the cell height).
- *
  * Tiles are padded out to a `tileAlign` boundary, but that trailing padding (page background) is
- * not somewhere to scroll to, so this is the real document height rounded to a cell multiple rather
- * than `CoveredHeight`. Only when truncated does it cap at the bottom of what was captured (there
- * is nowhere to go in a region never shot). Confusing the two would either allow scrolling one unit
- * into the background padding or promote a generation with zero visible tiles and show a blank
- * screen — which is why they carry different brands.
+ * not scrollable. Keeping its height distinct from `CoveredHeightPx` prevents scrolling into the
+ * padding or promoting a generation with no visible tile.
  */
-export type ContentHeight = number & Brand<"contentHeight">;
+export type ContentHeightPx = number & Brand<"contentHeight">;
 
-/** Effective document height when there is no document yet. 0 is a multiple of every alignment unit. */
-export const NO_CONTENT = 0 as ContentHeight;
+export const NO_CONTENT_HEIGHT = 0 as ContentHeightPx;
 
-const tilePx = (n: number): TilePx => n as TilePx;
-const covered = (n: number): CoveredHeight => n as CoveredHeight;
-const contentHeight = (n: number): ContentHeight => n as ContentHeight;
-const cellPx = (n: number): CellPx => n as CellPx;
-const scrollPxOf = (n: number): ScrollPx => n as ScrollPx;
+const asTileAlignedPx = (n: number): TileAlignedPx => n as TileAlignedPx;
+const asCoveredHeightPx = (n: number): CoveredHeightPx => n as CoveredHeightPx;
+const asContentHeightPx = (n: number): ContentHeightPx => n as ContentHeightPx;
+const asCellAlignedPx = (n: number): CellAlignedPx => n as CellAlignedPx;
+const asScrollAlignedPx = (n: number): ScrollAlignedPx => n as ScrollAlignedPx;
 
 /**
- * Tile cap per generation (§4.4); anything beyond it is not captured.
- * Now that a tile is one screenful tall (§4.3) the count roughly means "how many screens are
- * reachable", and a generation's capture count tops out at 128 too. Geometries where one screen
- * exceeds MAX_TILE_PX get tiles shorter than a screen, so their reach is smaller (about 85 screens
- * at rows=200, cellHpx=31). It always stays below ID_STRIDE, which is what guarantees imageId never
- * collides with the next generation for any geometry.
+ * This bounds capture cost and stays below IMAGE_ID_GENERATION_STRIDE so adjacent generations
+ * cannot collide. It does not guarantee 128 reachable screens when MAX_TILE_PX shortens each tile.
  */
 const MAX_TILES = 128;
 
-/** Rows in the content area (the last row is the status bar — §4.5). Never negative. */
 export function contentRows(rows: number): number {
   return Math.max(0, rows - 1);
 }
 
 /**
- * CSS layout ratio (§4.3). `cssWidth = screenWidthPx / CSS_SCALE` fixes the font size and reflow.
+ * CSS layout ratio. `viewportWidthCssPx = screenWidthPx / CSS_SCALE` fixes the font size and reflow.
  * Aligning tile boundaries to this multiple in physical px keeps the CSS-px clip an integer and
  * avoids CDP's rounding. **This is not the screenshot's deviceScaleFactor** (which diverges when
- * §4.8 downscales).
+ * the render scale downscales).
  */
 export const CSS_SCALE = 2;
 
-/**
- * Screen px → image px (§4.8). The identity at 1:1 (renderScale = CSS_SCALE).
- *
- * Callers align boundaries to scrollUnitPx / tileAlign, so srcY and the srcH of every intermediate
- * placement always map to integers. Rounding only touches **the height of the placement at the
- * bottom of the viewport**, which leaves half a px over when contentRows and the cell height are
- * both odd. There is no placement below it, so it never shows as a seam, but **that placement's
- * vertical magnification drifts from 2** (the error is inversely proportional to srcH, up to about
- * 3% when the bottom row is a single line). Making this exact would mean rounding the visible row
- * count down to the unit, which permanently wastes the bottom row, so the rounding is accepted.
- */
+/** Rounding only affects the bottom placement, where a half-pixel overhang cannot form a seam. */
 export function toImagePx(screenPx: number, renderScale: number): number {
   return Math.round((screenPx * renderScale) / CSS_SCALE);
 }
 
-/**
- * Unit for scroll and placement boundaries (physical px, §4.8): the smallest cell multiple that
- * maps to an integer number of image px. One cell at 1:1. When downscaling with an odd cell height
- * a single cell leaves half a px over, so it falls back to two cells (tileAlign maps to an integer
- * regardless of renderScale, making it an always-safe fallback).
- */
+/** Odd-height downscaled cells require a two-cell scroll unit. */
 export function scrollUnitPx(cellHpx: number, renderScale: number): number {
   return (cellHpx * renderScale) % CSS_SCALE === 0 ? cellHpx : tileAlign(cellHpx);
 }
 
-/**
- * Tile boundary alignment unit (physical px): the smallest unit that is both a multiple of the cell
- * height (so placement rows are integers) and of the dsf (so the screenshot clip is integer CSS px).
- */
 function tileAlign(cellHpx: number): number {
   return cellHpx * CSS_SCALE;
 }
 
 /**
- * Sanity cap on tile height (physical px). Both rows and cellHpx come from the terminal and the
- * environment; cellHpx is bounded by MAX_CELL_PX but rows is not. This keeps a pathological
- * combination from requesting an enormous screenshot (it is not a kitty-side constraint).
+ * Terminal rows are unbounded, so cap screenshot requests independently of kitty's limits.
  */
 const MAX_TILE_PX = 4096;
 
-/**
- * Tile height (§4.3): the smallest tileAlign multiple that covers one screenful
- * (contentRows × cellHpx). Rounding up is what makes the viewport fit inside exactly one tile at
- * scrollPx=0, so nothing more than what is shown gets captured first.
- */
-export function tileHeightPx(cellHpx: number, contentRows: number): TilePx {
+export function tileHeightPx(cellHpx: number, contentRows: number): TileAlignedPx {
   const unit = tileAlign(cellHpx);
   const capped = Math.floor(MAX_TILE_PX / unit) * unit;
   const screenful = Math.ceil((Math.max(0, contentRows) * cellHpx) / unit) * unit;
-  // contentRows=0 (rows=1) makes screenful=0. computeTiles bails out before that, but §4.8's
-  // resolution check divides by the tile height and would break on 0, so return at least one unit
-  return tilePx(Math.max(unit, Math.min(screenful, capped)));
+  return asTileAlignedPx(Math.max(unit, Math.min(screenful, capped)));
 }
 
 export interface Tile {
-  /** Offset of the tile's top within the document. */
-  y: TilePx;
-  height: TilePx;
+  topPx: TileAlignedPx;
+  heightPx: TileAlignedPx;
 }
 
 export interface TileLayout {
   tiles: Tile[];
-  /** True when MAX_TILES cut the document short (drives §4.4's "truncated" indicator). */
   truncated: boolean;
-  contentHpx: ContentHeight;
+  contentHeightPx: ContentHeightPx;
 }
 
-/**
- * Pad the full document height to a cell multiple and split it into tiles.
- * The tail becomes a cell multiple too, so every interval the visibility math touches is cell-aligned.
- */
-export function computeTiles(docHpx: number, cellHpx: number, contentRows: number): TileLayout {
-  // With no content area (rows=1, all status bar) there is nowhere to place a tile, and a capture
-  // would never be displayed, so take none
-  if (contentRows <= 0) return { tiles: [], truncated: false, contentHpx: NO_CONTENT };
+export function computeTiles(documentHeightPx: number, cellHpx: number, contentRows: number): TileLayout {
+  if (contentRows <= 0) {
+    return { tiles: [], truncated: false, contentHeightPx: NO_CONTENT_HEIGHT };
+  }
   const th = tileHeightPx(cellHpx, contentRows);
   const unit = tileAlign(cellHpx);
-  const paddedH = Math.ceil(Math.max(0, docHpx) / unit) * unit;
+  const paddedH = Math.ceil(Math.max(0, documentHeightPx) / unit) * unit;
   const tiles: Tile[] = [];
   let y = 0;
   while (y < paddedH && tiles.length < MAX_TILES) {
-    // paddedH and th are both multiples of unit, so y / height stay unit-aligned including the tail
     const height = Math.min(th, paddedH - y);
-    tiles.push({ y: tilePx(y), height: tilePx(height) });
+    tiles.push({ topPx: asTileAlignedPx(y), heightPx: asTileAlignedPx(height) });
     y += height;
   }
-  const cellPadded = Math.ceil(Math.max(0, docHpx) / cellHpx) * cellHpx;
+  const cellPadded = Math.ceil(Math.max(0, documentHeightPx) / cellHpx) * cellHpx;
   return {
     tiles,
     truncated: y < paddedH,
-    contentHpx: contentHeight(Math.min(cellPadded, coveredHeight(tiles))),
+    contentHeightPx: asContentHeightPx(Math.min(cellPadded, coveredHeightPx(tiles))),
   };
 }
 
-export function coveredHeight(tiles: Tile[]): CoveredHeight {
+export function coveredHeightPx(tiles: Tile[]): CoveredHeightPx {
   const last = tiles[tiles.length - 1];
-  return covered(last ? last.y + last.height : 0);
+  return asCoveredHeightPx(last ? last.topPx + last.heightPx : 0);
 }
 
-/**
- * Maximum scrollPx for a content area of rows-1 lines.
- * It **rounds up** to the scroll unit — rounding down would put the last unit of real content out of
- * reach. Whatever the rounding adds lands on the document's trailing tile padding (background
- * colour) or gets trimmed by the visibility math. At 1:1 both contentHpx and contentRows*cellHpx are
- * cell multiples, so the rounding is a no-op.
- */
+/** Round up to a scroll unit so the document tail remains reachable. */
 export function maxScrollPx(
-  contentHpx: ContentHeight,
+  contentHeightPx: ContentHeightPx,
   contentRows: number,
   cellHpx: number,
   renderScale: number,
-): ScrollPx {
+): ScrollAlignedPx {
   const unit = scrollUnitPx(cellHpx, renderScale);
-  const raw = Math.ceil(Math.max(0, contentHpx - contentRows * cellHpx) / unit) * unit;
-  // If the rounding pushed past the end of the document, the viewport would overlap no tile at all
-  // and not a single body image would be placed (leaving only a status bar reading 100%). Cap at the
-  // largest unit multiple whose top is still inside the document
-  const inside = Math.max(0, Math.ceil(contentHpx / unit) * unit - unit);
-  return scrollPxOf(Math.min(raw, inside));
+  const raw = Math.ceil(Math.max(0, contentHeightPx - contentRows * cellHpx) / unit) * unit;
+  // Keep the viewport over the document so at least one body image is placed.
+  const inside = Math.max(0, Math.ceil(contentHeightPx / unit) * unit - unit);
+  return asScrollAlignedPx(Math.min(raw, inside));
 }
 
-/** Snap scrollPx to the scroll unit and clamp it to [0, maxScrollPx] (§4.5; also used to carry the position across generations). */
 export function clampScroll(
   scrollPx: number,
-  contentHpx: ContentHeight,
+  contentHeightPx: ContentHeightPx,
   contentRows: number,
   cellHpx: number,
   renderScale: number,
-): ScrollPx {
+): ScrollAlignedPx {
   const unit = scrollUnitPx(cellHpx, renderScale);
   const snapped = Math.round(scrollPx / unit) * unit;
-  return scrollPxOf(
-    Math.max(0, Math.min(snapped, maxScrollPx(contentHpx, contentRows, cellHpx, renderScale))),
+  return asScrollAlignedPx(
+    Math.max(
+      0,
+      Math.min(snapped, maxScrollPx(contentHeightPx, contentRows, cellHpx, renderScale)),
+    ),
   );
 }
 
-// srcY / srcH are **screen px**. Turning them into kitty's source rect (image px) goes through
-// toImagePx (§4.8).
-//
-// The type stops at CellPx rather than ScrollPx: viewBottom = scrollPx + contentRows×cellHpx is not
-// necessarily scroll-unit aligned, so srcH is only guaranteed to be a cell multiple. srcY happens to
-// be a unit multiple (a difference of two unit-aligned values), but the two Placement fields keep
-// the same type.
 export interface Placement {
   tileIndex: number;
-  /** Top offset within the tile. */
-  srcY: CellPx;
-  /** Height of the slice. */
-  srcH: CellPx;
-  /** Row of the content area to place it on (0-based). */
-  row: number;
-  /** Rows occupied (= srcH / cellHpx). */
-  rows: number;
+  sourceTopPx: CellAlignedPx;
+  sourceHeightPx: CellAlignedPx;
+  destinationRow: number;
+  destinationRows: number;
 }
 
-/**
- * Find the tiles visible at the current scroll position and their source rects (pure).
- * The overlap between the viewport and a tile is a single interval, so each tile yields at most one
- * placement. Across a tile boundary the two adjacent tiles each yield one, placed back to back.
- */
 export function visibleTiles(
-  scrollPx: ScrollPx,
+  scrollPx: ScrollAlignedPx,
   contentRows: number,
   cellHpx: number,
   tiles: Tile[],
@@ -262,34 +168,32 @@ export function visibleTiles(
   const placements: Placement[] = [];
   for (let i = 0; i < tiles.length; i++) {
     const tile = tiles[i]!;
-    const overlapTop = Math.max(viewTop, tile.y);
-    const overlapBottom = Math.min(viewBottom, tile.y + tile.height);
+    const overlapTop = Math.max(viewTop, tile.topPx);
+    const overlapBottom = Math.min(viewBottom, tile.topPx + tile.heightPx);
     if (overlapBottom <= overlapTop) continue;
-    // viewTop, tile.y, and tile.height are all cell multiples, so the ends of the overlap are cell-aligned
     placements.push({
       tileIndex: i,
-      srcY: cellPx(overlapTop - tile.y),
-      srcH: cellPx(overlapBottom - overlapTop),
-      row: (overlapTop - viewTop) / cellHpx,
-      rows: (overlapBottom - overlapTop) / cellHpx,
+      sourceTopPx: asCellAlignedPx(overlapTop - tile.topPx),
+      sourceHeightPx: asCellAlignedPx(overlapBottom - overlapTop),
+      destinationRow: (overlapTop - viewTop) / cellHpx,
+      destinationRows: (overlapBottom - overlapTop) / cellHpx,
     });
   }
   return placements;
 }
 
-/**
- * Capture order by proximity to the viewport (for §4.1's backfill): visible tiles, then nearby, then
- * far. The scheduler uses it to pick "the next one".
- */
 export function backfillOrder(
-  scrollPx: ScrollPx,
+  scrollPx: ScrollAlignedPx,
   contentRows: number,
   cellHpx: number,
   tiles: Tile[],
 ): number[] {
   const center = scrollPx + (contentRows * cellHpx) / 2;
   return tiles
-    .map((t, index) => ({ index, dist: Math.abs(t.y + t.height / 2 - center) }))
+    .map((tile, index) => ({
+      index,
+      dist: Math.abs(tile.topPx + tile.heightPx / 2 - center),
+    }))
     .sort((a, b) => a.dist - b.dist || a.index - b.index)
     .map((t) => t.index);
 }

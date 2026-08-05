@@ -40,24 +40,22 @@ describe("parseCellSize", () => {
   });
 });
 
-// winsize.c is reached over FFI, so a missing file, a mismatched symbol name, a wrong request
-// constant, and swapped field order all fail without throwing: the catch turns them into null (a
-// silent loss of the feature). Open a PTY with known dimensions and drive the real queryWinsizeCell
-// through its success path so those failures are detectable.
+// Exercise the real FFI path so wiring failures do not silently become null.
 describe("winsizeCell", () => {
   test.skipIf(process.platform !== "darwin")("derives the cell px from a PTY's dimensions, and a non-TTY fd yields null", () => {
     const pty = cc({
       source: fileURLToPath(new URL("./winsize.test.c", import.meta.url)),
       symbols: { mdpx_test_pty: { args: ["u16", "u16", "u16", "u16", "ptr"], returns: "int" } },
     }).symbols;
-    const fds = new Int32Array(2); // [master, slave]
-    expect(pty.mdpx_test_pty(40, 100, 1400, 1240, ptr(fds))).toBe(0);
+    const masterAndSlaveFds = new Int32Array(2);
+    expect(pty.mdpx_test_pty(40, 100, 1400, 1240, ptr(masterAndSlaveFds))).toBe(0);
+    const [masterFd, slaveFd] = masterAndSlaveFds;
     const file = openSync(fileURLToPath(import.meta.url), "r");
     try {
-      expect(winsizeCell(fds[1]!)).toEqual({ cellHpx: 31, cellWpx: 14 });
+      expect(winsizeCell(slaveFd!)).toEqual({ cellHpx: 31, cellWpx: 14 });
       expect(winsizeCell(file)).toBeNull();
     } finally {
-      for (const fd of [fds[1]!, fds[0]!, file]) closeSync(fd);
+      for (const fd of [slaveFd!, masterFd!, file]) closeSync(fd);
     }
   });
 
@@ -152,7 +150,7 @@ function keyRecorder(): { term: Term; keys: Key[]; feed(s: string): void } {
 const lines = (n: number): Key => ({ type: "scroll", delta: { kind: "lines", n } });
 const halfpage = (dir: 1 | -1): Key => ({ type: "scroll", delta: { kind: "halfpage", dir } });
 
-describe("Term key input (§4.5's eight keys)", () => {
+describe("Term key input", () => {
   test("q/ctrl-c/j/k/space/ctrl-d/ctrl-u/g/G", () => {
     const r = keyRecorder();
     r.feed("qjk \x04\x15gG\x03");
@@ -190,9 +188,6 @@ describe("Term key input (§4.5's eight keys)", () => {
   });
 
   test("a Ctrl-C inside an unfinished CSI is not eaten and can still quit", () => {
-    // A byte after ESC [ that is neither a parameter nor a final byte (a C0) makes it a malformed
-    // sequence. An implementation that skipped to the final byte would swallow the Ctrl-C and leave
-    // no way to quit from the keyboard
     const r = keyRecorder();
     r.feed(`${ESC}[3\x03`);
     expect(r.keys).toEqual([{ type: "quit" }]);
@@ -214,9 +209,9 @@ describe("Term key input (§4.5's eight keys)", () => {
 describe("Term parser resynchronization (unterminated sequences)", () => {
   test("an APC whose terminator never comes is dropped past the size limit, letting later keys through", () => {
     const r = keyRecorder();
-    r.feed(`${ESC}_Gstuck`); // neither ST nor BEL arrives
-    expect(r.keys).toEqual([]); // up to here it waits for more
-    r.feed("x".repeat(300)); // past the 256B limit → discard and resynchronize
+    r.feed(`${ESC}_Gstuck`);
+    expect(r.keys).toEqual([]);
+    r.feed("x".repeat(300));
     r.feed("q");
     expect(r.keys).toEqual([{ type: "quit" }]);
   });
@@ -224,9 +219,9 @@ describe("Term parser resynchronization (unterminated sequences)", () => {
   test("an APC whose terminator never comes is dropped on time once input goes quiet", async () => {
     const r = keyRecorder();
     r.feed(`${ESC}_Gstuck`);
-    r.feed("q"); // swallowed as the body of the unterminated sequence
+    r.feed("q");
     expect(r.keys).toEqual([]);
-    await Bun.sleep(300); // RESYNC_MS elapses
+    await Bun.sleep(300);
     r.feed("q");
     expect(r.keys).toEqual([{ type: "quit" }]);
   });
@@ -239,25 +234,22 @@ describe("Term parser resynchronization (unterminated sequences)", () => {
   });
 });
 
-// §4.8's wiring. pickRenderScale and the frame's source rect conversion are verified separately, so
-// this only checks that the one production path building a Geometry connects them correctly.
-describe("Term.geometry (§4.8's wiring)", () => {
+describe("Term.geometry wiring", () => {
   const cell = { cellHpx: 31, cellWpx: 14 };
 
   test("an unrelayed terminal stays at 1:1 with imgWidthPx matching the screen width", () => {
     const g = new Term().geometry(cell, false);
     expect(g.renderScale).toBe(2);
     expect(g.relayOverflow).toBe(false);
-    expect(g.imgWidthPx).toBe(g.cols * cell.cellWpx); // it may be 1px narrower than the real image, but never scaled
+    expect(g.imgWidthPx).toBe(g.cols * cell.cellWpx);
   });
 
   test("a width that does not fit a herdr pane downscales, halving imgWidthPx too", () => {
     const full = new Term().geometry(cell, false);
     const relayed = new Term().geometry(cell, true);
-    // The verdict depends on the terminal width, so only check the relationships when it did downscale
     if (relayed.renderScale === 2) return;
     expect(relayed.renderScale).toBe(1);
     expect(relayed.imgWidthPx).toBe(Math.round((full.cols * cell.cellWpx) / 2));
-    expect(relayed.cssWidth).toBe(full.cssWidth); // the CSS layout is unchanged (reflow is preserved)
+    expect(relayed.viewportWidthCssPx).toBe(full.viewportWidthCssPx);
   });
 });

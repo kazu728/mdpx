@@ -1,9 +1,3 @@
-// Terminal control (§4.5–4.7): raw mode, alt-screen, the CSI 16t query, key input, screen modes.
-//
-// stdin carries 16t replies interleaved with key input, so this owns a small parser that cuts out
-// escape sequences. Composing one frame's escape string lives in frame.ts (a pure function); this
-// module only writes.
-
 import { cc, ptr } from "bun:ffi";
 import { fileURLToPath } from "node:url";
 import { deleteAll } from "./kitty.ts";
@@ -16,7 +10,7 @@ const ALT_ENTER = `${ESC}[?1049h`;
 const ALT_EXIT = `${ESC}[?1049l`;
 const HIDE_CURSOR = `${ESC}[?25l`;
 const SHOW_CURSOR = `${ESC}[?25h`;
-// The canonical note on the CSI 2J trap (paired with SPEC §2's table of established facts). Ghostty
+// The CSI 2J trap: Ghostty
 // 1.3.1 handles CSI 2J as eraseDisplay(.complete) and wipes every stored kitty image at once (the
 // cause of "ENOENT: image not found"). It is only usable on entering alt-screen, before anything has
 // been transferred; normal frames after a transfer erase with CSI 0J (frame.ts).
@@ -29,19 +23,42 @@ export interface CellSize {
   cellWpx: number;
 }
 
-/** Sane upper bound on cell px. Keeps a mis-parsed huge value from breaking the geometry math (zero tile height, infinite loop). */
 const MAX_CELL_PX = 1000;
 
-/** Image id for the kitty graphics capability query (§4.7). A fixed value that cannot collide with the real gen*1024+tile (≥1024). */
+// The probe ID is below every generation-scoped image ID, so it cannot collide with a real tile.
 const GFX_PROBE_ID = 31;
 
+const KEY_Q = "q".charCodeAt(0);
+const KEY_J = "j".charCodeAt(0);
+const KEY_K = "k".charCodeAt(0);
+const KEY_G = "g".charCodeAt(0);
+const KEY_SHIFT_G = "G".charCodeAt(0);
+const KEY_SPACE = " ".charCodeAt(0);
+const KEY_CTRL_C = 0x03;
+const KEY_CTRL_D = 0x04;
+const KEY_CTRL_U = 0x15;
+const CURSOR_UP_FINAL = 0x41;
+const CURSOR_DOWN_FINAL = 0x42;
+const OSC_INTRODUCER = 0x5d;
+const DCS_INTRODUCER = 0x50;
+const APC_INTRODUCER = 0x5f;
+const PM_INTRODUCER = 0x5e;
+const SOS_INTRODUCER = 0x58;
+const KITTY_GRAPHICS_MARKER = 0x47;
+const CELL_SIZE_REPORT = 6;
+const ESC_BYTE = 0x1b;
+const BEL_BYTE = 0x07;
+const ST_FINAL_BYTE = 0x5c;
+const CSI_INTRODUCER = 0x5b;
+const SS3_INTRODUCER = 0x4f;
+
 // Even on terminals that never answer 16t, the cell size can be read via TIOCGWINSZ as long as the
-// PTY carries the window's pixel dimensions (ws_xpixel/ypixel) — §4.7's 16t fallback (herdr does not
+// PTY carries the window's pixel dimensions (ws_xpixel/ypixel) — the 16t fallback (herdr does not
 // relay 16t but does carry these).
 // ioctl is variadic and cannot be called from bun:ffi directly (see the note in winsize.c), so a
 // fixed-arity C wrapper is compiled with the TinyCC bundled with Bun and called instead. The compile
 // happens once; on failure it stays null and the caller treats the cell size as unavailable (macOS
-// only — SPEC §0).
+// only).
 function openWinsize() {
   if (process.platform !== "darwin") return null;
   try {
@@ -57,42 +74,29 @@ function openWinsize() {
 }
 let winsizeSyms: ReturnType<typeof openWinsize> | undefined;
 
-/** Whether a cell px value is usable by the geometry math. Every path — 16t reply, TIOCGWINSZ, MDPX_CELL — goes through this. */
-function withinCellBounds(n: number): boolean {
+function validCellDimensionPx(n: number): boolean {
   return Number.isFinite(n) && n > 0 && n <= MAX_CELL_PX;
 }
 
-/**
- * Parse MDPX_CELL=<heightPx>,<widthPx> (an `x` separator also works). The escape hatch for setting
- * the cell size by hand on terminals that never answer CSI 16t (some multiplexers, which do not
- * report pixels either). Malformed, out of range, or unset all yield null.
- */
 export function parseCellSize(value: string | undefined): CellSize | null {
   const m = value?.trim().match(/^(\d+)[,x](\d+)$/);
   if (!m) return null;
   const cellHpx = Number(m[1]);
   const cellWpx = Number(m[2]);
-  return withinCellBounds(cellHpx) && withinCellBounds(cellWpx) ? { cellHpx, cellWpx } : null;
+  return validCellDimensionPx(cellHpx) && validCellDimensionPx(cellWpx)
+    ? { cellHpx, cellWpx }
+    : null;
 }
 
-/**
- * Read the cell px from TIOCGWINSZ on the terminal behind fd (§4.7's 16t fallback).
- * A terminal without pixel dimensions, a non-TTY fd, an unsupported OS, and a failed FFI init all
- * yield null.
- */
 export function winsizeCell(fd: number): CellSize | null {
   if (winsizeSyms === undefined) winsizeSyms = openWinsize();
   if (!winsizeSyms) return null;
-  const ws = new Uint16Array(4); // ws_row, ws_col, ws_xpixel, ws_ypixel
+  const ws = new Uint16Array(4);
   if (winsizeSyms.mdpx_winsize(fd, ptr(ws)) !== 0) return null;
-  return cellFromWinsize(ws[0]!, ws[1]!, ws[2]!, ws[3]!);
+  const [rows, cols, widthPx, heightPx] = ws;
+  return cellFromWinsize(rows!, cols!, widthPx!, heightPx!);
 }
 
-/**
- * Derive the cell px from TIOCGWINSZ's rows/cols and xpixel/ypixel (the fallback for terminals
- * without 16t). Terminals with no pixel dimensions (they report 0) and garbled out-of-range values
- * yield null.
- */
 export function cellFromWinsize(
   rows: number,
   cols: number,
@@ -102,12 +106,13 @@ export function cellFromWinsize(
   if (rows <= 0 || cols <= 0 || xpixel <= 0 || ypixel <= 0) return null;
   const cellHpx = Math.round(ypixel / rows);
   const cellWpx = Math.round(xpixel / cols);
-  return withinCellBounds(cellHpx) && withinCellBounds(cellWpx) ? { cellHpx, cellWpx } : null;
+  return validCellDimensionPx(cellHpx) && validCellDimensionPx(cellWpx)
+    ? { cellHpx, cellWpx }
+    : null;
 }
 
 /**
- * Limits on how long an unfinished sequence may sit around (bytes / ms). Waiting forever on an
- * OSC/DCS/APC whose ST/BEL never comes (pasting text that contains an ESC, say) would pile every
+ * Waiting forever on an OSC/DCS/APC whose ST/BEL never comes would pile every
  * later input into the buffer and kill key input permanently — in raw mode even Ctrl-C is just byte
  * 0x03, so the parser swallows it and nothing but a kill from another terminal can exit.
  * Terminal replies (DA, 16t, kitty graphics) are all small and immediate, so anything lingering past
@@ -116,16 +121,14 @@ export function cellFromWinsize(
 const MAX_PENDING_BYTES = 256;
 const RESYNC_MS = 200;
 
-/** Index just past an ST (ESC \) or BEL. -1 when the buffer holds no terminator yet (wait for more). */
 function stringTerminatorEnd(buf: Buffer, from: number): number {
   for (let j = from; j < buf.length; j++) {
-    if (buf[j] === 0x07) return j + 1;
-    if (buf[j] === 0x1b && buf[j + 1] === 0x5c) return j + 2;
+    if (buf[j] === BEL_BYTE) return j + 1;
+    if (buf[j] === ESC_BYTE && buf[j + 1] === ST_FINAL_BYTE) return j + 2;
   }
   return -1;
 }
 
-/** Whether this is a CSI / SS3 final byte (0x40–0x7e). */
 function isFinalByte(b: number): boolean {
   return b >= 0x40 && b <= 0x7e;
 }
@@ -138,8 +141,8 @@ export class Term {
   private keyHandler: ((k: Key) => void) | null = null;
   private resizeHandler: (() => void) | null = null;
   private reportHandler: ((params: number[]) => void) | null = null;
-  private graphicsHandler: (() => void) | null = null; // kitty graphics reply (ESC _ G …)
-  private daHandler: (() => void) | null = null; // Primary DA reply (sync marker for the graphics query)
+  private kittyGraphicsReplyHandler: (() => void) | null = null;
+  private primaryDaReplyHandler: (() => void) | null = null;
   private readonly onData = (chunk: Buffer) => this.feed(chunk);
   private readonly onResize = () => this.resizeHandler?.();
 
@@ -151,7 +154,6 @@ export class Term {
     this.out.write(data);
   }
 
-  /** Enter raw mode and start consuming key input. Assumes stdin is a TTY (§4.7's gate). */
   enableInput(): void {
     process.stdin.setRawMode(true);
     this.raw = true;
@@ -168,23 +170,22 @@ export class Term {
     this.resizeHandler = cb;
   }
 
-  /** Query the cell px with CSI 16t. Null if no reply arrives within the timeout (§4.7's unsupported verdict). */
   queryCellSize(timeoutMs: number): Promise<CellSize | null> {
     return new Promise((resolve) => {
       const finish = (v: CellSize | null) => {
-        // Remove only our own handler (a concurrent query from a rapid resize must not be caught up in it)
         if (this.reportHandler === handler) this.reportHandler = null;
         clearTimeout(timer);
         resolve(v);
       };
-      // ESC[6;<height>;<width>t → cellHpx, cellWpx
       const handler = (params: number[]) => {
-        if (params[0] === 6 && params.length >= 3) {
+        if (params[0] === CELL_SIZE_REPORT && params.length >= 3) {
           const cellHpx = params[1]!;
           const cellWpx = params[2]!;
-          // A garbled huge cell (cellHpx > 2048, say) breaks capturing via a zero tile height. Treat
-          // out-of-range as no reply.
-          finish(withinCellBounds(cellHpx) && withinCellBounds(cellWpx) ? { cellHpx, cellWpx } : null);
+          finish(
+            validCellDimensionPx(cellHpx) && validCellDimensionPx(cellWpx)
+              ? { cellHpx, cellWpx }
+              : null,
+          );
         }
       };
       const timer = setTimeout(() => finish(null), timeoutMs);
@@ -194,7 +195,7 @@ export class Term {
   }
 
   /**
-   * Query kitty graphics support (§4.7's capability gate). Sends a 1x1 graphics query (`a=q` neither
+   * Query kitty graphics support. Sends a 1x1 graphics query (`a=q` neither
    * stores nor displays anything; it only reports support) followed immediately by a Primary DA
    * (ESC[c) as a sync marker. A supporting terminal returns the `_G` reply before the DA; a
    * non-supporting one ignores the unknown APC and returns only the DA. If neither arrives, the
@@ -206,26 +207,20 @@ export class Term {
       const finish = (v: boolean) => {
         if (settled) return;
         settled = true;
-        // Remove only our own handlers (a concurrent query must not be caught up in it)
-        if (this.graphicsHandler === onGraphics) this.graphicsHandler = null;
-        if (this.daHandler === onDa) this.daHandler = null;
+        if (this.kittyGraphicsReplyHandler === onGraphics) this.kittyGraphicsReplyHandler = null;
+        if (this.primaryDaReplyHandler === onDa) this.primaryDaReplyHandler = null;
         clearTimeout(timer);
         resolve(v);
       };
       const onGraphics = () => finish(true);
       const onDa = () => finish(false);
       const timer = setTimeout(() => finish(false), timeoutMs);
-      this.graphicsHandler = onGraphics;
-      this.daHandler = onDa;
+      this.kittyGraphicsReplyHandler = onGraphics;
+      this.primaryDaReplyHandler = onDa;
       this.write(`${ESC}_Gi=${GFX_PROBE_ID},s=1,v=1,a=q,t=d,f=24;AAAA${ESC}\\${ESC}[c`);
     });
   }
 
-  /**
-   * Compute the output terminal's cell px from TIOCGWINSZ (§4.7's 16t fallback).
-   * Works unconfigured even on terminals that never answer 16t, as long as the PTY carries the
-   * window's pixel dimensions. A synchronous ioctl.
-   */
   queryWinsizeCell(): CellSize | null {
     return winsizeCell(process.stdout.fd);
   }
@@ -236,14 +231,14 @@ export class Term {
     const buf = this.buffer;
     while (i < buf.length) {
       const b = buf[i]!;
-      if (b !== 0x1b) {
+      if (b !== ESC_BYTE) {
         this.handleByte(b);
         i += 1;
         continue;
       }
-      if (i + 1 >= buf.length) break; // incomplete; wait for the next chunk
+      if (i + 1 >= buf.length) break;
       const kind = buf[i + 1]!;
-      if (kind === 0x5b) {
+      if (kind === CSI_INTRODUCER) {
         // CSI: parameter and intermediate bytes (0x20–0x3f) followed by a final byte (0x40–0x7e).
         // Anything with an out-of-range byte (a C0 control) is a malformed sequence, so consume only
         // the ESC and re-read. Skipping every byte to the terminator would eat a Ctrl-C (0x03) in the
@@ -257,8 +252,7 @@ export class Term {
         }
         this.handleCsi(buf.toString("latin1", i + 2, j), buf[j]!);
         i = j + 1;
-      } else if (kind === 0x4f) {
-        // SS3 (ESC O <final>): application cursor keys. Only the arrows are picked up.
+      } else if (kind === SS3_INTRODUCER) {
         if (i + 2 >= buf.length) break;
         if (!isFinalByte(buf[i + 2]!)) {
           i += 1;
@@ -267,20 +261,20 @@ export class Term {
         this.handleSs3(buf[i + 2]!);
         i += 3;
       } else if (
-        kind === 0x5d || // OSC
-        kind === 0x50 || // DCS
-        kind === 0x5f || // APC (where the kitty graphics reply arrives)
-        kind === 0x5e || // PM
-        kind === 0x58 // SOS
+        kind === OSC_INTRODUCER ||
+        kind === DCS_INTRODUCER ||
+        kind === APC_INTRODUCER ||
+        kind === PM_INTRODUCER ||
+        kind === SOS_INTRODUCER
       ) {
         // String-type sequences are read whole, up to an ST (ESC \) or BEL. Dropping only the single
         // ESC byte would let the payload misfire as key input. The kitty graphics reply (ESC _ G …)
-        // is used solely for §4.7's capability query; everything else (transfer error replies and so
-        // on) is discarded — transfers are fire-and-forget with no success tracking (§4.4, and the
-        // note in main.ts runShoot).
+        // is used solely for the capability query; other replies are discarded.
         const end = stringTerminatorEnd(buf, i + 2);
         if (end === -1) break;
-        if (kind === 0x5f && buf[i + 2] === 0x47) this.graphicsHandler?.(); // "_G" = graphics reply
+        if (kind === APC_INTRODUCER && buf[i + 2] === KITTY_GRAPHICS_MARKER) {
+          this.kittyGraphicsReplyHandler?.();
+        }
         i = end;
       } else {
         // A lone ESC (what follows is separate key input). Consume only the ESC so the next byte is
@@ -292,11 +286,6 @@ export class Term {
     this.scheduleResync();
   }
 
-  /**
-   * Drop a buffer left unfinished and resynchronize the parser (immediately past the size limit,
-   * otherwise after RESYNC_MS of silence). Keeps a sequence whose terminator never arrives from
-   * blocking key input indefinitely.
-   */
   private scheduleResync(): void {
     if (this.resyncTimer) clearTimeout(this.resyncTimer);
     this.resyncTimer = null;
@@ -309,7 +298,7 @@ export class Term {
       this.resyncTimer = null;
       this.buffer = Buffer.alloc(0);
     }, RESYNC_MS);
-    this.resyncTimer.unref(); // a pending resync must not hold the process open
+    this.resyncTimer.unref();
   }
 
   private handleCsi(paramStr: string, final: number): void {
@@ -320,42 +309,43 @@ export class Term {
       return;
     }
     if (ch === "c") {
-      this.daHandler?.(); // Primary DA reply (sync marker for the graphics query — §4.7)
+      this.primaryDaReplyHandler?.();
       return;
     }
     if (ch === "A") this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } });
     else if (ch === "B") this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
   }
 
-  /** SS3 (ESC O <final>) arrows: ↑/↓ in application cursor key mode. */
   private handleSs3(final: number): void {
-    if (final === 0x41) this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } }); // ↑
-    else if (final === 0x42) this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } }); // ↓
+    if (final === CURSOR_UP_FINAL) this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } });
+    else if (final === CURSOR_DOWN_FINAL) {
+      this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
+    }
   }
 
   private handleByte(b: number): void {
     switch (b) {
-      case 0x71: // q
-      case 0x03: // ctrl-c
+      case KEY_Q:
+      case KEY_CTRL_C:
         this.emit({ type: "quit" });
         break;
-      case 0x6a: // j
+      case KEY_J:
         this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
         break;
-      case 0x6b: // k
+      case KEY_K:
         this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } });
         break;
-      case 0x20: // space
-      case 0x04: // ctrl-d
+      case KEY_SPACE:
+      case KEY_CTRL_D:
         this.emit({ type: "scroll", delta: { kind: "halfpage", dir: 1 } });
         break;
-      case 0x15: // ctrl-u
+      case KEY_CTRL_U:
         this.emit({ type: "scroll", delta: { kind: "halfpage", dir: -1 } });
         break;
-      case 0x67: // g
+      case KEY_G:
         this.emit({ type: "scroll", delta: { kind: "top" } });
         break;
-      case 0x47: // G
+      case KEY_SHIFT_G:
         this.emit({ type: "scroll", delta: { kind: "bottom" } });
         break;
     }
@@ -365,47 +355,44 @@ export class Term {
     this.keyHandler?.(k);
   }
 
-  /**
-   * Build a Geometry from the terminal size and the cell px. The image is laid out to exactly the
-   * terminal's cols columns. Inside a herdr pane, a geometry whose 1:1 capture would not fit the
-   * relay limit drops the capture resolution to half (§4.8).
-   */
   geometry(cell: CellSize, relayed: boolean = inHerdrPane()): Geometry {
     const cols = this.out.columns;
     const rows = this.out.rows;
     const screenWidthPx = cols * cell.cellWpx;
-    const cssWidth = Math.round(screenWidthPx / CSS_SCALE);
-    const viewportHpx = contentRows(rows) * cell.cellHpx;
-    const tileHpx = tileHeightPx(cell.cellHpx, contentRows(rows));
+    const viewportWidthCssPx = Math.round(screenWidthPx / CSS_SCALE);
+    const viewportHeightPx = contentRows(rows) * cell.cellHpx;
+    const tileHeightScreenPx = tileHeightPx(cell.cellHpx, contentRows(rows));
     const { renderScale, relayOverflow } = pickRenderScale({
-      cssWidth,
-      tileHpx,
-      viewportHpx,
+      viewportWidthCssPx,
+      tileHeightPx: tileHeightScreenPx,
+      viewportHeightPx,
       reducedScrollUnitPx: scrollUnitPx(cell.cellHpx, 1),
       fullScale: CSS_SCALE,
       relayed,
     });
-    // Image px corresponding to cols columns. At 1:1 the real image (cssWidth × 2) can be 1px wider,
-    // and that 1px is cropped — sharper than resampling the whole thing. When downscaled it matches
-    // the real image width exactly
+    // At 1:1 the real image can be 1 px wider than the terminal, and cropping that pixel is sharper
+    // than resampling the whole image.
     const imgWidthPx = toImagePx(screenWidthPx, renderScale);
     // The terminal holds images as decoded pixels, so the amount held follows the area, not the PNG size
-    const tileBytes = imgWidthPx * toImagePx(tileHpx, renderScale) * 4;
+    const tileBytes = imgWidthPx * toImagePx(tileHeightScreenPx, renderScale) * 4;
     return {
       rows,
       cols,
       cellHpx: cell.cellHpx,
       imgWidthPx,
-      cssWidth,
+      viewportWidthCssPx,
       renderScale,
       relayOverflow,
-      maxResident: maxResidentTiles(tileBytes, relayed, visibleTileCount(viewportHpx, tileHpx)),
+      maxResident: maxResidentTiles(
+        tileBytes,
+        relayed,
+        visibleTileCount(viewportHeightPx, tileHeightScreenPx),
+      ),
     };
   }
 
   enterAltScreen(): void {
     this.alt = true;
-    // Nothing has been transferred yet, so a full clear (CSI 2J) is safe here.
     this.write(ALT_ENTER + HIDE_CURSOR + CLEAR_SCREEN);
   }
 

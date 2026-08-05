@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { buildLineMap, countLines, lineAt, type Anchor } from "./linemap.ts";
+import { buildLineMap, countSourceLines, sourceLineAt, type Anchor } from "./linemap.ts";
 
-describe("countLines", () => {
-  // The same rule as nvim's line("$") (a trailing newline adds no line; empty still counts as 1)
+describe("countSourceLines", () => {
   const cases: [string, number][] = [
     ["", 1],
     ["\n", 1],
@@ -14,111 +13,110 @@ describe("countLines", () => {
   ];
   for (const [src, expected] of cases) {
     test(`${JSON.stringify(src)} → ${expected}`, () => {
-      expect(countLines(src)).toBe(expected);
+      expect(countSourceLines(src)).toBe(expected);
     });
   }
 });
 
 describe("buildLineMap", () => {
-  const build = (anchors: Anchor[], lineCount = 6, docCssH = 400) =>
-    buildLineMap(anchors, lineCount, docCssH).anchors;
+  const build = (anchors: Anchor[], sourceLineCount = 6, documentHeightCssPx = 400) =>
+    buildLineMap(anchors, sourceLineCount, documentHeightCssPx).anchors;
 
-  test("closed by the virtual anchors {1,0} at the head and {lineCount+1, docCssH} at the tail", () => {
-    expect(build([{ line: 3, top: 100 }])).toEqual([
-      { line: 1, top: 0 },
-      { line: 3, top: 100 },
-      { line: 7, top: 400 },
+  test("closed by the virtual anchors {1,0} at the head and {sourceLineCount+1, documentHeightCssPx} at the tail", () => {
+    expect(build([{ sourceLine: 3, topCssPx: 100 }])).toEqual([
+      { sourceLine: 1, topCssPx: 0 },
+      { sourceLine: 3, topCssPx: 100 },
+      { sourceLine: 7, topCssPx: 400 },
     ]);
   });
 
   test("holds up on the two ends alone when there is not a single anchor", () => {
     expect(build([])).toEqual([
-      { line: 1, top: 0 },
-      { line: 7, top: 400 },
+      { sourceLine: 1, topCssPx: 0 },
+      { sourceLine: 7, topCssPx: 400 },
     ]);
   });
 
   test("drops anchors whose line goes backwards (elements like footnotes, where document order diverges from source order)", () => {
     const out = build([
-      { line: 3, top: 100 },
-      { line: 2, top: 150 },
-      { line: 5, top: 200 },
+      { sourceLine: 3, topCssPx: 100 },
+      { sourceLine: 2, topCssPx: 150 },
+      { sourceLine: 5, topCssPx: 200 },
     ]);
-    expect(out.map((a) => a.line)).toEqual([1, 3, 5, 7]);
+    expect(out.map((anchor) => anchor.sourceLine)).toEqual([1, 3, 5, 7]);
   });
 
   test("drops duplicates pointing at the same line (a list_item and the paragraph inside it)", () => {
     const out = build([
-      { line: 3, top: 100 },
-      { line: 3, top: 110 },
-      { line: 4, top: 130 },
+      { sourceLine: 3, topCssPx: 100 },
+      { sourceLine: 3, topCssPx: 110 },
+      { sourceLine: 4, topCssPx: 130 },
     ]);
-    expect(out.map((a) => a.top)).toEqual([0, 100, 130, 400]);
+    expect(out.map((anchor) => anchor.topCssPx)).toEqual([0, 100, 130, 400]);
   });
 
   test("drops anchors whose top goes backwards", () => {
     const out = build([
-      { line: 3, top: 200 },
-      { line: 4, top: 150 },
-      { line: 5, top: 250 },
+      { sourceLine: 3, topCssPx: 200 },
+      { sourceLine: 4, topCssPx: 150 },
+      { sourceLine: 5, topCssPx: 250 },
     ]);
-    expect(out.map((a) => a.line)).toEqual([1, 3, 5, 7]);
+    expect(out.map((anchor) => anchor.sourceLine)).toEqual([1, 3, 5, 7]);
   });
 
-  test("drops anchors whose top exceeds docCssH", () => {
+  test("drops anchors whose top exceeds documentHeightCssPx", () => {
     const out = build([
-      { line: 3, top: 100 },
-      { line: 4, top: 500 },
+      { sourceLine: 3, topCssPx: 100 },
+      { sourceLine: 4, topCssPx: 500 },
     ]);
-    expect(out.map((a) => a.line)).toEqual([1, 3, 7]);
+    expect(out.map((anchor) => anchor.sourceLine)).toEqual([1, 3, 7]);
   });
 
   test("a head anchor (line 1, top 0) is dropped as a duplicate of the virtual one", () => {
     const out = build([
-      { line: 1, top: 0 },
-      { line: 3, top: 100 },
+      { sourceLine: 1, topCssPx: 0 },
+      { sourceLine: 3, topCssPx: 100 },
     ]);
-    expect(out.map((a) => a.line)).toEqual([1, 3, 7]);
+    expect(out.map((anchor) => anchor.sourceLine)).toEqual([1, 3, 7]);
   });
 
   test("drops NaN and Infinity", () => {
     const out = build([
-      { line: NaN, top: 50 },
-      { line: 3, top: Infinity },
-      { line: 4, top: 200 },
+      { sourceLine: NaN, topCssPx: 50 },
+      { sourceLine: 3, topCssPx: Infinity },
+      { sourceLine: 4, topCssPx: 200 },
     ]);
-    expect(out.map((a) => a.line)).toEqual([1, 4, 7]);
+    expect(out.map((anchor) => anchor.sourceLine)).toEqual([1, 4, 7]);
   });
 
-  test("no tail anchor is added when docCssH equals the last anchor (never creating a zero slope)", () => {
-    const out = buildLineMap([{ line: 3, top: 400 }], 6, 400).anchors;
+  test("no tail anchor is added when documentHeightCssPx equals the last anchor", () => {
+    const out = buildLineMap([{ sourceLine: 3, topCssPx: 400 }], 6, 400).anchors;
     expect(out).toEqual([
-      { line: 1, top: 0 },
-      { line: 3, top: 400 },
+      { sourceLine: 1, topCssPx: 0 },
+      { sourceLine: 3, topCssPx: 400 },
     ]);
   });
 
   test("both line and top come out strictly increasing", () => {
     const out = build([
-      { line: 5, top: 300 },
-      { line: 2, top: 50 },
-      { line: 5, top: 320 },
-      { line: 3, top: 100 },
-      { line: 9, top: 380 },
+      { sourceLine: 5, topCssPx: 300 },
+      { sourceLine: 2, topCssPx: 50 },
+      { sourceLine: 5, topCssPx: 320 },
+      { sourceLine: 3, topCssPx: 100 },
+      { sourceLine: 9, topCssPx: 380 },
     ]);
     for (let i = 1; i < out.length; i++) {
-      expect(out[i]!.line).toBeGreaterThan(out[i - 1]!.line);
-      expect(out[i]!.top).toBeGreaterThan(out[i - 1]!.top);
+      expect(out[i]!.sourceLine).toBeGreaterThan(out[i - 1]!.sourceLine);
+      expect(out[i]!.topCssPx).toBeGreaterThan(out[i - 1]!.topCssPx);
     }
   });
 });
 
-describe("lineAt", () => {
-  // Anchors: {1,0} {3,100} {5,300} {7,400} (lineCount = 6)
+describe("sourceLineAt", () => {
   const map = buildLineMap(
     [
-      { line: 3, top: 100 },
-      { line: 5, top: 300 },
+      { sourceLine: 3, topCssPx: 100 },
+      { sourceLine: 5, topCssPx: 300 },
     ],
     6,
     400,
@@ -131,66 +129,62 @@ describe("lineAt", () => {
     ["it keeps advancing through a long block", 200, 4],
     ["the next anchor position", 300, 5],
     ["partway through the final block", 350, 6],
-    ["the bottom of the document clamps to lineCount", 400, 6],
-    ["past the bottom is lineCount too", 10_000, 6],
+    ["the bottom of the document clamps to sourceLineCount", 400, 6],
+    ["past the bottom is sourceLineCount too", 10_000, 6],
     ["past the top is line 1", -50, 1],
   ];
-  for (const [name, cssY, expected] of cases) {
+  for (const [name, viewportTopCssPx, expected] of cases) {
     test(name, () => {
-      expect(lineAt(map, cssY, false)).toBe(expected);
+      expect(sourceLineAt(map, viewportTopCssPx, false)).toBe(expected);
     });
   }
 
-  test("atEnd gives the document's last line, not the interpolated value (`G` means \"end of the document\", not \"first line of the last screen\")", () => {
-    expect(lineAt(map, 0, true)).toBe(6);
-    expect(lineAt(map, 350, true)).toBe(6);
+  test("jumpToEnd gives the document's last line rather than the interpolated value", () => {
+    expect(sourceLineAt(map, 0, true)).toBe(6);
+    expect(sourceLineAt(map, 350, true)).toBe(6);
   });
 
-  test("clamps even when an anchor points past lineCount", () => {
-    const m = buildLineMap([{ line: 99, top: 100 }], 4, 400);
-    expect(lineAt(m, 200, false)).toBe(4);
+  test("clamps even when an anchor points past sourceLineCount", () => {
+    const m = buildLineMap([{ sourceLine: 99, topCssPx: 100 }], 4, 400);
+    expect(sourceLineAt(m, 200, false)).toBe(4);
   });
 
   test("returns a line across the whole range with only the two virtual anchors", () => {
     const m = buildLineMap([], 10, 200);
-    expect(lineAt(m, 0, false)).toBe(1);
-    expect(lineAt(m, 100, false)).toBe(6);
-    expect(lineAt(m, 200, false)).toBe(10);
+    expect(sourceLineAt(m, 0, false)).toBe(1);
+    expect(sourceLineAt(m, 100, false)).toBe(6);
+    expect(sourceLineAt(m, 200, false)).toBe(10);
   });
 });
 
-// A line that takes a line in the source but has no place in the rendering (a blank line, say) can
-// become the landing point because the interpolation apportions px to it. Passing laidOut keeps it
-// from landing there (§4.9).
-describe("lineAt's laidOut snapping", () => {
-  // Lines 2 and 4 are not rendered (e.g. blank lines between blocks)
-  const laidOut = [false, true, false, true, false, true, true, true];
+describe("sourceLineAt's laid-out-line snapping", () => {
+  const laidOutSourceLines = new Set([1, 3, 5, 6, 7]);
   const anchors: Anchor[] = [
-    { line: 3, top: 100 },
-    { line: 5, top: 300 },
+    { sourceLine: 3, topCssPx: 100 },
+    { sourceLine: 5, topCssPx: 300 },
   ];
-  const map = buildLineMap(anchors, 6, 400, laidOut);
+  const map = buildLineMap(anchors, 6, 400, laidOutSourceLines);
   const bare = buildLineMap(anchors, 6, 400);
 
   test("landing on a line with no height falls back to the previous real line", () => {
-    expect(lineAt(bare, 50, false)).toBe(2);
-    expect(lineAt(map, 50, false)).toBe(1);
-    expect(lineAt(bare, 200, false)).toBe(4);
-    expect(lineAt(map, 200, false)).toBe(3);
+    expect(sourceLineAt(bare, 50, false)).toBe(2);
+    expect(sourceLineAt(map, 50, false)).toBe(1);
+    expect(sourceLineAt(bare, 200, false)).toBe(4);
+    expect(sourceLineAt(map, 200, false)).toBe(3);
   });
 
   test("landing on a line that does have height leaves it alone", () => {
-    expect(lineAt(map, 100, false)).toBe(3);
-    expect(lineAt(map, 300, false)).toBe(5);
+    expect(sourceLineAt(map, 100, false)).toBe(3);
+    expect(sourceLineAt(map, 300, false)).toBe(5);
   });
 
-  test("atEnd is not narrowed (`G` is the end of the document; nvim's own `G` goes to a trailing blank line)", () => {
-    const trailing = buildLineMap(anchors, 6, 400, [false, true, true, true, true, true, false]);
-    expect(lineAt(trailing, 350, true)).toBe(6);
+  test("jumpToEnd is not narrowed, matching nvim's `G` on a trailing blank line", () => {
+    const trailing = buildLineMap(anchors, 6, 400, new Set([1, 2, 3, 4, 5]));
+    expect(sourceLineAt(trailing, 350, true)).toBe(6);
   });
 
   test("with nothing found going back, the interpolated value stands", () => {
-    const none = buildLineMap(anchors, 6, 400, [false, false, false, false, false, false, false]);
-    expect(lineAt(none, 200, false)).toBe(4);
+    const none = buildLineMap(anchors, 6, 400, new Set());
+    expect(sourceLineAt(none, 200, false)).toBe(4);
   });
 });

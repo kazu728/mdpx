@@ -1,7 +1,3 @@
-// Control of the resident Chrome (§4.3). The browser and page are reused for the whole process
-// lifetime, and a reload is just a goto of the temporary HTML. Resolve executablePath → wait for the
-// render to settle → screenshot tiles.
-
 import { pathToFileURL } from "node:url";
 import puppeteer, { TimeoutError, type Browser, type Page } from "puppeteer-core";
 import type { Anchor } from "./linemap.ts";
@@ -14,8 +10,6 @@ export class ContentError extends Error {}
 /** Cap on domcontentloaded. Cuts off a parse that never returns (an infinite-loop script, say). */
 const NAV_TIMEOUT_MS = 15000;
 
-// puppeteer-core ignores environment variables, so apply the explicit override before its standard
-// Chrome-channel lookup.
 export async function resolveExecutable(): Promise<string | null> {
   const override = process.env.PUPPETEER_EXECUTABLE_PATH;
   if (override) return override;
@@ -39,11 +33,7 @@ export class Chrome {
 
   async launch(): Promise<void> {
     if (!this.executablePath) throw new Error("no Chromium found");
-    // --hide-scrollbars and --force-color-profile=srgb are already in
-    // puppeteer.defaultArgs({ headless: true }) and ignoreDefaultArgs is not set, so they are not
-    // repeated. --allow-file-access-from-files is deliberately absent: it would let JS in raw HTML
-    // inside the md read arbitrary local files over XHR (measured). Loading CSS/JS/font subresources
-    // over file:// has been confirmed to work without the flag.
+    // Do not enable --allow-file-access-from-files: body scripts could then read local files over XHR.
     this.browser = await puppeteer.launch({
       executablePath: this.executablePath,
       headless: true,
@@ -61,14 +51,17 @@ export class Chrome {
     this.page = await this.browser.newPage();
   }
 
-  /**
-   * Open the temporary HTML, wait for the render to settle, and return the full document height
-   * (physical px) — §4.3. The viewport is set here every time, so it survives a restart that loses
-   * the page state and does not depend on the caller's ordering.
-   */
-  async load(htmlPath: string, cssWidth: number, renderScale: number): Promise<number> {
+  async load(
+    htmlPath: string,
+    viewportWidthCssPx: number,
+    renderScale: number,
+  ): Promise<number> {
     const page = this.page!;
-    await page.setViewport({ width: cssWidth, height: 900, deviceScaleFactor: renderScale });
+    await page.setViewport({
+      width: viewportWidthCssPx,
+      height: 900,
+      deviceScaleFactor: renderScale,
+    });
     try {
       await page.goto(pathToFileURL(htmlPath).href, {
         waitUntil: "domcontentloaded",
@@ -87,7 +80,6 @@ export class Chrome {
       throw e;
     }
     await page.evaluate(() => document.fonts.ready);
-    // Image decode (1s cap; images that miss it are captured missing)
     await Promise.race([
       page.evaluate(() =>
         Promise.all(Array.from(document.images).map((img) => img.decode().catch(() => {}))).then(
@@ -96,35 +88,32 @@ export class Chrome {
       ),
       sleep(STABLE_IMG_DECODE_MS),
     ]);
-    // mermaid rendering (3s cap; a per-diagram error stays inside its own box)
     await page
       .waitForFunction("window.__mermaidDone === true", { timeout: STABLE_MERMAID_MS })
       .catch(() => {});
-    const cssHeight = await page.evaluate(() =>
+    const documentHeightCssPx = await page.evaluate(() =>
       Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
     );
-    return cssHeight * CSS_SCALE;
+    return documentHeightCssPx * CSS_SCALE;
   }
 
-  /**
-   * Return the {source line, CSS px} of every [data-source-line] element html.ts emitted, in document
-   * order (§4.9). Assumes the page is loaded and finishes in a single evaluate (no measurable impact
-   * on the ~1s save requirement).
-   */
   collectAnchors(): Promise<Anchor[]> {
     return this.page!.evaluate(() =>
       Array.from(document.querySelectorAll("[data-source-line]"), (el) => ({
-        line: Number(el.getAttribute("data-source-line")),
-        // scrollY is 0 right after loading, but convert to document coordinates anyway so a future
-        // change that scrolls the page does not break this silently
-        top: el.getBoundingClientRect().top + window.scrollY,
-      })).filter((a) => Number.isFinite(a.line)),
+        sourceLine: Number(el.getAttribute("data-source-line")),
+        topCssPx: el.getBoundingClientRect().top + window.scrollY,
+      })).filter((anchor) => Number.isFinite(anchor.sourceLine)),
     );
   }
 
   async shoot(clip: Clip): Promise<string> {
     const data = await this.page!.screenshot({
-      clip: { x: clip.x, y: clip.y, width: clip.width, height: clip.height },
+      clip: {
+        x: clip.xCssPx,
+        y: clip.yCssPx,
+        width: clip.widthCssPx,
+        height: clip.heightCssPx,
+      },
       captureBeyondViewport: true,
       optimizeForSpeed: true,
       type: "png",
@@ -133,7 +122,6 @@ export class Chrome {
     return data as string;
   }
 
-  /** Evaluate a function in the loaded page. The hook the integration tests (§7) use to inspect the DOM; unused in production. */
   evaluate<T>(fn: () => T): Promise<T> {
     return this.page!.evaluate(fn);
   }

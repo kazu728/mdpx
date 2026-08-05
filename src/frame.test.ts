@@ -1,6 +1,3 @@
-// Regression tests for a normal frame's erase sequence. renderFrame erases with HOME + CSI 0J and
-// must never send CSI 2J (why: CLEAR_SCREEN in term.ts).
-
 import { describe, expect, test } from "bun:test";
 import { renderFrame } from "./frame.ts";
 import { computeTiles, SCROLL_TOP } from "./viewport.ts";
@@ -9,15 +6,15 @@ import type { ViewState } from "./scheduler.ts";
 const ESC = "\x1b";
 
 function makeView(): ViewState {
-  const { tiles, contentHpx } = computeTiles(300, 10, 50);
+  const { tiles, contentHeightPx } = computeTiles(300, 10, 50);
   return {
-    geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 800, cssWidth: 400, renderScale: 2, relayOverflow: false, maxResident: 64 },
+    geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 800, viewportWidthCssPx: 400, renderScale: 2, relayOverflow: false, maxResident: 64 },
     scrollPx: SCROLL_TOP,
     displayGen: 1,
     tiles,
     resident: new Set([0]),
     truncated: false,
-    contentHpx,
+    contentHeightPx,
     phase: "ready",
   };
 }
@@ -60,8 +57,6 @@ function statusLine(filename: string, cols = 80): string {
 
 describe("status bar", () => {
   test("the display width is exactly cols for any file name (no wrap shifting the screen by a row)", () => {
-    // Measured anywhere but per grapheme, a VS16 emoji splits into widths 1 and 2, the padding goes
-    // negative, and String.prototype.repeat throws a RangeError (leaving the terminal in alt-screen)
     const names = ["SPEC.md", "❤️README.md", "⚠️a.md", "ℹ️.md", "👨‍👩‍👧.md", "０".repeat(60) + ".md"];
     for (const name of names) {
       for (const cols of [10, 20, 25, 40, 80]) {
@@ -88,27 +83,26 @@ describe("status bar", () => {
   });
 });
 
-describe("source rect when downscaled (§4.8)", () => {
+describe("source rect when downscaled", () => {
   function reducedView(): ViewState {
-    const { tiles, contentHpx } = computeTiles(3000, 10, 50);
+    const { tiles, contentHeightPx } = computeTiles(3000, 10, 50);
     return {
-      geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 400, cssWidth: 400, renderScale: 1, relayOverflow: false, maxResident: 64 },
+      geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 400, viewportWidthCssPx: 400, renderScale: 1, relayOverflow: false, maxResident: 64 },
       scrollPx: SCROLL_TOP,
       displayGen: 1,
       tiles,
       resident: new Set([0]),
       truncated: false,
-      contentHpx,
+      contentHeightPx,
       phase: "ready",
     };
   }
 
   test("the source rect is half the screen px while the cell count is unchanged", () => {
     const { escape } = renderFrame(reducedView(), "a.md", []);
-    // The visible area is 500 screen px (contentRows=50 × cellHpx=10) → 250 in image px
     expect(escape).toContain("h=250");
-    expect(escape).toContain("r=50"); // cell counts are a screen-side unit and are not converted
-    expect(escape).toContain("w=400"); // imgWidthPx is already in image px
+    expect(escape).toContain("r=50");
+    expect(escape).toContain("w=400");
   });
 
   test("at 1:1 the source rect matches the screen px", () => {

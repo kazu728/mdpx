@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   clampScroll,
   computeTiles,
-  coveredHeight,
+  coveredHeightPx,
   maxScrollPx,
   SCROLL_TOP,
   scrollUnitPx,
@@ -10,13 +10,13 @@ import {
   toImagePx,
   visibleTiles,
 } from "./viewport.ts";
-import { ID_STRIDE } from "./kitty.ts";
+import { IMAGE_ID_GENERATION_STRIDE } from "./kitty.ts";
 
 describe("tileHeightPx", () => {
   test.each([10, 14, 31])("cellHpx=%i is a multiple of both the cell height and the dsf (2)", (cellHpx) => {
     const th = tileHeightPx(cellHpx, 50);
-    expect(th % cellHpx).toBe(0); // placement rows are integers
-    expect(th % 2).toBe(0); // the screenshot's CSS px clip is an integer
+    expect(th % cellHpx).toBe(0);
+    expect(th % 2).toBe(0);
   });
 
   test.each([10, 14, 31])("cellHpx=%i gives the smallest aligned unit covering one screenful", (cellHpx) => {
@@ -43,13 +43,13 @@ describe("computeTiles", () => {
     expect(truncated).toBe(false);
     let y = 0;
     for (const t of tiles) {
-      expect<number>(t.y).toBe(y);
-      expect(t.height % 20).toBe(0);
-      y += t.height;
+      expect<number>(t.topPx).toBe(y);
+      expect(t.heightPx % 20).toBe(0);
+      y += t.heightPx;
     }
-    expect<number>(coveredHeight(tiles)).toBe(y);
+    expect<number>(coveredHeightPx(tiles)).toBe(y);
     expect(y).toBeGreaterThanOrEqual(9000);
-    expect(y - 9000).toBeLessThan(20); // the padding is under one unit
+    expect(y - 9000).toBeLessThan(20);
   });
 
   test("a document past the cap is truncated at the tail", () => {
@@ -67,14 +67,12 @@ describe("computeTiles", () => {
       const { tiles, truncated } = computeTiles(10 ** 7, cellHpx!, contentRows!);
       expect(truncated).toBe(true);
       expect(tiles.length).toBe(128);
-      expect<number>(coveredHeight(tiles)).toBe(128 * tileHeightPx(cellHpx!, contentRows!));
+      expect<number>(coveredHeightPx(tiles)).toBe(128 * tileHeightPx(cellHpx!, contentRows!));
       expect<number>(tileHeightPx(cellHpx!, contentRows!)).toBe(contentRows! * cellHpx!);
     }
   });
 
   test("geometries whose screenful exceeds the tile height cap reach fewer than 128 screens", () => {
-    // Capped by MAX_TILE_PX, a tile becomes smaller than a screen. The tile count exists to bound
-    // capture cost, not to guarantee how many screens are reachable (§4.4)
     for (const [cellHpx, contentRows] of [
       [31, 199],
       [31, 299],
@@ -84,49 +82,45 @@ describe("computeTiles", () => {
       const th = tileHeightPx(cellHpx!, contentRows!);
       expect(th).toBeLessThan(screenful);
       const { tiles } = computeTiles(10 ** 8, cellHpx!, contentRows!);
-      expect(coveredHeight(tiles) / screenful).toBeLessThan(128);
+      expect(coveredHeightPx(tiles) / screenful).toBeLessThan(128);
     }
   });
 
   test("the tile count always stays below the ID space (preventing image ID collisions)", () => {
-    // image id = gen*ID_STRIDE + tileIndex. Once tileIndex reaches ID_STRIDE it equals the next
-    // generation's first id, and deleting on a generation switch would wipe another generation's
-    // images (§4.4)
     for (const [cellHpx, contentRows] of [
       [10, 20],
       [31, 8],
       [14, 16],
       [10, 0],
     ]) {
-      expect(computeTiles(10 ** 7, cellHpx!, contentRows!).tiles.length).toBeLessThan(ID_STRIDE);
+      expect(computeTiles(10 ** 7, cellHpx!, contentRows!).tiles.length).toBeLessThan(
+        IMAGE_ID_GENERATION_STRIDE,
+      );
     }
   });
 
   test("an empty document yields zero tiles", () => {
-    const { tiles, contentHpx } = computeTiles(0, 10, 50);
+    const { tiles, contentHeightPx } = computeTiles(0, 10, 50);
     expect(tiles.length).toBe(0);
-    expect<number>(maxScrollPx(contentHpx, 50, 10, 2)).toBe(0);
+    expect<number>(maxScrollPx(contentHeightPx, 50, 10, 2)).toBe(0);
   });
 
   test("a zero-row content area captures nothing", () => {
-    const { tiles, truncated, contentHpx } = computeTiles(10 ** 8, 31, 0);
+    const { tiles, truncated, contentHeightPx } = computeTiles(10 ** 8, 31, 0);
     expect(tiles).toEqual([]);
     expect(truncated).toBe(false);
-    expect<number>(contentHpx).toBe(0);
+    expect<number>(contentHeightPx).toBe(0);
   });
 
-  test("contentHpx is the real document height rounded to a cell multiple (tile padding excluded)", () => {
-    // docHpx=489, cellHpx=10 → tiles cover up to 500 at the 2*cellHpx=20 boundary, but the scroll
-    // limit uses the real document height's cell multiple, 490 (no scrolling into the trailing padding).
-    const { contentHpx } = computeTiles(489, 10, 50);
-    expect<number>(contentHpx).toBe(490);
-    // contentRows=49 → it fits the 490px viewport, so there is nothing to scroll
-    expect<number>(maxScrollPx(contentHpx, 49, 10, 2)).toBe(0);
+  test("contentHeightPx is the real document height rounded to a cell multiple (tile padding excluded)", () => {
+    const { contentHeightPx } = computeTiles(489, 10, 50);
+    expect<number>(contentHeightPx).toBe(490);
+    expect<number>(maxScrollPx(contentHeightPx, 49, 10, 2)).toBe(0);
   });
 
-  test("when truncated, contentHpx caps at the captured bottom (coveredHeight)", () => {
-    const { tiles, contentHpx } = computeTiles(4080 * 100, 10, 50);
-    expect<number>(contentHpx).toBe(coveredHeight(tiles));
+  test("when truncated, contentHeightPx caps at the captured bottom", () => {
+    const { tiles, contentHeightPx } = computeTiles(4080 * 100, 10, 50);
+    expect<number>(contentHeightPx).toBe(coveredHeightPx(tiles));
   });
 });
 
@@ -135,29 +129,52 @@ describe("visibleTiles", () => {
     const { tiles } = computeTiles(300, 10, 50);
     const p = visibleTiles(SCROLL_TOP, 50, 10, tiles);
     expect(p).toHaveLength(1);
-    expect(p[0]).toMatchObject({ tileIndex: 0, srcY: 0, srcH: 300, row: 0, rows: 30 });
+    expect(p[0]).toMatchObject({
+      tileIndex: 0,
+      sourceTopPx: 0,
+      sourceHeightPx: 300,
+      destinationRow: 0,
+      destinationRows: 30,
+    });
   });
 
   test("across a tile boundary, two tiles are placed back to back and fill the rows", () => {
-    const { tiles, contentHpx } = computeTiles(8000, 10, 50);
-    const p = visibleTiles(clampScroll(3800, contentHpx, 50, 10, 2), 50, 10, tiles);
+    const { tiles, contentHeightPx } = computeTiles(8000, 10, 50);
+    const p = visibleTiles(clampScroll(3800, contentHeightPx, 50, 10, 2), 50, 10, tiles);
     expect(p).toHaveLength(2);
-    expect(p[0]).toMatchObject({ tileIndex: 7, srcY: 300, srcH: 200, row: 0, rows: 20 });
-    expect(p[1]).toMatchObject({ tileIndex: 8, srcY: 0, srcH: 300, row: 20, rows: 30 });
-    expect(p[0]!.rows + p[1]!.rows).toBe(50);
+    expect(p[0]).toMatchObject({
+      tileIndex: 7,
+      sourceTopPx: 300,
+      sourceHeightPx: 200,
+      destinationRow: 0,
+      destinationRows: 20,
+    });
+    expect(p[1]).toMatchObject({
+      tileIndex: 8,
+      sourceTopPx: 0,
+      sourceHeightPx: 300,
+      destinationRow: 20,
+      destinationRows: 30,
+    });
+    expect(p[0]!.destinationRows + p[1]!.destinationRows).toBe(50);
   });
 
   test("end of the document: the bottom stops at the covered height and no row overflows", () => {
-    const { tiles, contentHpx } = computeTiles(8000, 10, 50);
-    const max = maxScrollPx(contentHpx, 50, 10, 2);
+    const { tiles, contentHeightPx } = computeTiles(8000, 10, 50);
+    const max = maxScrollPx(contentHeightPx, 50, 10, 2);
     const p = visibleTiles(max, 50, 10, tiles);
-    const bottom = tiles[p.at(-1)!.tileIndex]!.y + p.at(-1)!.srcY + p.at(-1)!.srcH;
-    expect(bottom).toBe(coveredHeight(tiles));
-    expect(p.reduce((s, x) => s + x.rows, 0)).toBeLessThanOrEqual(50);
+    const bottom =
+      tiles[p.at(-1)!.tileIndex]!.topPx +
+      p.at(-1)!.sourceTopPx +
+      p.at(-1)!.sourceHeightPx;
+    expect(bottom).toBe(coveredHeightPx(tiles));
+    expect(p.reduce((rows, placement) => rows + placement.destinationRows, 0)).toBeLessThanOrEqual(
+      50,
+    );
   });
 });
 
-describe("coordinates when downscaled (§4.8)", () => {
+describe("coordinates when downscaled", () => {
   test("at 1:1 the image px equals the screen px and the scroll unit is one cell", () => {
     expect(toImagePx(1984, 2)).toBe(1984);
     expect(scrollUnitPx(31, 2)).toBe(31);
@@ -173,84 +190,76 @@ describe("coordinates when downscaled (§4.8)", () => {
   test("scroll unit boundaries always map to integer image px", () => {
     for (const cellHpx of [10, 14, 30, 31, 33]) {
       const unit = scrollUnitPx(cellHpx, 1);
-      expect(unit % 2).toBe(0); // image px = unit/2 is an integer
-      expect(unit % cellHpx).toBe(0); // placement rows stay integers
+      expect(unit % 2).toBe(0);
+      expect(unit % cellHpx).toBe(0);
     }
   });
 
   test("max rounds up to the unit so the real content at the tail is reachable", () => {
-    // cellHpx=31, contentRows=64 → unit 62. At contentHpx=3131 the raw max is 1147.
-    // Rounding down (1116) puts the bottom edge at 3100 and leaves the last 31px unreachable, so it
-    // rounds up to 1178
-    const { contentHpx } = computeTiles(3131, 31, 64);
-    expect<number>(contentHpx).toBe(3131);
-    const max = maxScrollPx(contentHpx, 64, 31, 1);
+    const { contentHeightPx } = computeTiles(3131, 31, 64);
+    expect<number>(contentHeightPx).toBe(3131);
+    const max = maxScrollPx(contentHeightPx, 64, 31, 1);
     expect<number>(max).toBe(1178);
     expect(max % 62).toBe(0);
-    expect(max + 64 * 31).toBeGreaterThanOrEqual(contentHpx);
-    expect(clampScroll(99999, contentHpx, 64, 31, 1)).toBe(max);
+    expect(max + 64 * 31).toBeGreaterThanOrEqual(contentHeightPx);
+    expect(clampScroll(99999, contentHeightPx, 64, 31, 1)).toBe(max);
   });
 
   test("max never leaves the document (the body does not vanish at the end)", () => {
-    // With a viewport shorter than one unit, a naive round-up puts the top edge outside the document
-    // where it overlaps no tile. §4.8's downscale check rejects such geometries, but this guards
-    // viewport on its own
-    for (const [cellHpx, docHpx] of [
+    for (const [cellHpx, documentHeightPx] of [
       [31, 3100],
       [21, 489],
       [33, 5000],
     ]) {
-      const { tiles, contentHpx } = computeTiles(docHpx!, cellHpx!, 1);
-      const max = maxScrollPx(contentHpx, 1, cellHpx!, 1);
+      const { tiles, contentHeightPx } = computeTiles(documentHeightPx!, cellHpx!, 1);
+      const max = maxScrollPx(contentHeightPx, 1, cellHpx!, 1);
       expect(visibleTiles(max, 1, cellHpx!, tiles).length).toBeGreaterThan(0);
     }
   });
 
   test("geometries allowed to downscale can still reach the end of the document", () => {
-    // §4.8 only downscales geometries where the scroll unit fits the viewport. Pin down that the end
-    // stays readable across that range (so loosening it fails here)
-    for (const [cellHpx, contentRows, docHpx] of [
+    for (const [cellHpx, contentRows, documentHeightPx] of [
       [31, 64, 3131],
       [31, 2, 3100],
       [30, 1, 3000],
       [21, 7, 5000],
     ]) {
       const unit = scrollUnitPx(cellHpx!, 1);
-      expect(contentRows! * cellHpx!).toBeGreaterThanOrEqual(unit); // the precondition for downscaling
-      const { contentHpx } = computeTiles(docHpx!, cellHpx!, contentRows!);
-      const max = maxScrollPx(contentHpx, contentRows!, cellHpx!, 1);
-      expect(max + contentRows! * cellHpx!).toBeGreaterThanOrEqual(contentHpx);
+      expect(contentRows! * cellHpx!).toBeGreaterThanOrEqual(unit);
+      const { contentHeightPx } = computeTiles(documentHeightPx!, cellHpx!, contentRows!);
+      const max = maxScrollPx(contentHeightPx, contentRows!, cellHpx!, 1);
+      expect(max + contentRows! * cellHpx!).toBeGreaterThanOrEqual(contentHeightPx);
     }
   });
 
   test("a line step advances by one unit and returns on the way back (no sticking on midpoint rounding)", () => {
-    const { contentHpx } = computeTiles(3131, 31, 64);
-    const down = clampScroll(0 + 62, contentHpx, 64, 31, 1);
+    const { contentHeightPx } = computeTiles(3131, 31, 64);
+    const down = clampScroll(0 + 62, contentHeightPx, 64, 31, 1);
     expect<number>(down).toBe(62);
-    expect<number>(clampScroll(down - 62, contentHpx, 64, 31, 1)).toBe(0);
+    expect<number>(clampScroll(down - 62, contentHeightPx, 64, 31, 1)).toBe(0);
   });
 
   test("at 1:1 the round-up in max is a no-op (as before)", () => {
-    const { contentHpx } = computeTiles(3131, 31, 64);
-    expect<number>(maxScrollPx(contentHpx, 64, 31, 2)).toBe(3131 - 64 * 31);
+    const { contentHeightPx } = computeTiles(3131, 31, 64);
+    expect<number>(maxScrollPx(contentHeightPx, 64, 31, 2)).toBe(3131 - 64 * 31);
   });
 });
 
 describe("clampScroll", () => {
-  const { contentHpx } = computeTiles(8000, 10, 50); // maxScroll 7500
+  const { contentHeightPx } = computeTiles(8000, 10, 50);
 
   test("negative goes to 0 and anything past the end to max", () => {
-    expect<number>(clampScroll(-100, contentHpx, 50, 10, 2)).toBe(0);
-    expect<number>(clampScroll(999999, contentHpx, 50, 10, 2)).toBe(7500);
+    expect<number>(clampScroll(-100, contentHeightPx, 50, 10, 2)).toBe(0);
+    expect<number>(clampScroll(999999, contentHeightPx, 50, 10, 2)).toBe(7500);
   });
 
   test("snaps to a multiple of the cell height", () => {
-    expect<number>(clampScroll(37, contentHpx, 50, 10, 2)).toBe(40);
-    expect<number>(clampScroll(34, contentHpx, 50, 10, 2)).toBe(30);
+    expect<number>(clampScroll(37, contentHeightPx, 50, 10, 2)).toBe(40);
+    expect<number>(clampScroll(34, contentHeightPx, 50, 10, 2)).toBe(30);
   });
 
   test("a short document always stays at 0", () => {
-    const short = computeTiles(300, 10, 50).contentHpx;
+    const short = computeTiles(300, 10, 50).contentHeightPx;
     expect<number>(clampScroll(100, short, 50, 10, 2)).toBe(0);
   });
 });
