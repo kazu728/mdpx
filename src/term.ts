@@ -9,10 +9,8 @@ const ALT_ENTER = `${ESC}[?1049h`;
 const ALT_EXIT = `${ESC}[?1049l`;
 const HIDE_CURSOR = `${ESC}[?25l`;
 const SHOW_CURSOR = `${ESC}[?25h`;
-// The CSI 2J trap: Ghostty
-// 1.3.1 handles CSI 2J as eraseDisplay(.complete) and wipes every stored kitty image at once (the
-// cause of "ENOENT: image not found"). It is only usable on entering alt-screen, before anything has
-// been transferred; normal frames after a transfer erase with CSI 0J (frame.ts).
+// CSI 2J can wipe every stored kitty image, so it is only safe before the first transfer — entering
+// alt-screen. Later frames erase with CSI 0J (frame.ts).
 const CLEAR_SCREEN = `${ESC}[2J`;
 
 export type Key = { type: "quit" } | { type: "scroll"; delta: ScrollDelta };

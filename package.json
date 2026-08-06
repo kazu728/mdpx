@@ -1,7 +1,7 @@
 {
   "name": "mdpx",
   "version": "0.1.0",
-  "description": "A Markdown viewer for Ghostty, driven by Chrome snapshots",
+  "description": "A Markdown viewer for kitty graphics terminals, driven by Chrome snapshots",
   "type": "module",
   "bin": {
     "mdpx": "src/main.ts"

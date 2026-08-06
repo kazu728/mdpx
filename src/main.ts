@@ -30,8 +30,7 @@ function usageExit(msg: string): never {
 
 function unsupportedTerminalExit(): never {
   process.stderr.write(
-    "mdpx: run this in a terminal that supports kitty graphics (Ghostty/Kitty)\n" +
-      'hint: open -na Ghostty --args --command="mdpx <path>"\n' +
+    "mdpx: run this in a terminal that supports the kitty graphics protocol\n" +
       "terminals that do not report cell metrics (some multiplexers) can set MDPX_CELL=<heightPx>,<widthPx>\n",
   );
   process.exit(1);
