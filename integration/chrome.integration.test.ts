@@ -51,8 +51,8 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
 
     chrome = new Chrome(exe);
     await chrome.launch();
-    const documentHeightPx = await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
-    expect(documentHeightPx).toBeGreaterThan(0);
+    const documentHeightCssPx = await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
+    expect(documentHeightCssPx).toBeGreaterThan(0);
   }, 60000);
 
   afterAll(async () => {
@@ -116,14 +116,13 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
     test("a scroll px resolves to the fixture's heading line (including the physical px → CSS px conversion)", async () => {
       const md = await readFile(FIXTURE, "utf8");
       const anchors = await chrome.collectAnchors();
-      const documentHeightPx =
-        (await chrome.evaluate(() =>
-          Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
-        )) * CSS_SCALE;
+      const documentHeightCssPx = await chrome.evaluate(() =>
+        Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
+      );
       const map = buildLineMap(
         anchors,
         countSourceLines(md),
-        documentHeightPx / CSS_SCALE,
+        documentHeightCssPx,
         laidOutSourceLines,
       );
 

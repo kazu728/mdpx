@@ -2,7 +2,6 @@ import { pathToFileURL } from "node:url";
 import puppeteer, { TimeoutError, type Browser, type Page } from "puppeteer-core";
 import type { Anchor } from "./linemap.ts";
 import type { Clip } from "./scheduler.ts";
-import { CSS_SCALE } from "./viewport.ts";
 
 /** A render failure caused by the page content (not a Chrome fault). The caller keeps the current frame. */
 export class ContentError extends Error {}
@@ -94,7 +93,7 @@ export class Chrome {
     const documentHeightCssPx = await page.evaluate(() =>
       Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
     );
-    return documentHeightCssPx * CSS_SCALE;
+    return documentHeightCssPx;
   }
 
   collectAnchors(): Promise<Anchor[]> {

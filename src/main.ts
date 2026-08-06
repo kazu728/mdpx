@@ -1,33 +1,21 @@
 #!/usr/bin/env bun
 import { realpathSync, statSync, watch, type FSWatcher } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { buildHtml, resolveAssets, type Assets } from "./html.ts";
+import { resolveAssets, type Assets } from "./html.ts";
 import { resolveTheme } from "./theme.ts";
-import { Chrome, ContentError, resolveExecutable } from "./chrome.ts";
-import { renderFrame } from "./frame.ts";
-import { deleteImage, imageId, transmit } from "./kitty.ts";
-import {
-  buildLineMap,
-  countSourceLines,
-  sourceLineAt,
-  type Anchor,
-  type LineMap,
-} from "./linemap.ts";
+import { Chrome, resolveExecutable } from "./chrome.ts";
 import { NvimCursor, parseNvimEnv } from "./nvim.ts";
-import { Scheduler, type Action, type ScrollDelta } from "./scheduler.ts";
+import { Pipeline } from "./pipeline.ts";
+import { Scheduler } from "./scheduler.ts";
 import { sanitizeTerminalBlock, sanitizeTerminalLine } from "./text.ts";
 import { Term, parseCellSize, type CellSize } from "./term.ts";
-import { CSS_SCALE } from "./viewport.ts";
 
 const CELL_QUERY_MS = 200;
 const GRAPHICS_QUERY_TIMEOUT_MS = 200;
 const WATCH_DEBOUNCE_MS = 100;
-const MAX_CONSECUTIVE_CHROME_FAILURES = 2;
 const CHROME_CLOSE_TIMEOUT_MS = 1500; // the terminal is already restored, so a stuck close must not block exit
-
-type ShootAction = Extract<Action, { type: "shoot" }>;
 
   // Sanitize every external string before writing to the bare terminal; it may contain CSI/OSC.
 function warn(msg: string): void {
@@ -85,15 +73,10 @@ async function main(): Promise<void> {
 
   const chrome = new Chrome(chromeExecutable);
   const nvim = new NvimCursor(mdPath, nvimTarget);
-  // Keep line maps per generation; lookups use only the displayed generation's map.
-  const lineMaps = new Map<number, LineMap>();
   let dir: string | null = null;
   let watcher: FSWatcher | null = null;
   let debounce: ReturnType<typeof setTimeout> | null = null;
-  let scheduler: Scheduler;
-  let consecutiveFailures = 0;
   let shuttingDown = false;
-  let lastPlacements: number[] = [];
 
   async function shutdown(code: number, message?: string): Promise<never> {
     if (shuttingDown) return new Promise<never>(() => {});
@@ -159,149 +142,28 @@ async function main(): Promise<void> {
   }
   const htmlPath = join(dir, "view.html");
 
-  scheduler = new Scheduler(term.geometry(cell));
-
-  // Retry Chrome faults; content errors stay with the caller.
-  async function attempt<T>(fn: (restarted: boolean) => Promise<T>): Promise<T> {
-    let restarted = false;
-    for (;;) {
-      try {
-        const r = await fn(restarted);
-        consecutiveFailures = 0;
-        return r;
-      } catch (e) {
-        if (e instanceof ContentError) throw e; // a restart fails the same way on the same content; keep the classes apart
-        consecutiveFailures += 1;
-        if (consecutiveFailures >= MAX_CONSECUTIVE_CHROME_FAILURES) {
-          return shutdown(1, "mdpx: Chrome failed repeatedly\n");
-        }
-        try {
-          await chrome.restart();
-        } catch (restartError) {
-          const reason = restartError instanceof Error ? restartError.message : restartError;
-          return shutdown(1, `mdpx: could not restart Chrome: ${reason}\n`);
-        }
-        restarted = true;
-      }
-    }
-  }
-
-  function loadCurrentGeometry(): Promise<number> {
-    const g = scheduler.viewState().geometry;
-    return chrome.load(htmlPath, g.viewportWidthCssPx, g.renderScale);
-  }
-
-  /** Load and collect anchors together so they stay matched to the page. */
-  async function loadWithAnchors(): Promise<{ documentHeightPx: number; anchors: Anchor[] }> {
-    const documentHeightPx = await loadCurrentGeometry();
-    return { documentHeightPx, anchors: await chrome.collectAnchors() };
-  }
-
-  /** Retain only the displayed and newest line maps. */
-  function rememberLineMap(gen: number, map: LineMap): void {
-    const shown = scheduler.viewState().displayGen;
-    lineMaps.set(gen, map);
-    for (const k of lineMaps.keys()) if (k !== gen && k !== shown) lineMaps.delete(k);
-  }
-
-  async function runRender(gen: number): Promise<void> {
-    let md: string;
-    let laidOutSourceLines: ReadonlySet<number>;
-    try {
-      md = await readFile(mdPath, "utf8");
-      const built = await buildHtml({ markdown: md, mdDir, assets, theme });
-      await writeFile(htmlPath, built.html);
-      laidOutSourceLines = built.laidOutSourceLines;
-    } catch {
-      if (!shuttingDown) execute(scheduler.dispatch({ type: "renderFailed", gen }));
-      return;
-    }
-    let loaded: { documentHeightPx: number; anchors: Anchor[] };
-    try {
-      loaded = await attempt(loadWithAnchors);
-    } catch (e) {
-      if (e instanceof ContentError && !shuttingDown) {
-        execute(scheduler.dispatch({ type: "renderFailed", gen }));
-        return;
-      }
-      throw e;
-    }
-    rememberLineMap(
-      gen,
-      buildLineMap(
-        loaded.anchors,
-        countSourceLines(md),
-        loaded.documentHeightPx / CSS_SCALE,
-        laidOutSourceLines,
-      ),
-    );
-    if (!shuttingDown) {
-      execute(
-        scheduler.dispatch({
-          type: "renderDone",
-          gen,
-          documentHeightPx: loaded.documentHeightPx,
-        }),
-      );
-    }
-  }
-
-  async function runShoot(action: ShootAction): Promise<void> {
-    const { gen, tileIndex, clip } = action;
-    let base64: string;
-    try {
-      base64 = await attempt(async (restarted) => {
-        if (restarted) await loadCurrentGeometry();
-        return chrome.shoot(clip);
-      });
-    } catch (e) {
-      if (e instanceof ContentError && !shuttingDown) {
-        execute(scheduler.dispatch({ type: "renderFailed", gen }));
-        return;
-      }
-      throw e;
-    }
-    if (shuttingDown) return;
-    term.write(transmit(imageId(gen, tileIndex), base64));
-    execute(scheduler.dispatch({ type: "tileReady", gen, tileIndex }));
-  }
-
-  function execute(actions: Action[]): void {
-    for (const a of actions) {
-      switch (a.type) {
-        case "redraw": {
-          const frame = renderFrame(scheduler.viewState(), fileName, lastPlacements);
-          term.write(frame.escape);
-          lastPlacements = frame.placements;
-          break;
-        }
-        case "deleteGen":
-          term.write(a.imageIds.map(deleteImage).join(""));
-          break;
-        case "render":
-          void runRender(a.gen);
-          break;
-        case "shoot":
-          void runShoot(a);
-          break;
-      }
-    }
-  }
-
-  function syncCursor(delta: ScrollDelta): void {
-    const v = scheduler.viewState();
-    if (v.displayGen === null) return;
-    const map = lineMaps.get(v.displayGen);
-    if (!map) return;
-    nvim.send(sourceLineAt(map, v.scrollPx / CSS_SCALE, delta.kind === "bottom"));
-  }
+  const scheduler = new Scheduler(term.geometry(cell));
+  const pipeline = new Pipeline({
+    chrome,
+    scheduler,
+    term,
+    mdPath,
+    mdDir,
+    fileName,
+    htmlPath,
+    assets,
+    theme,
+    isShuttingDown: () => shuttingDown,
+    onFatal: (message) => shutdown(1, message),
+  });
 
   term.onKey((k) => {
     if (shuttingDown) return;
     if (k.type === "quit") return void shutdown(0);
-    execute(scheduler.dispatch({ type: "key", delta: k.delta }));
+    pipeline.execute(scheduler.dispatch({ type: "key", delta: k.delta }));
     // Cursor sync is caused by keys only; renders and resizes must not move the editor.
-    syncCursor(k.delta);
+    const line = pipeline.displayedSourceLine(k.delta.kind === "bottom");
+    if (line !== null) nvim.send(line);
   });
 
   // Rapid resizes can resolve an older query late, so seq keeps only the newest from winning.
@@ -312,7 +174,7 @@ async function main(): Promise<void> {
       if (shuttingDown) return;
       const c = await resolveCell();
       if (!c || shuttingDown || seq !== resizeSeq) return;
-      execute(scheduler.dispatch({ type: "resize", geometry: term.geometry(c) }));
+      pipeline.execute(scheduler.dispatch({ type: "resize", geometry: term.geometry(c) }));
     })();
   });
 
@@ -322,7 +184,7 @@ async function main(): Promise<void> {
       if (debounce) clearTimeout(debounce);
       debounce = setTimeout(() => {
         debounce = null;
-        if (!shuttingDown) execute(scheduler.dispatch({ type: "trigger" }));
+        if (!shuttingDown) pipeline.execute(scheduler.dispatch({ type: "trigger" }));
       }, WATCH_DEBOUNCE_MS);
     });
   } catch (e) {
@@ -333,7 +195,7 @@ async function main(): Promise<void> {
   // From here a synchronous throw rejects main(), whose catch does not restore the terminal, and
   // alt-screen is already entered — so route it through shutdown.
   try {
-    execute(scheduler.dispatch({ type: "trigger" }));
+    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
   } catch (e) {
     return shutdown(1, `mdpx: ${e instanceof Error ? e.stack : e}\n`);
   }
