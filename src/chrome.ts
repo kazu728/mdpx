@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import puppeteer, { TimeoutError, type Browser, type Page } from "puppeteer-core";
 import type { Anchor } from "./linemap.ts";
-import type { Clip } from "./scheduler.ts";
+import type { Clip } from "./geometry.ts";
 
 /** A render failure caused by the page content (not a Chrome fault). The caller keeps the current frame. */
 export class ContentError extends Error {}
@@ -101,7 +101,7 @@ export class Chrome {
       Array.from(document.querySelectorAll("[data-source-line]"), (el) => ({
         sourceLine: Number(el.getAttribute("data-source-line")),
         topCssPx: el.getBoundingClientRect().top + window.scrollY,
-      })).filter((anchor) => Number.isFinite(anchor.sourceLine)),
+      })),
     );
   }
 

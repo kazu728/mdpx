@@ -10,7 +10,8 @@ import { NvimCursor, parseNvimEnv } from "./nvim.ts";
 import { Pipeline } from "./pipeline.ts";
 import { Scheduler } from "./scheduler.ts";
 import { sanitizeTerminalBlock, sanitizeTerminalLine } from "./text.ts";
-import { Term, parseCellSize, type CellSize } from "./term.ts";
+import { Term, parseCellSize } from "./term.ts";
+import { resolveGeometry, type CellSize } from "./geometry.ts";
 
 const CELL_QUERY_MS = 200;
 const GRAPHICS_QUERY_TIMEOUT_MS = 200;
@@ -142,7 +143,7 @@ async function main(): Promise<void> {
   }
   const htmlPath = join(dir, "view.html");
 
-  const scheduler = new Scheduler(term.geometry(cell));
+  const scheduler = new Scheduler(resolveGeometry(term.size(), cell));
   const pipeline = new Pipeline({
     chrome,
     scheduler,
@@ -174,7 +175,7 @@ async function main(): Promise<void> {
       if (shuttingDown) return;
       const c = await resolveCell();
       if (!c || shuttingDown || seq !== resizeSeq) return;
-      pipeline.execute(scheduler.dispatch({ type: "resize", geometry: term.geometry(c) }));
+      pipeline.execute(scheduler.dispatch({ type: "resize", geometry: resolveGeometry(term.size(), c) }));
     })();
   });
 

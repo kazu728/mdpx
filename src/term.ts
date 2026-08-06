@@ -1,9 +1,8 @@
 import { cc, ptr } from "bun:ffi";
 import { fileURLToPath } from "node:url";
 import { deleteAll } from "./kitty.ts";
-import { CSS_SCALE, contentRows, scrollUnitPx, tileHeightPx, toImagePx } from "./viewport.ts";
-import { inHerdrPane, maxResidentTiles, pickRenderScale, visibleTileCount } from "./herdr.ts";
-import type { Geometry, ScrollDelta } from "./scheduler.ts";
+import type { CellSize, ScreenSize } from "./geometry.ts";
+import type { ScrollDelta } from "./scheduler.ts";
 
 const ESC = "\x1b";
 const ALT_ENTER = `${ESC}[?1049h`;
@@ -17,11 +16,6 @@ const SHOW_CURSOR = `${ESC}[?25h`;
 const CLEAR_SCREEN = `${ESC}[2J`;
 
 export type Key = { type: "quit" } | { type: "scroll"; delta: ScrollDelta };
-
-export interface CellSize {
-  cellHpx: number;
-  cellWpx: number;
-}
 
 const MAX_CELL_PX = 1000;
 
@@ -148,6 +142,10 @@ export class Term {
 
   private get out(): NodeJS.WriteStream {
     return process.stdout;
+  }
+
+  size(): ScreenSize {
+    return { cols: this.out.columns, rows: this.out.rows };
   }
 
   write(data: string): void {
@@ -353,42 +351,6 @@ export class Term {
 
   private emit(k: Key): void {
     this.keyHandler?.(k);
-  }
-
-  geometry(cell: CellSize, relayed: boolean = inHerdrPane()): Geometry {
-    const cols = this.out.columns;
-    const rows = this.out.rows;
-    const screenWidthPx = cols * cell.cellWpx;
-    const viewportWidthCssPx = Math.round(screenWidthPx / CSS_SCALE);
-    const viewportHeightPx = contentRows(rows) * cell.cellHpx;
-    const tileHeightScreenPx = tileHeightPx(cell.cellHpx, contentRows(rows));
-    const { renderScale, relayOverflow } = pickRenderScale({
-      viewportWidthCssPx,
-      tileHeightPx: tileHeightScreenPx,
-      viewportHeightPx,
-      reducedScrollUnitPx: scrollUnitPx(cell.cellHpx, 1),
-      fullScale: CSS_SCALE,
-      relayed,
-    });
-    // At 1:1 the real image can be 1 px wider than the terminal, and cropping that pixel is sharper
-    // than resampling the whole image.
-    const imgWidthPx = toImagePx(screenWidthPx, renderScale);
-    // The terminal holds images as decoded pixels, so the amount held follows the area, not the PNG size
-    const tileBytes = imgWidthPx * toImagePx(tileHeightScreenPx, renderScale) * 4;
-    return {
-      rows,
-      cols,
-      cellHpx: cell.cellHpx,
-      imgWidthPx,
-      viewportWidthCssPx,
-      renderScale,
-      relayOverflow,
-      maxResident: maxResidentTiles(
-        tileBytes,
-        relayed,
-        visibleTileCount(viewportHeightPx, tileHeightScreenPx),
-      ),
-    };
   }
 
   enterAltScreen(): void {

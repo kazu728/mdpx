@@ -13,8 +13,6 @@ type Brand<Tags extends string> = { readonly [brand]: Record<Tags, true> };
 
 export type TileAlignedPx = number & Brand<"tileAligned">;
 
-export type CoveredHeightPx = number & Brand<"covered">;
-
 export type CellAlignedPx = number & Brand<"cellAligned">;
 
 export type ScrollAlignedPx = number & Brand<"cellAligned" | "scrollUnitAligned">;
@@ -23,7 +21,7 @@ export const SCROLL_TOP = 0 as ScrollAlignedPx;
 
 /**
  * Tiles are padded out to a `tileAlign` boundary, but that trailing padding (page background) is
- * not scrollable. Keeping its height distinct from `CoveredHeightPx` prevents scrolling into the
+ * not scrollable. Keeping its height distinct from `coveredHeightPx()` prevents scrolling into the
  * padding or promoting a generation with no visible tile.
  */
 export type ContentHeightPx = number & Brand<"contentHeight">;
@@ -31,7 +29,6 @@ export type ContentHeightPx = number & Brand<"contentHeight">;
 export const NO_CONTENT_HEIGHT = 0 as ContentHeightPx;
 
 const asTileAlignedPx = (n: number): TileAlignedPx => n as TileAlignedPx;
-const asCoveredHeightPx = (n: number): CoveredHeightPx => n as CoveredHeightPx;
 const asContentHeightPx = (n: number): ContentHeightPx => n as ContentHeightPx;
 const asCellAlignedPx = (n: number): CellAlignedPx => n as CellAlignedPx;
 const asScrollAlignedPx = (n: number): ScrollAlignedPx => n as ScrollAlignedPx;
@@ -53,6 +50,8 @@ export function contentRows(rows: number): number {
  * the render scale downscales).
  */
 export const CSS_SCALE = 2;
+
+export const REDUCED_SCALE = 1;
 
 /** Rounding only affects the bottom placement, where a half-pixel overhang cannot form a seam. */
 export function toImagePx(screenPx: number, renderScale: number): number {
@@ -76,7 +75,7 @@ const MAX_TILE_PX = 4096;
 export function tileHeightPx(cellHpx: number, contentRows: number): TileAlignedPx {
   const unit = tileAlign(cellHpx);
   const capped = Math.floor(MAX_TILE_PX / unit) * unit;
-  const screenful = Math.ceil((Math.max(0, contentRows) * cellHpx) / unit) * unit;
+  const screenful = Math.ceil((contentRows * cellHpx) / unit) * unit;
   return asTileAlignedPx(Math.max(unit, Math.min(screenful, capped)));
 }
 
@@ -97,7 +96,8 @@ export function computeTiles(documentHeightPx: number, cellHpx: number, contentR
   }
   const th = tileHeightPx(cellHpx, contentRows);
   const unit = tileAlign(cellHpx);
-  const paddedH = Math.ceil(Math.max(0, documentHeightPx) / unit) * unit;
+  const clampedDocumentHeightPx = Math.max(0, documentHeightPx);
+  const paddedH = Math.ceil(clampedDocumentHeightPx / unit) * unit;
   const tiles: Tile[] = [];
   let y = 0;
   while (y < paddedH && tiles.length < MAX_TILES) {
@@ -105,7 +105,7 @@ export function computeTiles(documentHeightPx: number, cellHpx: number, contentR
     tiles.push({ topPx: asTileAlignedPx(y), heightPx: asTileAlignedPx(height) });
     y += height;
   }
-  const cellPadded = Math.ceil(Math.max(0, documentHeightPx) / cellHpx) * cellHpx;
+  const cellPadded = Math.ceil(clampedDocumentHeightPx / cellHpx) * cellHpx;
   return {
     tiles,
     truncated: y < paddedH,
@@ -113,9 +113,9 @@ export function computeTiles(documentHeightPx: number, cellHpx: number, contentR
   };
 }
 
-export function coveredHeightPx(tiles: Tile[]): CoveredHeightPx {
+export function coveredHeightPx(tiles: Tile[]): number {
   const last = tiles[tiles.length - 1];
-  return asCoveredHeightPx(last ? last.topPx + last.heightPx : 0);
+  return last ? last.topPx + last.heightPx : 0;
 }
 
 /** Round up to a scroll unit so the document tail remains reachable. */

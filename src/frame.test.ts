@@ -8,7 +8,7 @@ const ESC = "\x1b";
 function makeView(): ViewState {
   const { tiles, contentHeightPx } = computeTiles(300, 10, 50);
   return {
-    geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 800, viewportWidthCssPx: 400, renderScale: 2, relayOverflow: false, maxResident: 64 },
+    geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 800, viewportWidthCssPx: 400, renderScale: 2, exceedsFrameLimit: false, maxResident: 64 },
     scrollPx: SCROLL_TOP,
     displayGen: 1,
     tiles,
@@ -87,7 +87,7 @@ describe("source rect when downscaled", () => {
   function reducedView(): ViewState {
     const { tiles, contentHeightPx } = computeTiles(3000, 10, 50);
     return {
-      geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 400, viewportWidthCssPx: 400, renderScale: 1, relayOverflow: false, maxResident: 64 },
+      geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 400, viewportWidthCssPx: 400, renderScale: 1, exceedsFrameLimit: false, maxResident: 64 },
       scrollPx: SCROLL_TOP,
       displayGen: 1,
       tiles,
@@ -117,7 +117,7 @@ describe("source rect when downscaled", () => {
 
   test("overflowing even downscaled is distinguished as \"too wide\" (never passed off as low-res)", () => {
     const v = reducedView();
-    const over = { ...v, geometry: { ...v.geometry, relayOverflow: true } };
+    const over = { ...v, geometry: { ...v.geometry, exceedsFrameLimit: true } };
     const { escape } = renderFrame(over, "a.md", []);
     expect(escape).toContain("too wide");
     expect(escape).not.toContain("low-res");

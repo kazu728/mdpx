@@ -233,23 +233,3 @@ describe("Term parser resynchronization (unterminated sequences)", () => {
     expect(r.keys).toEqual([lines(1)]);
   });
 });
-
-describe("Term.geometry wiring", () => {
-  const cell = { cellHpx: 31, cellWpx: 14 };
-
-  test("an unrelayed terminal stays at 1:1 with imgWidthPx matching the screen width", () => {
-    const g = new Term().geometry(cell, false);
-    expect(g.renderScale).toBe(2);
-    expect(g.relayOverflow).toBe(false);
-    expect(g.imgWidthPx).toBe(g.cols * cell.cellWpx);
-  });
-
-  test("a width that does not fit a herdr pane downscales, halving imgWidthPx too", () => {
-    const full = new Term().geometry(cell, false);
-    const relayed = new Term().geometry(cell, true);
-    if (relayed.renderScale === 2) return;
-    expect(relayed.renderScale).toBe(1);
-    expect(relayed.imgWidthPx).toBe(Math.round((full.cols * cell.cellWpx) / 2));
-    expect(relayed.viewportWidthCssPx).toBe(full.viewportWidthCssPx);
-  });
-});

@@ -14,25 +14,7 @@ import {
   type Tile,
 } from "./viewport.ts";
 import { imageId } from "./kitty.ts";
-
-export interface Geometry {
-  rows: number;
-  cols: number;
-  cellHpx: number;
-  imgWidthPx: number;
-  viewportWidthCssPx: number;
-  /**
-   * The screenshot's deviceScaleFactor. CSS_SCALE at 1:1. Geometries that would not fit
-   * herdr's 32 MiB drop to 1, halving the image in both directions and letting kitty scale the
-   * placement back up.
-   */
-  renderScale: number;
-  /**
-   * True when the geometry still exceeds herdr's relay limit after downscaling.
-   */
-  relayOverflow: boolean;
-  maxResident: number;
-}
+import type { Clip, Geometry } from "./geometry.ts";
 
 export type ScrollDelta =
   | { kind: "lines"; n: number }
@@ -47,13 +29,6 @@ export type SchedulerEvent =
   | { type: "renderDone"; gen: number; documentHeightPx: number }
   | { type: "renderFailed"; gen: number }
   | { type: "tileReady"; gen: number; tileIndex: number };
-
-export interface Clip {
-  xCssPx: number;
-  yCssPx: number;
-  widthCssPx: number;
-  heightCssPx: number;
-}
 
 export type Action =
   | { type: "render"; gen: number }

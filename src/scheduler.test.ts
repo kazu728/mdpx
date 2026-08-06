@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { Scheduler, type Action, type GenView, type Geometry } from "./scheduler.ts";
+import { Scheduler, type Action, type GenView } from "./scheduler.ts";
+import type { Geometry } from "./geometry.ts";
 import { imageId } from "./kitty.ts";
 import { visibleTiles } from "./viewport.ts";
 
-const GEO: Geometry = { rows: 51, cols: 10, cellHpx: 10, imgWidthPx: 200, viewportWidthCssPx: 100, renderScale: 2, relayOverflow: false, maxResident: 64 };
+const GEO: Geometry = { rows: 51, cols: 10, cellHpx: 10, imgWidthPx: 200, viewportWidthCssPx: 100, renderScale: 2, exceedsFrameLimit: false, maxResident: 64 };
 const shoots = (as: Action[]) =>
   as.filter((a): a is Action & { type: "shoot" } => a.type === "shoot").map((a) => a.tileIndex);
 const has = (as: Action[], t: Action["type"]) => as.some((a) => a.type === t);
@@ -127,7 +128,7 @@ describe("scrolling when downscaled", () => {
     imgWidthPx: 1512,
     viewportWidthCssPx: 1512,
     renderScale: 1,
-    relayOverflow: false,
+    exceedsFrameLimit: false,
     maxResident: 64,
   };
 

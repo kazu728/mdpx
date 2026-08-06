@@ -20,7 +20,6 @@ export function buildLineMap(
   documentHeightCssPx: number,
   laidOutSourceLines: ReadonlySet<number> = new Set(),
 ): LineMap {
-  const clampedSourceLineCount = Math.max(1, Math.floor(sourceLineCount));
   const clampedDocumentHeightCssPx = Math.max(0, documentHeightCssPx);
   const monotonicAnchors: Anchor[] = [{ sourceLine: 1, topCssPx: 0 }];
   for (const anchor of anchors) {
@@ -41,17 +40,17 @@ export function buildLineMap(
   // line hit at a single point only).
   const last = monotonicAnchors[monotonicAnchors.length - 1]!;
   if (
-    clampedSourceLineCount + 1 > last.sourceLine &&
+    sourceLineCount + 1 > last.sourceLine &&
     clampedDocumentHeightCssPx > last.topCssPx
   ) {
     monotonicAnchors.push({
-      sourceLine: clampedSourceLineCount + 1,
+      sourceLine: sourceLineCount + 1,
       topCssPx: clampedDocumentHeightCssPx,
     });
   }
   return {
     anchors: monotonicAnchors,
-    sourceLineCount: clampedSourceLineCount,
+    sourceLineCount,
     laidOutSourceLines,
   };
 }
