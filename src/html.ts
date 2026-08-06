@@ -1,12 +1,28 @@
+import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import MarkdownIt from "markdown-it";
 import taskLists from "markdown-it-task-lists";
 import katex from "@vscode/markdown-it-katex";
 import { createHighlighter, type Highlighter, type ShikiTransformer } from "shiki";
-import type { Assets } from "./assets.ts";
 import { countSourceLines } from "./linemap.ts";
 import type { Theme } from "./theme.ts";
+
+const require = createRequire(import.meta.url);
+
+export interface Assets {
+  githubMarkdownCss: string;
+  katexCss: string;
+  mermaidJs: string;
+}
+
+export function resolveAssets(theme: Theme): Assets {
+  return {
+    githubMarkdownCss: require.resolve(`github-markdown-css/github-markdown-${theme}.css`),
+    katexCss: require.resolve("katex/dist/katex.min.css"),
+    mermaidJs: require.resolve("mermaid/dist/mermaid.min.js"),
+  };
+}
 
 type Token = ReturnType<MarkdownIt["parse"]>[number];
 

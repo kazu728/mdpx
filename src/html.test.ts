@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveAssets } from "./assets.ts";
-import { buildHtml } from "./html.ts";
+import { buildHtml, resolveAssets } from "./html.ts";
 import type { Theme } from "./theme.ts";
 
 const MD = `# heading
