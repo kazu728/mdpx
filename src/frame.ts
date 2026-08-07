@@ -1,5 +1,5 @@
 import { deletePlacement, imageId, place } from "./kitty.ts";
-import { sanitizeTerminalLine, truncateToDisplayWidth } from "./text.ts";
+import { displayWidth, sanitizeTerminalLine, truncateToDisplayWidth } from "./text.ts";
 import { CSS_SCALE, contentRows, maxScrollPx, toImagePx, visibleTiles } from "./viewport.ts";
 import type { ViewState } from "./scheduler.ts";
 
@@ -79,11 +79,11 @@ function statusBar(view: ViewState, filename: string, pendingVisible: boolean): 
   const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");
   const right = "q:quit";
   const cols = geometry.cols;
-  const { text, displayWidth } = truncateToDisplayWidth(left, cols);
-  const rightW = Bun.stringWidth(right);
+  const { text, displayWidth: leftW } = truncateToDisplayWidth(left, cols);
+  const rightW = displayWidth(right);
   const line =
-    displayWidth + 1 + rightW <= cols
-      ? text + " ".repeat(cols - displayWidth - rightW) + right
-      : text + " ".repeat(cols - displayWidth);
+    leftW + 1 + rightW <= cols
+      ? text + " ".repeat(cols - leftW - rightW) + right
+      : text + " ".repeat(cols - leftW);
   return `${ESC}[7m${line}${ESC}[0m`;
 }

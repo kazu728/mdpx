@@ -1,6 +1,7 @@
 // The direction is only mdpx → nvim, so no mutual-trigger suppression is needed.
 // The feature is best-effort: failures degrade to a silent no-op and never block rendering or scrolling.
 
+import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -108,31 +109,24 @@ export async function sendCursor(
   signal?: AbortSignal,
 ): Promise<JumpResult> {
   if (signal?.aborted) return "failed";
-  const spawn = () => {
-    try {
-      return Bun.spawn(["nvim", "--server", socket, "--remote-expr", jumpExpr(mdPath, line)], {
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "ignore",
-      });
-    } catch {
-      return null;
-    }
-  };
-  const proc = spawn();
-  if (!proc) return "failed";
+  const proc = spawn("nvim", ["--server", socket, "--remote-expr", jumpExpr(mdPath, line)], {
+    stdio: ["ignore", "pipe", "ignore"],
+  });
   const kill = () => {
-    try {
-      proc.kill();
-    } catch {}
+    proc.kill();
   };
   const timer = setTimeout(kill, NVIM_ROUND_TRIP_TIMEOUT_MS);
   signal?.addEventListener("abort", kill, { once: true });
   try {
-    const stdout = await new Response(proc.stdout).text();
-    return (await proc.exited) === 0 ? parseJumpResult(stdout) : "failed";
-  } catch {
-    return "failed";
+    return await new Promise<JumpResult>((resolve) => {
+      let stdout = "";
+      proc.stdout!.setEncoding("utf8");
+      proc.stdout!.on("data", (chunk: string) => {
+        stdout += chunk;
+      });
+      proc.on("error", () => resolve("failed"));
+      proc.on("close", (code) => resolve(code === 0 ? parseJumpResult(stdout) : "failed"));
+    });
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", kill);

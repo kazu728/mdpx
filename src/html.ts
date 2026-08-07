@@ -3,12 +3,16 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import MarkdownIt from "markdown-it";
 import taskLists from "markdown-it-task-lists";
-import katex from "@vscode/markdown-it-katex";
 import { createHighlighter, type Highlighter, type ShikiTransformer } from "shiki";
 import { countSourceLines } from "./linemap.ts";
 import type { Theme } from "./theme.ts";
 
 const require = createRequire(import.meta.url);
+
+// The plugin is CJS assigning exports.default, which Node's ESM import leaves wrapped and md.use rejects.
+const katex: typeof import("@vscode/markdown-it-katex").default = require(
+  "@vscode/markdown-it-katex",
+).default;
 
 export interface Assets {
   githubMarkdownCss: string;
