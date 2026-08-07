@@ -4,8 +4,11 @@ export interface GraphicsLimits {
   storageBytes: number;
 }
 
-// herdr relays full tile transfers (`a=t`), not clipped placements, so a frame's cost depends on
-// tile geometry. Its limits come from `src/protocol/wire.rs` and cannot be configured.
+// herdr dedupes uploads by content signature, so scrolling within one generation only re-places
+// (`a=p`) and stays cheap. A new generation gives every tile a fresh image ID, so its first frame
+// carries every visible tile's bytes — that worst case is what these budgets bound. Neither limit
+// is configurable: frameBytes is MAX_GRAPHICS_FRAME_SIZE (herdr `src/protocol/wire.rs`),
+// storageBytes is KITTY_IMAGE_STORAGE_LIMIT_BYTES (herdr `src/ghostty/mod.rs`).
 const HERDR_RELAY: GraphicsLimits = {
   frameBytes: 32 * 1024 * 1024,
   storageBytes: 64 * 1024 * 1024,
