@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   alignedTileHeightPx,
+  backfillOrder,
   clampScroll,
   computeTiles,
   coveredHeightPx,
@@ -192,6 +193,15 @@ describe("visibleTiles", () => {
     expect(p.reduce((rows, placement) => rows + placement.destinationRows, 0)).toBeLessThanOrEqual(
       50,
     );
+  });
+});
+
+describe("backfillOrder", () => {
+  test("an equidistant tie follows the scroll direction", () => {
+    const { tiles, contentHeightPx } = computeScreenfulTiles(1500, 10, 50);
+    const scroll = clampScroll(500, contentHeightPx, 50, 10, 2);
+    expect(backfillOrder(scroll, 50, 10, tiles, 1).slice(0, 3)).toEqual([1, 2, 0]);
+    expect(backfillOrder(scroll, 50, 10, tiles, -1).slice(0, 3)).toEqual([1, 0, 2]);
   });
 });
 

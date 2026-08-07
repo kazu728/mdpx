@@ -378,6 +378,29 @@ describe("resident tile budget", () => {
     expect(s.viewState().phase).toBe("ready");
   });
 
+  test("scrolling toward a tile prefetches it before it becomes visible", () => {
+    const s = new Scheduler({ ...GEO, maxResident: 2 });
+    s.dispatch({ type: "trigger" });
+    s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 1500 });
+    s.dispatch({ type: "tileReady", gen: 1, tileIndex: 0 });
+    s.dispatch({ type: "tileReady", gen: 1, tileIndex: 1 });
+
+    expect(shoots(s.dispatch({ type: "key", delta: { kind: "halfpage", dir: 1 } }))).toEqual([]);
+    const actions = s.dispatch({ type: "key", delta: { kind: "halfpage", dir: 1 } });
+    const view = shown(s);
+    expect(visibleTiles(view.scrollPx, 50, 10, view.tiles).map((p) => p.tileIndex)).toEqual([1]);
+    expect(actions.findIndex((a) => a.type === "redraw")).toBeLessThan(
+      actions.findIndex((a) => a.type === "deleteGen"),
+    );
+    expect(actions.findIndex((a) => a.type === "deleteGen")).toBeLessThan(
+      actions.findIndex((a) => a.type === "shoot"),
+    );
+    expect(actions.filter((a) => a.type === "deleteGen")).toEqual([
+      { type: "deleteGen", imageIds: [imageId(1, 0)] },
+    ]);
+    expect(shoots(actions)).toEqual([2]);
+  });
+
   test("a save during a recapture yields to the new generation (no waiting on images about to be dropped)", () => {
     const s = displayed();
     s.dispatch({ type: "key", delta: { kind: "bottom" } });

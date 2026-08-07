@@ -11,6 +11,7 @@ import {
   visibleTiles,
   type ContentHeightPx,
   type ScrollAlignedPx,
+  type ScrollDirection,
   type Tile,
 } from "./viewport.ts";
 import { imageId } from "./kitty.ts";
@@ -173,22 +174,27 @@ export class Scheduler {
     const { cellHpx, renderScale } = this.geometry;
     const contentHeightPx = this.displayGen.contentHeightPx;
     let px: number = this.scrollPx;
+    let direction: ScrollDirection = 0;
     // Keep movement on the scroll unit so clampScroll cannot introduce drift.
     const unit = scrollUnitPx(cellHpx, renderScale);
     switch (delta.kind) {
       case "lines":
         px += delta.n * unit;
+        direction = Math.sign(delta.n) as ScrollDirection;
         break;
       case "halfpage": {
         const half = Math.max(1, Math.floor(this.contentRows / 2)) * cellHpx;
         px += delta.dir * Math.max(unit, Math.round(half / unit) * unit);
+        direction = delta.dir;
         break;
       }
       case "top":
         px = 0;
+        direction = -1;
         break;
       case "bottom":
         px = maxScrollPx(contentHeightPx, this.contentRows, cellHpx, renderScale);
+        direction = 1;
         break;
     }
     this.scrollPx = clampScroll(px, contentHeightPx, this.contentRows, cellHpx, renderScale);
@@ -199,24 +205,40 @@ export class Scheduler {
         pg === this.displayGen
           ? this.scrollPx
           : clampScroll(this.scrollPx, pg.contentHeightPx, this.contentRows, cellHpx, renderScale);
-      this.shootQueue = this.queueAround(pg, pgScroll);
+      this.shootQueue = this.queueAround(pg, pgScroll, direction);
       return [{ type: "redraw" }];
     }
-    return [{ type: "redraw" }, ...this.refetchVisible()];
+    return [{ type: "redraw" }, ...this.refetchAround(direction)];
   }
 
-  private queueAround(g: GenState, scroll: ScrollAlignedPx): number[] {
-    const order = backfillOrder(scroll, this.contentRows, this.geometry.cellHpx, g.tiles);
-    return order.slice(0, this.geometry.maxResident);
+  private queueAround(
+    g: GenState,
+    scroll: ScrollAlignedPx,
+    direction: ScrollDirection = 0,
+  ): number[] {
+    // Read-ahead must never take a queue slot away from a tile needed by the current frame.
+    const visible = visibleTiles(scroll, this.contentRows, this.geometry.cellHpx, g.tiles).map(
+      (placement) => placement.tileIndex,
+    );
+    const visibleSet = new Set(visible);
+    const nearby = backfillOrder(
+      scroll,
+      this.contentRows,
+      this.geometry.cellHpx,
+      g.tiles,
+      direction,
+    ).filter((tileIndex) => !visibleSet.has(tileIndex));
+    return [...visible, ...nearby].slice(0, this.geometry.maxResident);
   }
 
-  private refetchVisible(): Action[] {
+  private refetchAround(direction: ScrollDirection): Action[] {
     const g = this.displayGen;
     if (!g || this.pipeGen || g.tiles.length === 0) return [];
-    if (this.allVisibleResident(g, this.scrollPx)) return [];
+    const queue = this.queueAround(g, this.scrollPx, direction);
+    if (queue.every((tileIndex) => g.resident.has(tileIndex))) return [];
     this.pipeGen = g;
     this.refetchingDisplayedGeneration = true;
-    this.shootQueue = this.queueAround(g, this.scrollPx);
+    this.shootQueue = queue;
     return this.drive();
   }
 
@@ -271,7 +293,7 @@ export class Scheduler {
       const shown = this.displayGen;
       if (shown && shown.gen === gen) {
         shown.resident.add(tileIndex);
-        const freed = this.evictBeyondBudget(shown);
+        const freed = this.evictToSize(shown, this.geometry.maxResident);
         const actions: Action[] = [{ type: "redraw" }];
         if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
         return actions;
@@ -281,27 +303,39 @@ export class Scheduler {
     this.shootInFlight = false;
     g.resident.add(tileIndex);
     if (g.invalidatedByResize) return this.abortInvalidatedGeneration();
-    const freed = this.evictBeyondBudget(g);
+    const freed = this.evictToSize(g, this.geometry.maxResident);
     const actions = this.drive();
     const withRedraw = actions[0]?.type === "redraw" ? actions : [{ type: "redraw" } as Action, ...actions];
     return freed.length ? [...withRedraw, { type: "deleteGen", imageIds: freed }] : withRedraw;
   }
 
+  private scrollFor(g: GenState): ScrollAlignedPx {
+    if (g === this.displayGen) return this.scrollPx;
+    return clampScroll(
+      this.scrollPx,
+      g.contentHeightPx,
+      this.contentRows,
+      this.geometry.cellHpx,
+      this.geometry.renderScale,
+    );
+  }
+
   // Visible tiles are never evicted because doing so would punch a black hole in the current frame.
-  private evictBeyondBudget(g: GenState): number[] {
-    const budget = this.geometry.maxResident;
-    if (g.resident.size <= budget) return [];
-    const scroll = g === this.displayGen ? this.scrollPx : SCROLL_TOP;
+  private evictToSize(g: GenState, maxSize: number): number[] {
+    if (g.resident.size <= maxSize) return [];
+    const scroll = this.scrollFor(g);
     const visible = new Set(
-      visibleTiles(scroll, this.contentRows, this.geometry.cellHpx, g.tiles).map((p) => p.tileIndex),
+      visibleTiles(scroll, this.contentRows, this.geometry.cellHpx, g.tiles).map(
+        (placement) => placement.tileIndex,
+      ),
     );
     const order = backfillOrder(scroll, this.contentRows, this.geometry.cellHpx, g.tiles);
     const freed: number[] = [];
-    for (let i = order.length - 1; i >= 0 && g.resident.size > budget; i--) {
-      const t = order[i]!;
-      if (!g.resident.has(t) || visible.has(t)) continue;
-      g.resident.delete(t);
-      freed.push(imageId(g.gen, t));
+    for (let i = order.length - 1; i >= 0 && g.resident.size > maxSize; i--) {
+      const tileIndex = order[i]!;
+      if (!g.resident.has(tileIndex) || visible.has(tileIndex)) continue;
+      g.resident.delete(tileIndex);
+      freed.push(imageId(g.gen, tileIndex));
     }
     return freed;
   }
@@ -344,6 +378,9 @@ export class Scheduler {
     if (!this.shootInFlight) {
       const next = this.nextShoot();
       if (next !== null) {
+        // The terminal receives the transfer before tileReady, so reserve decoded storage first.
+        const freed = this.evictToSize(g, this.geometry.maxResident - 1);
+        if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
         this.shootInFlight = true;
         actions.push(this.shootAction(g, next));
       } else if (this.displayGen === g) {

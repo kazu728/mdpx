@@ -16,6 +16,7 @@ export type TileAlignedPx = number & Brand<"tileAligned">;
 export type CellAlignedPx = number & Brand<"cellAligned">;
 
 export type ScrollAlignedPx = number & Brand<"cellAligned" | "scrollUnitAligned">;
+export type ScrollDirection = -1 | 0 | 1;
 
 export const SCROLL_TOP = 0 as ScrollAlignedPx;
 
@@ -196,6 +197,7 @@ export function backfillOrder(
   contentRows: number,
   cellHpx: number,
   tiles: Tile[],
+  direction: ScrollDirection = 0,
 ): number[] {
   const center = scrollPx + (contentRows * cellHpx) / 2;
   return tiles
@@ -203,6 +205,6 @@ export function backfillOrder(
       index,
       dist: Math.abs(tile.topPx + tile.heightPx / 2 - center),
     }))
-    .sort((a, b) => a.dist - b.dist || a.index - b.index)
+    .sort((a, b) => a.dist - b.dist || direction * (b.index - a.index) || a.index - b.index)
     .map((t) => t.index);
 }
