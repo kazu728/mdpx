@@ -12,6 +12,15 @@ describe("resolveGeometry", () => {
     expect(g.renderScale).toBe(2);
     expect(g.exceedsFrameLimit).toBe(false);
     expect(g.imgWidthPx).toBe(216 * cell.cellWpx);
+    expect<number>(g.tileHeightPx).toBe(4092);
+  });
+
+  test("the measured relayed geometry keeps one directional read-ahead tile resident", () => {
+    const g = resolveGeometry({ cols: 216, rows: 65 }, cell, relayed);
+    expect(g.renderScale).toBe(2);
+    expect<number>(g.tileHeightPx).toBe(32 * cell.cellHpx);
+    expect(g.maxResident).toBe(4);
+    expect(g.exceedsFrameLimit).toBe(false);
   });
 
   test("a width that does not fit the relay frame downscales, halving imgWidthPx too", () => {
@@ -22,5 +31,36 @@ describe("resolveGeometry", () => {
     expect(reduced.renderScale).toBe(1);
     expect(reduced.imgWidthPx).toBe(Math.round((screen.cols * cell.cellWpx) / 2));
     expect(reduced.viewportWidthCssPx).toBe(full.viewportWidthCssPx);
+  });
+
+  test("a directly connected terminal does not downscale even when it is very wide", () => {
+    const g = resolveGeometry({ cols: 2000, rows: 65 }, cell, direct);
+    expect(g.renderScale).toBe(2);
+    expect(g.exceedsFrameLimit).toBe(false);
+  });
+
+  test("a width that does not fit even downscaled reports the frame overflow", () => {
+    const g = resolveGeometry({ cols: 2000, rows: 65 }, cell, relayed);
+    expect(g.renderScale).toBe(1);
+    expect(g.exceedsFrameLimit).toBe(true);
+  });
+
+  test("an odd one-row viewport stays full resolution when reduced scrolling cannot reach its tail", () => {
+    const g = resolveGeometry(
+      { cols: 10000, rows: 2 },
+      { cellHpx: 997, cellWpx: 1 },
+      relayed,
+    );
+    expect(g.renderScale).toBe(2);
+  });
+
+  test("an even one-row viewport may downscale because its scroll unit still fits", () => {
+    const g = resolveGeometry(
+      { cols: 8000, rows: 2 },
+      { cellHpx: 1000, cellWpx: 1 },
+      relayed,
+    );
+    expect(g.renderScale).toBe(1);
+    expect(g.exceedsFrameLimit).toBe(false);
   });
 });

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { detectGraphicsLimits, fitsGraphicsFrame, pickRenderScale } from "./capacity.ts";
+import {
+  detectGraphicsLimits,
+  fitsGraphicsFrame,
+  residentTileCapacity,
+} from "./capacity.ts";
 
 const RELAYED = detectGraphicsLimits({ HERDR_ENV: "1" });
 const DIRECT = detectGraphicsLimits({});
@@ -42,71 +46,8 @@ describe("fitsGraphicsFrame", () => {
   });
 });
 
-describe("pickRenderScale", () => {
-  const base = { limits: RELAYED };
-  const geo = (cols: number, contentRows: number) => ({
-    ...base,
-    viewportWidthCssPx: (cols * 14) / 2,
-    tileHeightPx: contentRows * 31,
-    viewportHeightPx: contentRows * 31,
-    reducedScrollUnitPx: 62,
-  });
-
-  test("a directly connected terminal always stays at 1:1 regardless of width", () => {
-    expect(pickRenderScale({ ...geo(400, 64), limits: DIRECT })).toEqual({
-      renderScale: 2,
-      exceedsFrameLimit: false,
-    });
-  });
-
-  test("a width that fits stays at 1:1 (degrade only when necessary)", () => {
-    expect(pickRenderScale(geo(100, 64))).toEqual({ renderScale: 2, exceedsFrameLimit: false });
-  });
-
-  test("the measured environment (216 cols) stays at 1:1 — one screen fits one tile, so nothing degrades", () => {
-    expect(pickRenderScale(geo(216, 64))).toEqual({ renderScale: 2, exceedsFrameLimit: false });
-  });
-
-  test("a width that does not fit at 1:1 drops to downscaled", () => {
-    expect(pickRenderScale(geo(300, 64))).toEqual({ renderScale: 1, exceedsFrameLimit: false });
-  });
-
-  test("a width that does not fit even downscaled raises exceedsFrameLimit (never passed off as low-res)", () => {
-    expect(pickRenderScale(geo(2000, 64))).toEqual({ renderScale: 1, exceedsFrameLimit: true });
-  });
-
-  test("no downscaling when the unit would exceed the viewport (it would make the end unreachable)", () => {
-    const g = {
-      ...base,
-      viewportWidthCssPx: 5000,
-      tileHeightPx: 997,
-      viewportHeightPx: 997,
-      reducedScrollUnitPx: 1994,
-    };
-    expect(pickRenderScale(g).renderScale).toBe(2);
-  });
-
-  test("an even cell height can downscale even with a one-row content area (the unit does not widen)", () => {
-    const g = {
-      ...base,
-      viewportWidthCssPx: 2000,
-      tileHeightPx: 2000,
-      viewportHeightPx: 1000,
-      reducedScrollUnitPx: 1000,
-    };
-    expect(pickRenderScale(g)).toEqual({ renderScale: 1, exceedsFrameLimit: false });
-  });
-
-  test("a geometry whose screenful exceeds the tile height is judged by the tiles actually needed", () => {
-    const g = {
-      ...base,
-      viewportWidthCssPx: 1922,
-      tileHeightPx: 4092,
-      viewportHeightPx: 8000,
-      reducedScrollUnitPx: 62,
-    };
-    expect(fitsGraphicsFrame(RELAYED, g.viewportWidthCssPx, 4092 / 2, 1)).toBe(true);
-    expect(fitsGraphicsFrame(RELAYED, g.viewportWidthCssPx, 4092 / 2, 2)).toBe(false);
-    expect(pickRenderScale(g)).toEqual({ renderScale: 1, exceedsFrameLimit: true });
+describe("residentTileCapacity", () => {
+  test("leaves twenty percent of decoded storage for terminal bookkeeping", () => {
+    expect(residentTileCapacity(16 * 1024 * 1024, RELAYED)).toBe(3);
   });
 });

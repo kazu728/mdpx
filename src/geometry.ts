@@ -1,14 +1,16 @@
 import {
   detectGraphicsLimits,
+  fitsGraphicsFrame,
   maxResidentTiles,
   maxTilesInFrame,
-  pickRenderScale,
+  residentTileCapacity,
   type GraphicsLimits,
 } from "./capacity.ts";
 import {
   alignedTileHeightPx,
   CSS_SCALE,
   contentRows,
+  maximumTileHeightPx,
   REDUCED_SCALE,
   scrollUnitPx,
   toImagePx,
@@ -43,6 +45,138 @@ export interface Clip {
   heightCssPx: number;
 }
 
+interface CapturePlan {
+  renderScale: number;
+  tileHeightPx: TileAlignedPx;
+  exceedsFrameLimit: boolean;
+  maxResident: number;
+}
+
+function tileHeightCandidates(cellHpx: number): TileAlignedPx[] {
+  const maximum = maximumTileHeightPx(cellHpx);
+  const candidates: TileAlignedPx[] = [];
+  let previous = 0;
+  for (let rows = Math.floor(maximum / cellHpx); rows >= 1; rows--) {
+    const height = alignedTileHeightPx(cellHpx, rows);
+    if (height === previous) continue;
+    candidates.push(height);
+    previous = height;
+  }
+  return candidates;
+}
+
+function capturePlanAtScale(
+  screenWidthPx: number,
+  viewportHeightPx: number,
+  cellHpx: number,
+  renderScale: number,
+  limits: GraphicsLimits,
+  requireReadAhead: boolean,
+): CapturePlan | null {
+  const imgWidthPx = toImagePx(screenWidthPx, renderScale);
+  for (const tileHeightPx of tileHeightCandidates(cellHpx)) {
+    const tilesInFrame = maxTilesInFrame(viewportHeightPx, tileHeightPx);
+    if (
+      !fitsGraphicsFrame(
+        limits,
+        imgWidthPx,
+        toImagePx(tileHeightPx, renderScale),
+        tilesInFrame,
+      )
+    ) {
+      continue;
+    }
+    const tileBytes = imgWidthPx * toImagePx(tileHeightPx, renderScale) * 4;
+    const visibleTileFloor = tilesInFrame + 1;
+    if (
+      requireReadAhead &&
+      residentTileCapacity(tileBytes, limits) < visibleTileFloor + 1
+    ) {
+      continue;
+    }
+    return {
+      renderScale,
+      tileHeightPx,
+      exceedsFrameLimit: false,
+      maxResident: maxResidentTiles(tileBytes, limits, visibleTileFloor),
+    };
+  }
+  return null;
+}
+
+function resolveCapturePlan(
+  screenWidthPx: number,
+  viewportHeightPx: number,
+  contentRowCount: number,
+  cellHpx: number,
+  limits: GraphicsLimits,
+): CapturePlan {
+  const fullResolution = capturePlanAtScale(
+    screenWidthPx,
+    viewportHeightPx,
+    cellHpx,
+    CSS_SCALE,
+    limits,
+    true,
+  );
+  if (fullResolution) return fullResolution;
+
+  const fullResolutionWithoutReadAhead = capturePlanAtScale(
+    screenWidthPx,
+    viewportHeightPx,
+    cellHpx,
+    CSS_SCALE,
+    limits,
+    false,
+  );
+  if (fullResolutionWithoutReadAhead) return fullResolutionWithoutReadAhead;
+
+  const canReduce =
+    limits.frameBytes !== null &&
+    viewportHeightPx >= scrollUnitPx(cellHpx, REDUCED_SCALE);
+  if (canReduce) {
+    const reduced =
+      capturePlanAtScale(
+        screenWidthPx,
+        viewportHeightPx,
+        cellHpx,
+        REDUCED_SCALE,
+        limits,
+        true,
+      ) ??
+      capturePlanAtScale(
+        screenWidthPx,
+        viewportHeightPx,
+        cellHpx,
+        REDUCED_SCALE,
+        limits,
+        false,
+      );
+    if (reduced) return reduced;
+  }
+
+  const renderScale = canReduce ? REDUCED_SCALE : CSS_SCALE;
+  const tileHeightPx = alignedTileHeightPx(cellHpx, contentRowCount);
+  const imgWidthPx = toImagePx(screenWidthPx, renderScale);
+  const imageTileHeightPx = toImagePx(tileHeightPx, renderScale);
+  const tilesInFrame = maxTilesInFrame(viewportHeightPx, tileHeightPx);
+  return {
+    renderScale,
+    tileHeightPx,
+    exceedsFrameLimit: !fitsGraphicsFrame(
+      limits,
+      imgWidthPx,
+      imageTileHeightPx,
+      tilesInFrame,
+    ),
+    maxResident: maxResidentTiles(
+      imgWidthPx * imageTileHeightPx * 4,
+      limits,
+      tilesInFrame + 1,
+    ),
+  };
+}
+
 export function resolveGeometry(
   screen: ScreenSize,
   cell: CellSize,
@@ -51,33 +185,24 @@ export function resolveGeometry(
   const { cols, rows } = screen;
   const screenWidthPx = cols * cell.cellWpx;
   const viewportWidthCssPx = Math.round(screenWidthPx / CSS_SCALE);
-  const viewportHeightPx = contentRows(rows) * cell.cellHpx;
-  const tileHeightPx = alignedTileHeightPx(cell.cellHpx, contentRows(rows));
-  const { renderScale, exceedsFrameLimit } = pickRenderScale({
-    viewportWidthCssPx,
-    tileHeightPx,
+  const contentRowCount = contentRows(rows);
+  const viewportHeightPx = contentRowCount * cell.cellHpx;
+  const plan = resolveCapturePlan(
+    screenWidthPx,
     viewportHeightPx,
-    reducedScrollUnitPx: scrollUnitPx(cell.cellHpx, REDUCED_SCALE),
+    contentRowCount,
+    cell.cellHpx,
     limits,
-  });
+  );
   // At 1:1 the real image can be 1 px wider than the terminal, and cropping that pixel is sharper
   // than resampling the whole image.
-  const imgWidthPx = toImagePx(screenWidthPx, renderScale);
-  // The terminal holds images as decoded pixels, so the amount held follows the area, not the PNG size
-  const tileBytes = imgWidthPx * toImagePx(tileHeightPx, renderScale) * 4;
+  const imgWidthPx = toImagePx(screenWidthPx, plan.renderScale);
   return {
     rows,
     cols,
     cellHpx: cell.cellHpx,
     imgWidthPx,
     viewportWidthCssPx,
-    renderScale,
-    tileHeightPx,
-    exceedsFrameLimit,
-    maxResident: maxResidentTiles(
-      tileBytes,
-      limits,
-      maxTilesInFrame(viewportHeightPx, tileHeightPx),
-    ),
+    ...plan,
   };
 }
