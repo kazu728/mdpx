@@ -1,5 +1,3 @@
-import { cc, ptr } from "bun:ffi";
-import { fileURLToPath } from "node:url";
 import { deleteAll } from "./kitty.ts";
 import type { CellSize, ScreenSize } from "./geometry.ts";
 import type { ScrollDelta } from "./scheduler.ts";
@@ -44,28 +42,6 @@ const ST_FINAL_BYTE = 0x5c;
 const CSI_INTRODUCER = 0x5b;
 const SS3_INTRODUCER = 0x4f;
 
-// Even on terminals that never answer 16t, the cell size can be read via TIOCGWINSZ as long as the
-// PTY carries the window's pixel dimensions (ws_xpixel/ypixel) — the 16t fallback (herdr does not
-// relay 16t but does carry these).
-// ioctl is variadic and cannot be called from bun:ffi directly (see the note in winsize.c), so a
-// fixed-arity C wrapper is compiled with the TinyCC bundled with Bun and called instead. The compile
-// happens once; on failure it stays null and the caller treats the cell size as unavailable (macOS
-// only).
-function openWinsize() {
-  if (process.platform !== "darwin") return null;
-  try {
-    return cc({
-      // URL.pathname returns spaces and non-ASCII still percent-encoded, and tcc then fails with
-      // "file not found" (breaking startup under "~/my apps/" or with a non-ASCII user name).
-      source: fileURLToPath(new URL("./winsize.c", import.meta.url)),
-      symbols: { mdpx_winsize: { args: ["int", "ptr"], returns: "int" } },
-    }).symbols;
-  } catch {
-    return null;
-  }
-}
-let winsizeSyms: ReturnType<typeof openWinsize> | undefined;
-
 function validCellDimensionPx(n: number): boolean {
   return Number.isFinite(n) && n > 0 && n <= MAX_CELL_PX;
 }
@@ -75,29 +51,6 @@ export function parseCellSize(value: string | undefined): CellSize | null {
   if (!m) return null;
   const cellHpx = Number(m[1]);
   const cellWpx = Number(m[2]);
-  return validCellDimensionPx(cellHpx) && validCellDimensionPx(cellWpx)
-    ? { cellHpx, cellWpx }
-    : null;
-}
-
-export function winsizeCell(fd: number): CellSize | null {
-  if (winsizeSyms === undefined) winsizeSyms = openWinsize();
-  if (!winsizeSyms) return null;
-  const ws = new Uint16Array(4);
-  if (winsizeSyms.mdpx_winsize(fd, ptr(ws)) !== 0) return null;
-  const [rows, cols, widthPx, heightPx] = ws;
-  return cellFromWinsize(rows!, cols!, widthPx!, heightPx!);
-}
-
-export function cellFromWinsize(
-  rows: number,
-  cols: number,
-  xpixel: number,
-  ypixel: number,
-): CellSize | null {
-  if (rows <= 0 || cols <= 0 || xpixel <= 0 || ypixel <= 0) return null;
-  const cellHpx = Math.round(ypixel / rows);
-  const cellWpx = Math.round(xpixel / cols);
   return validCellDimensionPx(cellHpx) && validCellDimensionPx(cellWpx)
     ? { cellHpx, cellWpx }
     : null;
@@ -215,10 +168,6 @@ export class Term {
       this.primaryDaReplyHandler = onDa;
       this.write(`${ESC}_Gi=${GFX_PROBE_ID},s=1,v=1,a=q,t=d,f=24;AAAA${ESC}\\${ESC}[c`);
     });
-  }
-
-  queryWinsizeCell(): CellSize | null {
-    return winsizeCell(process.stdout.fd);
   }
 
   private feed(chunk: Buffer): void {

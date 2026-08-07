@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cc, ptr } from "bun:ffi";
-import { closeSync, openSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { Term, cellFromWinsize, parseCellSize, winsizeCell, type Key } from "./term.ts";
+import { Term, parseCellSize, type Key } from "./term.ts";
 
 const ESC = "\x1b";
 
@@ -37,50 +34,6 @@ describe("parseCellSize", () => {
     expect(parseCellSize("abc")).toBeNull();
     expect(parseCellSize("2000,14")).toBeNull();
     expect(parseCellSize("999999999999999999999,14")).toBeNull();
-  });
-});
-
-// Exercise the real FFI path so wiring failures do not silently become null.
-describe("winsizeCell", () => {
-  test.skipIf(process.platform !== "darwin")("derives the cell px from a PTY's dimensions, and a non-TTY fd yields null", () => {
-    const pty = cc({
-      source: fileURLToPath(new URL("./winsize.test.c", import.meta.url)),
-      symbols: { mdpx_test_pty: { args: ["u16", "u16", "u16", "u16", "ptr"], returns: "int" } },
-    }).symbols;
-    const masterAndSlaveFds = new Int32Array(2);
-    expect(pty.mdpx_test_pty(40, 100, 1400, 1240, ptr(masterAndSlaveFds))).toBe(0);
-    const [masterFd, slaveFd] = masterAndSlaveFds;
-    const file = openSync(fileURLToPath(import.meta.url), "r");
-    try {
-      expect(winsizeCell(slaveFd!)).toEqual({ cellHpx: 31, cellWpx: 14 });
-      expect(winsizeCell(file)).toBeNull();
-    } finally {
-      for (const fd of [slaveFd!, masterFd!, file]) closeSync(fd);
-    }
-  });
-
-  test.skipIf(process.platform === "darwin")("non-darwin yields null without attempting the ioctl", () => {
-    expect(winsizeCell(0)).toBeNull();
-  });
-});
-
-describe("cellFromWinsize", () => {
-  test("derives the cell px from rows/cols and xpixel/ypixel (the TIOCGWINSZ fallback)", () => {
-    expect(cellFromWinsize(65, 217, 3038, 2015)).toEqual({ cellHpx: 31, cellWpx: 14 });
-  });
-
-  test("zero pixel dimensions (a terminal that reports no pixels) yield null", () => {
-    expect(cellFromWinsize(65, 217, 0, 0)).toBeNull();
-    expect(cellFromWinsize(65, 217, 3038, 0)).toBeNull();
-  });
-
-  test("zero rows/cols yield null (never creating a division by zero)", () => {
-    expect(cellFromWinsize(0, 217, 3038, 2015)).toBeNull();
-    expect(cellFromWinsize(65, 0, 3038, 2015)).toBeNull();
-  });
-
-  test("garbled out-of-range values yield null", () => {
-    expect(cellFromWinsize(1, 1, 99999, 99999)).toBeNull();
   });
 });
 

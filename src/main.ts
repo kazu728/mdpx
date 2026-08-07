@@ -54,7 +54,6 @@ async function main(): Promise<void> {
   // Normalize macOS FSEvents names before comparing them.
   const watchTarget = fileName.normalize("NFC").toLowerCase();
 
-  // Require TTYs on both stdin and stdout so raw input and rendering are available.
   if (!process.stdout.isTTY || !process.stdin.isTTY) unsupportedTerminalExit();
 
   const mdpxCell = process.env.MDPX_CELL;
@@ -105,12 +104,9 @@ async function main(): Promise<void> {
     void shutdown(1, `mdpx: ${e instanceof Error ? e.stack : e}\n`);
   });
 
-  // Probe 16t once; later reads fall back to TIOCGWINSZ when needed.
-  const use16t = !cellOverride && (await term.queryCellSize(CELL_QUERY_MS)) !== null;
   const resolveCell = async (): Promise<CellSize | null> =>
-    cellOverride ?? (use16t ? await term.queryCellSize(CELL_QUERY_MS) : null) ?? term.queryWinsizeCell();
+    cellOverride ?? (await term.queryCellSize(CELL_QUERY_MS));
 
-  // Auto-detection requires a graphics reply; MDPX_CELL explicitly bypasses that probe.
   const cell = await resolveCell();
   if (!cell) {
     term.restore();
