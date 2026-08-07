@@ -72,11 +72,16 @@ function tileAlign(cellHpx: number): number {
  */
 const MAX_TILE_PX = 4096;
 
-export function tileHeightPx(cellHpx: number, contentRows: number): TileAlignedPx {
+export function maximumTileHeightPx(cellHpx: number): TileAlignedPx {
   const unit = tileAlign(cellHpx);
-  const capped = Math.floor(MAX_TILE_PX / unit) * unit;
-  const screenful = Math.ceil((contentRows * cellHpx) / unit) * unit;
-  return asTileAlignedPx(Math.max(unit, Math.min(screenful, capped)));
+  return asTileAlignedPx(Math.max(unit, Math.floor(MAX_TILE_PX / unit) * unit));
+}
+
+export function alignedTileHeightPx(cellHpx: number, rows: number): TileAlignedPx {
+  const unit = tileAlign(cellHpx);
+  const capped = maximumTileHeightPx(cellHpx);
+  const requested = Math.ceil((rows * cellHpx) / unit) * unit;
+  return asTileAlignedPx(Math.max(unit, Math.min(requested, capped)));
 }
 
 export interface Tile {
@@ -90,18 +95,22 @@ export interface TileLayout {
   contentHeightPx: ContentHeightPx;
 }
 
-export function computeTiles(documentHeightPx: number, cellHpx: number, contentRows: number): TileLayout {
+export function computeTiles(
+  documentHeightPx: number,
+  cellHpx: number,
+  contentRows: number,
+  tileHeightPx: TileAlignedPx,
+): TileLayout {
   if (contentRows <= 0) {
     return { tiles: [], truncated: false, contentHeightPx: NO_CONTENT_HEIGHT };
   }
-  const th = tileHeightPx(cellHpx, contentRows);
   const unit = tileAlign(cellHpx);
   const clampedDocumentHeightPx = Math.max(0, documentHeightPx);
   const paddedH = Math.ceil(clampedDocumentHeightPx / unit) * unit;
   const tiles: Tile[] = [];
   let y = 0;
   while (y < paddedH && tiles.length < MAX_TILES) {
-    const height = Math.min(th, paddedH - y);
+    const height = Math.min(tileHeightPx, paddedH - y);
     tiles.push({ topPx: asTileAlignedPx(y), heightPx: asTileAlignedPx(height) });
     y += height;
   }

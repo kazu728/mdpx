@@ -2,9 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { Scheduler, type Action, type GenView } from "./scheduler.ts";
 import type { Geometry } from "./geometry.ts";
 import { imageId } from "./kitty.ts";
-import { visibleTiles } from "./viewport.ts";
+import { alignedTileHeightPx, visibleTiles } from "./viewport.ts";
 
-const GEO: Geometry = { rows: 51, cols: 10, cellHpx: 10, imgWidthPx: 200, viewportWidthCssPx: 100, renderScale: 2, exceedsFrameLimit: false, maxResident: 64 };
+const GEO: Geometry = {
+  rows: 51,
+  cols: 10,
+  cellHpx: 10,
+  imgWidthPx: 200,
+  viewportWidthCssPx: 100,
+  renderScale: 2,
+  tileHeightPx: alignedTileHeightPx(10, 50),
+  exceedsFrameLimit: false,
+  maxResident: 64,
+};
 const shoots = (as: Action[]) =>
   as.filter((a): a is Action & { type: "shoot" } => a.type === "shoot").map((a) => a.tileIndex);
 const has = (as: Action[], t: Action["type"]) => as.some((a) => a.type === t);
@@ -128,6 +138,7 @@ describe("scrolling when downscaled", () => {
     imgWidthPx: 1512,
     viewportWidthCssPx: 1512,
     renderScale: 1,
+    tileHeightPx: alignedTileHeightPx(31, 64),
     exceedsFrameLimit: false,
     maxResident: 64,
   };
@@ -175,7 +186,12 @@ describe("resize", () => {
     const s = new Scheduler(GEO);
     s.dispatch({ type: "trigger" });
     s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 1500 });
-    const bigger: Geometry = { ...GEO, rows: 61, cellHpx: 12 };
+    const bigger: Geometry = {
+      ...GEO,
+      rows: 61,
+      cellHpx: 12,
+      tileHeightPx: alignedTileHeightPx(12, 60),
+    };
     const r = s.dispatch({ type: "resize", geometry: bigger });
     expect(r).toEqual([{ type: "redraw" }]);
     expect(s.viewState().displayGen).toBe(null);

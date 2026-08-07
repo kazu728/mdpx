@@ -6,12 +6,13 @@ import {
   type GraphicsLimits,
 } from "./capacity.ts";
 import {
+  alignedTileHeightPx,
   CSS_SCALE,
   contentRows,
   REDUCED_SCALE,
   scrollUnitPx,
-  tileHeightPx,
   toImagePx,
+  type TileAlignedPx,
 } from "./viewport.ts";
 
 export interface CellSize {
@@ -30,6 +31,7 @@ export interface Geometry extends ScreenSize {
   viewportWidthCssPx: number;
   /** Downscaling shrinks the image in both directions; kitty scales the placement back up. */
   renderScale: number;
+  tileHeightPx: TileAlignedPx;
   exceedsFrameLimit: boolean;
   maxResident: number;
 }
@@ -50,10 +52,10 @@ export function resolveGeometry(
   const screenWidthPx = cols * cell.cellWpx;
   const viewportWidthCssPx = Math.round(screenWidthPx / CSS_SCALE);
   const viewportHeightPx = contentRows(rows) * cell.cellHpx;
-  const tileHeightScreenPx = tileHeightPx(cell.cellHpx, contentRows(rows));
+  const tileHeightPx = alignedTileHeightPx(cell.cellHpx, contentRows(rows));
   const { renderScale, exceedsFrameLimit } = pickRenderScale({
     viewportWidthCssPx,
-    tileHeightPx: tileHeightScreenPx,
+    tileHeightPx,
     viewportHeightPx,
     reducedScrollUnitPx: scrollUnitPx(cell.cellHpx, REDUCED_SCALE),
     limits,
@@ -62,7 +64,7 @@ export function resolveGeometry(
   // than resampling the whole image.
   const imgWidthPx = toImagePx(screenWidthPx, renderScale);
   // The terminal holds images as decoded pixels, so the amount held follows the area, not the PNG size
-  const tileBytes = imgWidthPx * toImagePx(tileHeightScreenPx, renderScale) * 4;
+  const tileBytes = imgWidthPx * toImagePx(tileHeightPx, renderScale) * 4;
   return {
     rows,
     cols,
@@ -70,11 +72,12 @@ export function resolveGeometry(
     imgWidthPx,
     viewportWidthCssPx,
     renderScale,
+    tileHeightPx,
     exceedsFrameLimit,
     maxResident: maxResidentTiles(
       tileBytes,
       limits,
-      maxTilesInFrame(viewportHeightPx, tileHeightScreenPx),
+      maxTilesInFrame(viewportHeightPx, tileHeightPx),
     ),
   };
 }

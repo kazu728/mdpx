@@ -1,14 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import { renderFrame } from "./frame.ts";
-import { computeTiles, SCROLL_TOP } from "./viewport.ts";
+import { alignedTileHeightPx, computeTiles, SCROLL_TOP } from "./viewport.ts";
 import type { ViewState } from "./scheduler.ts";
 
 const ESC = "\x1b";
+const TILE_HEIGHT = alignedTileHeightPx(10, 50);
 
 function makeView(): ViewState {
-  const { tiles, contentHeightPx } = computeTiles(300, 10, 50);
+  const { tiles, contentHeightPx } = computeTiles(300, 10, 50, TILE_HEIGHT);
   return {
-    geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 800, viewportWidthCssPx: 400, renderScale: 2, exceedsFrameLimit: false, maxResident: 64 },
+    geometry: {
+      rows: 51,
+      cols: 80,
+      cellHpx: 10,
+      imgWidthPx: 800,
+      viewportWidthCssPx: 400,
+      renderScale: 2,
+      tileHeightPx: TILE_HEIGHT,
+      exceedsFrameLimit: false,
+      maxResident: 64,
+    },
     scrollPx: SCROLL_TOP,
     displayGen: 1,
     tiles,
@@ -85,9 +96,19 @@ describe("status bar", () => {
 
 describe("source rect when downscaled", () => {
   function reducedView(): ViewState {
-    const { tiles, contentHeightPx } = computeTiles(3000, 10, 50);
+    const { tiles, contentHeightPx } = computeTiles(3000, 10, 50, TILE_HEIGHT);
     return {
-      geometry: { rows: 51, cols: 80, cellHpx: 10, imgWidthPx: 400, viewportWidthCssPx: 400, renderScale: 1, exceedsFrameLimit: false, maxResident: 64 },
+      geometry: {
+        rows: 51,
+        cols: 80,
+        cellHpx: 10,
+        imgWidthPx: 400,
+        viewportWidthCssPx: 400,
+        renderScale: 1,
+        tileHeightPx: TILE_HEIGHT,
+        exceedsFrameLimit: false,
+        maxResident: 64,
+      },
       scrollPx: SCROLL_TOP,
       displayGen: 1,
       tiles,

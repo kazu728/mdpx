@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { buildHtml, resolveAssets } from "../src/html.ts";
 import { Chrome, resolveExecutable } from "../src/chrome.ts";
 import { buildLineMap, countSourceLines, sourceLineAt } from "../src/linemap.ts";
-import { CSS_SCALE, tileHeightPx } from "../src/viewport.ts";
+import { alignedTileHeightPx, CSS_SCALE } from "../src/viewport.ts";
 
 const exe = await resolveExecutable();
 if (!exe) {
@@ -163,7 +163,7 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
   });
 
   test("the tile screenshot's PNG dimensions are cell-aligned", async () => {
-    const tileH = tileHeightPx(CELL_HPX, CONTENT_ROWS);
+    const tileH = alignedTileHeightPx(CELL_HPX, CONTENT_ROWS);
     const b64 = await chrome.shoot({
       xCssPx: 0,
       yCssPx: 0,

@@ -229,6 +229,7 @@ export class Scheduler {
       documentHeightPx,
       this.geometry.cellHpx,
       this.contentRows,
+      this.geometry.tileHeightPx,
     );
     g.tiles = tiles;
     g.truncated = truncated;
