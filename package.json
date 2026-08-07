@@ -4,12 +4,21 @@
   "description": "A Markdown viewer for kitty graphics terminals, driven by Chrome snapshots",
   "type": "module",
   "bin": {
-    "mdpx": "src/main.ts"
+    "mdpx": "dist/main.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
   },
   "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "test": "bun test src/",
     "test:integration": "for f in integration/*.test.ts; do [ -e \"$f\" ] || continue; bun test \"$f\" || exit 1; done",
-    "typecheck": "tsc --noEmit"
+    "test:node": "node integration/node-runtime.mjs",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@vscode/markdown-it-katex": "^1.1.1",
