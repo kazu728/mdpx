@@ -1,5 +1,5 @@
 {
-  description = "mdpx — a Markdown viewer for Ghostty";
+  description = "A Markdown viewer for kitty graphics terminals, driven by Chrome snapshots";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
