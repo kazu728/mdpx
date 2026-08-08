@@ -17,7 +17,7 @@ const GRAPHICS_QUERY_TIMEOUT_MS = 200;
 const WATCH_DEBOUNCE_MS = 100;
 const CHROME_CLOSE_TIMEOUT_MS = 1500; // the terminal is already restored, so a stuck close must not block exit
 
-  // Sanitize every external string before writing to the bare terminal; it may contain CSI/OSC.
+// Sanitize every external string before writing to the bare terminal; it may contain CSI/OSC.
 function warn(msg: string): void {
   process.stderr.write(sanitizeTerminalLine(`mdpx: ${msg}`) + "\n");
 }
@@ -35,7 +35,7 @@ function unsupportedTerminalExit(): never {
   process.exit(1);
 }
 
-  // Resolve symlinks so relative assets and watching use the target; report TOCTOU as a usage error.
+// Resolve symlinks so relative assets and watching use the target; report TOCTOU as a usage error.
 function resolveMdPath(arg: string): string {
   try {
     const resolved = resolve(arg);

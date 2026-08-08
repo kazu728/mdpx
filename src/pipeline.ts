@@ -76,7 +76,6 @@ export class Pipeline {
     return sourceLineAt(map, v.scrollPx / CSS_SCALE, jumpToEnd);
   }
 
-  // Retry Chrome faults; content errors stay with the caller.
   private async attempt<T>(fn: (restarted: boolean) => Promise<T>): Promise<T> {
     const { chrome, onFatal } = this.deps;
     let restarted = false;

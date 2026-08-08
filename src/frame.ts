@@ -72,9 +72,7 @@ function statusBar(view: ViewState, filename: string, pendingVisible: boolean): 
       : shown && shown.truncated && scrollPx >= max
         ? "truncated"
         : "";
-  // The capacity state is a standing property, independent of position and time, so it gets its own
-  // slot rather than joining the transient states above. Folding it into that exclusive chain
-  // would make it vanish exactly while sitting at the end of a truncated document
+  // Keep capacity out of the transient state chain: it must survive at the end of a truncated document.
   const capacity = geometry.exceedsFrameLimit ? "too wide" : geometry.renderScale < CSS_SCALE ? "low-res" : "";
   const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");
   const right = "q:quit";
