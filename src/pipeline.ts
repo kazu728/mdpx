@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { Chrome, ContentError } from "./chrome.ts";
 import { renderFrame } from "./frame.ts";
-import { buildHtml, type Assets } from "./html.ts";
+import { buildHtml, type Assets, type Theme } from "./html.ts";
 import { deleteImage, imageId, transmit } from "./kitty.ts";
 import {
   buildLineMap,
@@ -12,7 +12,6 @@ import {
 } from "./linemap.ts";
 import { Scheduler, type Action } from "./scheduler.ts";
 import { Term } from "./term.ts";
-import type { Theme } from "./theme.ts";
 import { CSS_SCALE } from "./viewport.ts";
 
 const MAX_CONSECUTIVE_CHROME_FAILURES = 2;
@@ -27,8 +26,7 @@ interface PipelineDeps {
   mdDir: string;
   fileName: string;
   htmlPath: string;
-  assets: Assets;
-  theme: Theme;
+  assets: Record<Theme, Assets>;
   isShuttingDown: () => boolean;
   onFatal: (message: string) => Promise<never>;
 }
@@ -38,6 +36,7 @@ export class Pipeline {
   private readonly lineMaps = new Map<number, LineMap>();
   private consecutiveFailures = 0;
   private lastPlacements: number[] = [];
+  private theme: Theme = "light";
 
   constructor(private readonly deps: PipelineDeps) {}
 
@@ -62,6 +61,11 @@ export class Pipeline {
           break;
       }
     }
+  }
+
+  toggleTheme(): void {
+    this.theme = this.theme === "light" ? "dark" : "light";
+    this.execute(this.deps.scheduler.dispatch({ type: "trigger" }));
   }
 
   displayedSourceLine(jumpToEnd: boolean): number | null {
@@ -117,12 +121,12 @@ export class Pipeline {
   }
 
   private async runRender(gen: number): Promise<void> {
-    const { scheduler, mdPath, mdDir, assets, theme, htmlPath, isShuttingDown } = this.deps;
+    const { scheduler, mdPath, mdDir, assets, htmlPath, isShuttingDown } = this.deps;
     let md: string;
     let laidOutSourceLines: ReadonlySet<number>;
     try {
       md = await readFile(mdPath, "utf8");
-      const built = await buildHtml({ markdown: md, mdDir, assets, theme });
+      const built = await buildHtml({ markdown: md, mdDir, assets: assets[this.theme], theme: this.theme });
       await writeFile(htmlPath, built.html);
       laidOutSourceLines = built.laidOutSourceLines;
     } catch {

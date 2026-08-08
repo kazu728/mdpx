@@ -104,11 +104,12 @@ const lines = (n: number): Key => ({ type: "scroll", delta: { kind: "lines", n }
 const halfpage = (dir: 1 | -1): Key => ({ type: "scroll", delta: { kind: "halfpage", dir } });
 
 describe("Term key input", () => {
-  test("q/ctrl-c/j/k/space/ctrl-d/ctrl-u/g/G", () => {
+  test("q/ctrl-c/t/j/k/space/ctrl-d/ctrl-u/g/G", () => {
     const r = keyRecorder();
-    r.feed("qjk \x04\x15gG\x03");
+    r.feed("qtjk \x04\x15gG\x03");
     expect(r.keys).toEqual([
       { type: "quit" },
+      { type: "theme" },
       lines(1),
       lines(-1),
       halfpage(1),

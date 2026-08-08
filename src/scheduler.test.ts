@@ -93,6 +93,17 @@ describe("generation switch", () => {
     expect(s.viewState().displayGen).toBe(2);
     expect<number>(s.viewState().scrollPx).toBe(0);
   });
+
+  test("a regeneration at the same document height keeps scrollPx", () => {
+    const s = newDisplayedGen1();
+    s.dispatch({ type: "key", delta: { kind: "lines", n: 20 } });
+    const before = s.viewState().scrollPx;
+    expect<number>(before).toBeGreaterThan(0);
+
+    s.dispatch({ type: "trigger" });
+    s.dispatch({ type: "renderDone", gen: 2, documentHeightPx: 1500 });
+    expect<number>(s.viewState().scrollPx).toBe(before);
+  });
 });
 
 describe("trigger coalescing", () => {

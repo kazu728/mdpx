@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { buildHtml, resolveAssets } from "./html.ts";
-import type { Theme } from "./theme.ts";
+import { buildHtml, resolveAssets, type Theme } from "./html.ts";
 
 const MD = `# heading
 
@@ -57,11 +56,12 @@ describe("buildHtml", () => {
     expect(html).toMatch(/<span style="color:/);
   });
 
-  test("light uses the GitHub-light CSS and a white background", async () => {
+  test("light keeps shiki, the background, mermaid, and the CSS all light", async () => {
     const html = await build("/tmp/docs", "light");
     expect(html).toContain("github-markdown-light.css");
-    expect(html).toContain("background: #ffffff");
     expect(html).toMatch(/<pre class="shiki github-light/);
+    expect(html).toContain("background: #ffffff");
+    expect(html).toContain('theme: "default"');
   });
 
   test("dark keeps shiki, the background, mermaid, and the CSS all dark", async () => {
@@ -70,6 +70,11 @@ describe("buildHtml", () => {
     expect(html).toMatch(/<pre class="shiki github-dark/);
     expect(html).toContain("background: #0d1117");
     expect(html).toContain('theme: "dark"');
+  });
+
+  test("alternating themes through the shared renderer do not leak", async () => {
+    expect(await build("/tmp/docs", "dark")).toMatch(/<pre class="shiki github-dark/);
+    expect(await build("/tmp/docs", "light")).toMatch(/<pre class="shiki github-light/);
   });
 });
 

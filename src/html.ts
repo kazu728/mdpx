@@ -5,7 +5,6 @@ import MarkdownIt from "markdown-it";
 import taskLists from "markdown-it-task-lists";
 import { createHighlighter, type Highlighter, type ShikiTransformer } from "shiki";
 import { countSourceLines } from "./linemap.ts";
-import type { Theme } from "./theme.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -13,6 +12,8 @@ const require = createRequire(import.meta.url);
 const katex: typeof import("@vscode/markdown-it-katex").default = require(
   "@vscode/markdown-it-katex",
 ).default;
+
+export type Theme = "light" | "dark";
 
 export interface Assets {
   githubMarkdownCss: string;
@@ -82,13 +83,13 @@ function stripMetaTags(html: string): string {
 }
 
 interface RenderEnv {
+  theme: Theme;
   hasMermaid?: boolean;
 }
 
-const rendererCache = new Map<Theme, MarkdownIt>();
-function getRenderer(theme: Theme, highlighter: Highlighter): MarkdownIt {
-  const cached = rendererCache.get(theme);
-  if (cached) return cached;
+let rendererCache: MarkdownIt | null = null;
+function getRenderer(highlighter: Highlighter): MarkdownIt {
+  if (rendererCache) return rendererCache;
 
   const md = new MarkdownIt({ html: true, linkify: true });
   md.use(taskLists);
@@ -118,7 +119,7 @@ function getRenderer(theme: Theme, highlighter: Highlighter): MarkdownIt {
     const toHtml = (l: string) =>
       highlighter.codeToHtml(token.content, {
         lang: l,
-        theme: SHIKI_THEME[theme],
+        theme: SHIKI_THEME[env.theme],
         transformers,
       });
     try {
@@ -128,7 +129,7 @@ function getRenderer(theme: Theme, highlighter: Highlighter): MarkdownIt {
     }
   };
 
-  rendererCache.set(theme, md);
+  rendererCache = md;
   return md;
 }
 
@@ -195,9 +196,9 @@ export interface BuildHtmlResult {
 
 export async function buildHtml(input: BuildHtmlInput): Promise<BuildHtmlResult> {
   const highlighter = await getHighlighter();
-  const md = getRenderer(input.theme, highlighter);
+  const md = getRenderer(highlighter);
 
-  const env: RenderEnv = {};
+  const env: RenderEnv = { theme: input.theme };
   const tokens = md.parse(input.markdown, env);
   const body = stripMetaTags(md.renderer.render(tokens, md.options, env));
 

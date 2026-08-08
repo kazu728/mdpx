@@ -11,7 +11,7 @@ const SHOW_CURSOR = `${ESC}[?25h`;
 // alt-screen. Later frames erase with CSI 0J (frame.ts).
 const CLEAR_SCREEN = `${ESC}[2J`;
 
-export type Key = { type: "quit" } | { type: "scroll"; delta: ScrollDelta };
+export type Key = { type: "quit" } | { type: "theme" } | { type: "scroll"; delta: ScrollDelta };
 
 const MAX_CELL_PX = 1000;
 
@@ -23,6 +23,7 @@ const KEY_J = "j".charCodeAt(0);
 const KEY_K = "k".charCodeAt(0);
 const KEY_G = "g".charCodeAt(0);
 const KEY_SHIFT_G = "G".charCodeAt(0);
+const KEY_T = "t".charCodeAt(0);
 const KEY_SPACE = " ".charCodeAt(0);
 const KEY_CTRL_C = 0x03;
 const KEY_CTRL_D = 0x04;
@@ -273,6 +274,9 @@ export class Term {
       case KEY_Q:
       case KEY_CTRL_C:
         this.emit({ type: "quit" });
+        break;
+      case KEY_T:
+        this.emit({ type: "theme" });
         break;
       case KEY_J:
         this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });

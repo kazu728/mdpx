@@ -3,8 +3,7 @@ import { realpathSync, statSync, watch, type FSWatcher } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { resolveAssets, type Assets } from "./html.ts";
-import { resolveTheme } from "./theme.ts";
+import { resolveAssets, type Assets, type Theme } from "./html.ts";
 import { Chrome, resolveExecutable } from "./chrome.ts";
 import { NvimCursor, parseNvimEnv } from "./nvim.ts";
 import { Pipeline } from "./pipeline.ts";
@@ -117,11 +116,10 @@ async function main(): Promise<void> {
     unsupportedTerminalExit();
   }
 
-  const theme = resolveTheme();
-
-  let assets: Assets;
+  let assets: Record<Theme, Assets>;
   try {
-    assets = resolveAssets(theme);
+    // Resolve both themes up front so a missing stylesheet fails at startup, not on the first toggle.
+    assets = { light: resolveAssets("light"), dark: resolveAssets("dark") };
     dir = await mkdtemp(join(tmpdir(), "mdpx-"));
   } catch (e) {
     return shutdown(1, `mdpx: ${e instanceof Error ? e.stack : e}\n`);
@@ -148,7 +146,6 @@ async function main(): Promise<void> {
     fileName,
     htmlPath,
     assets,
-    theme,
     isShuttingDown: () => shuttingDown,
     onFatal: (message) => shutdown(1, message),
   });
@@ -156,6 +153,7 @@ async function main(): Promise<void> {
   term.onKey((k) => {
     if (shuttingDown) return;
     if (k.type === "quit") return void shutdown(0);
+    if (k.type === "theme") return pipeline.toggleTheme();
     pipeline.execute(scheduler.dispatch({ type: "key", delta: k.delta }));
     // Cursor sync is caused by keys only; renders and resizes must not move the editor.
     const line = pipeline.displayedSourceLine(k.delta.kind === "bottom");
