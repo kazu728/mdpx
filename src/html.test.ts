@@ -177,4 +177,14 @@ describe("laidOutSourceLines", () => {
       1, 3, 4, 6, 8, 11, 12, 13, 16, 17, 18, 20, 21, 23,
     ]);
   });
+
+  test("a fence left unclosed at the end of the file keeps its last row", async () => {
+    const { laidOutSourceLines } = await buildHtml({
+      markdown: ["```ts", "a", "", "b"].join("\n"),
+      mdDir: "/tmp/docs",
+      assets: resolveAssets("light"),
+      theme: "light",
+    });
+    expect([...laidOutSourceLines]).toEqual([2, 3, 4]);
+  });
 });

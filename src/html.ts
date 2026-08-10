@@ -154,7 +154,8 @@ function findLaidOutSourceLines(tokens: readonly Token[], sourceLineCount: numbe
     const start = token.map[0] + 1;
     if (token.type === "fence") {
       // The token map includes the fence delimiters; count rendered content instead.
-      mark(start + 1, start + token.content.split("\n").length - 1);
+      const rows = token.content.split("\n");
+      mark(start + 1, start + (rows[rows.length - 1] === "" ? rows.length - 1 : rows.length));
     } else {
       mark(start, token.map[1]);
     }
