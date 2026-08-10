@@ -55,12 +55,8 @@ interface CapturePlan {
 function tileHeightCandidates(cellHpx: number): TileAlignedPx[] {
   const maximum = maximumTileHeightPx(cellHpx);
   const candidates: TileAlignedPx[] = [];
-  let previous = 0;
-  for (let rows = Math.floor(maximum / cellHpx); rows >= 1; rows--) {
-    const height = alignedTileHeightPx(cellHpx, rows);
-    if (height === previous) continue;
-    candidates.push(height);
-    previous = height;
+  for (let rows = Math.floor(maximum / cellHpx); rows >= 1; rows -= 2) {
+    candidates.push(alignedTileHeightPx(cellHpx, rows));
   }
   return candidates;
 }
