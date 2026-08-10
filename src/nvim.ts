@@ -88,9 +88,9 @@ export async function sendCursor(
   socket: string,
   mdPath: string,
   line: number,
-  signal?: AbortSignal,
+  signal: AbortSignal,
 ): Promise<JumpResult> {
-  if (signal?.aborted) return "failed";
+  if (signal.aborted) return "failed";
   const proc = spawn("nvim", ["--server", socket, "--remote-expr", jumpExpr(mdPath, line)], {
     stdio: ["ignore", "pipe", "ignore"],
   });
@@ -98,7 +98,7 @@ export async function sendCursor(
     proc.kill();
   };
   const timer = setTimeout(kill, NVIM_ROUND_TRIP_TIMEOUT_MS);
-  signal?.addEventListener("abort", kill, { once: true });
+  signal.addEventListener("abort", kill, { once: true });
   try {
     return await new Promise<JumpResult>((resolve) => {
       let stdout = "";
@@ -111,7 +111,7 @@ export async function sendCursor(
     });
   } finally {
     clearTimeout(timer);
-    signal?.removeEventListener("abort", kill);
+    signal.removeEventListener("abort", kill);
   }
 }
 

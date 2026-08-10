@@ -15,6 +15,8 @@ const SHORT_TMP = "/tmp";
 // Nvim round trips can exceed Bun's default timeout.
 const POLL_TEST_TIMEOUT_MS = 30000;
 
+const NEVER_ABORTED = new AbortController().signal;
+
 const LINES = 10;
 const DOC = Array.from({ length: LINES }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
 
@@ -113,52 +115,52 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
   });
 
   test("the cursor moves to the given line", async () => {
-    expect(await sendCursor(socket, mdPath, 3)).toBe("moved");
+    expect(await sendCursor(socket, mdPath, 3, NEVER_ABORTED)).toBe("moved");
     expect(await cursorLine()).toBe(3);
   });
 
   test("the target line lands at the top of the window (moving the cursor alone does not line them up)", async () => {
-    expect(await sendCursor(socket, mdPath, 5)).toBe("moved");
+    expect(await sendCursor(socket, mdPath, 5, NEVER_ABORTED)).toBe("moved");
     expect(await topLine()).toBe(5);
     expect(await cursorLine()).toBe(5);
   });
 
   test("an out-of-range line clamps to the end of the buffer (surviving an nvim-side edit that shortened it)", async () => {
-    expect(await sendCursor(socket, mdPath, 9999)).toBe("moved");
+    expect(await sendCursor(socket, mdPath, 9999, NEVER_ABORTED)).toBe("moved");
     expect(await cursorLine()).toBe(LINES);
   });
 
   test("a line of 0 or less clamps to the top", async () => {
-    expect(await sendCursor(socket, mdPath, 5)).toBe("moved");
-    expect(await sendCursor(socket, mdPath, 0)).toBe("moved");
+    expect(await sendCursor(socket, mdPath, 5, NEVER_ABORTED)).toBe("moved");
+    expect(await sendCursor(socket, mdPath, 0, NEVER_ABORTED)).toBe("moved");
     expect(await cursorLine()).toBe(1);
   });
 
   test("a session with a different file open is left alone", async () => {
-    await sendCursor(socket, mdPath, 5);
-    expect(await sendCursor(socket, "/nonexistent/other.md", 2)).toBe("buffer-missing");
+    await sendCursor(socket, mdPath, 5, NEVER_ABORTED);
+    expect(await sendCursor(socket, "/nonexistent/other.md", 2, NEVER_ABORTED)).toBe("buffer-missing");
     expect(await cursorLine()).toBe(5);
   });
 
   test("a current window not in normal mode is skipped, and following resumes back in normal", async () => {
-    await sendCursor(socket, mdPath, 5);
+    await sendCursor(socket, mdPath, 5, NEVER_ABORTED);
     await query('nvim_input("i")');
     await waitFor("insert mode", async () => (await query("mode()")) === "i");
-    expect(await sendCursor(socket, mdPath, 8)).toBe("editing");
+    expect(await sendCursor(socket, mdPath, 8, NEVER_ABORTED)).toBe("editing");
     expect(await cursorLine()).toBe(5);
 
     await query('nvim_input("\\<Esc>")');
     await waitFor("normal mode", async () => (await query("mode()")) === "n");
-    expect(await sendCursor(socket, mdPath, 7)).toBe("moved");
+    expect(await sendCursor(socket, mdPath, 7, NEVER_ABORTED)).toBe("moved");
     expect(await cursorLine()).toBe(7);
   }, POLL_TEST_TIMEOUT_MS);
 
   test("a dead socket is failed (degrading to a silent no-op)", async () => {
-    expect(await sendCursor(join(root, "dead"), mdPath, 3)).toBe("failed");
+    expect(await sendCursor(join(root, "dead"), mdPath, 3, NEVER_ABORTED)).toBe("failed");
   });
 
   test("an already-aborted signal means no spawn", async () => {
-    await sendCursor(socket, mdPath, 4);
+    await sendCursor(socket, mdPath, 4, NEVER_ABORTED);
     const aborter = new AbortController();
     aborter.abort();
     expect(await sendCursor(socket, mdPath, 2, aborter.signal)).toBe("failed");
@@ -166,7 +168,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
   });
 
   test("aborting mid-flight kills the child process so nothing lands (the shutdown path)", async () => {
-    await sendCursor(socket, mdPath, 4);
+    await sendCursor(socket, mdPath, 4, NEVER_ABORTED);
     const aborter = new AbortController();
     const inFlight = sendCursor(socket, mdPath, 2, aborter.signal);
     await Bun.sleep(2);
@@ -176,7 +178,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
   });
 
   test("NvimCursor finds the socket through default-location discovery and sends", async () => {
-    await sendCursor(socket, mdPath, 1);
+    await sendCursor(socket, mdPath, 1, NEVER_ABORTED);
     const cursor = new NvimCursor(mdPath);
     try {
       cursor.send(6);
@@ -188,7 +190,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
   });
 
   test("back-to-back sends deliver only the newest line (debounce and coalescing)", async () => {
-    await sendCursor(socket, mdPath, 1);
+    await sendCursor(socket, mdPath, 1, NEVER_ABORTED);
     await query("nvim_command('let g:moves = 0 | autocmd CursorMoved * let g:moves = g:moves + 1')");
     const cursor = new NvimCursor(mdPath);
     try {
@@ -202,7 +204,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
   });
 
   test("a key repeat resuming after a settle still rides the debounce (no send storm)", async () => {
-    await sendCursor(socket, mdPath, 1);
+    await sendCursor(socket, mdPath, 1, NEVER_ABORTED);
     await query("nvim_command('let g:moves = 0 | autocmd CursorMoved * let g:moves = g:moves + 1')");
     const cursor = new NvimCursor(mdPath);
     try {
@@ -236,7 +238,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
     try {
       await waitFor("decoy socket", async () => (await listSockets(runDir)).length === 2);
       expect((await listSockets(runDir))[0]).toContain("/aa/");
-      await sendCursor(socket, mdPath, 1);
+      await sendCursor(socket, mdPath, 1, NEVER_ABORTED);
       const cursor = new NvimCursor(mdPath);
       try {
         cursor.send(8);
@@ -252,7 +254,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
   }, POLL_TEST_TIMEOUT_MS);
 
   test("the queued line is dropped after close (no stray send on exit)", async () => {
-    await sendCursor(socket, mdPath, 4);
+    await sendCursor(socket, mdPath, 4, NEVER_ABORTED);
     const cursor = new NvimCursor(mdPath);
     cursor.send(9);
     cursor.close();
