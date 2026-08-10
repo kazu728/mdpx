@@ -194,7 +194,7 @@ export class Term {
           i += 1;
           continue;
         }
-        this.handleSs3(buf[i + 2]!);
+        this.handleCursorKey(buf[i + 2]!);
         i += 3;
       } else if (
         kind === OSC_INTRODUCER ||
@@ -248,15 +248,12 @@ export class Term {
       this.primaryDaReplyHandler?.();
       return;
     }
-    if (ch === "A") this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } });
-    else if (ch === "B") this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
+    this.handleCursorKey(final);
   }
 
-  private handleSs3(final: number): void {
+  private handleCursorKey(final: number): void {
     if (final === CURSOR_UP_FINAL) this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } });
-    else if (final === CURSOR_DOWN_FINAL) {
-      this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
-    }
+    else if (final === CURSOR_DOWN_FINAL) this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
   }
 
   private handleByte(b: number): void {
