@@ -18,7 +18,7 @@ export function buildLineMap(
   anchors: readonly Anchor[],
   sourceLineCount: number,
   documentHeightCssPx: number,
-  laidOutSourceLines: ReadonlySet<number> = new Set(),
+  laidOutSourceLines: ReadonlySet<number>,
 ): LineMap {
   const clampedDocumentHeightCssPx = Math.max(0, documentHeightCssPx);
   const monotonicAnchors: Anchor[] = [{ sourceLine: 1, topCssPx: 0 }];

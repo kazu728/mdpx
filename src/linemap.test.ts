@@ -20,7 +20,7 @@ describe("countSourceLines", () => {
 
 describe("buildLineMap", () => {
   const build = (anchors: Anchor[], sourceLineCount = 6, documentHeightCssPx = 400) =>
-    buildLineMap(anchors, sourceLineCount, documentHeightCssPx).anchors;
+    buildLineMap(anchors, sourceLineCount, documentHeightCssPx, new Set()).anchors;
 
   test("closed by the virtual anchors {1,0} at the head and {sourceLineCount+1, documentHeightCssPx} at the tail", () => {
     expect(build([{ sourceLine: 3, topCssPx: 100 }])).toEqual([
@@ -90,7 +90,7 @@ describe("buildLineMap", () => {
   });
 
   test("no tail anchor is added when documentHeightCssPx equals the last anchor", () => {
-    const out = buildLineMap([{ sourceLine: 3, topCssPx: 400 }], 6, 400).anchors;
+    const out = buildLineMap([{ sourceLine: 3, topCssPx: 400 }], 6, 400, new Set()).anchors;
     expect(out).toEqual([
       { sourceLine: 1, topCssPx: 0 },
       { sourceLine: 3, topCssPx: 400 },
@@ -120,6 +120,7 @@ describe("sourceLineAt", () => {
     ],
     6,
     400,
+    new Set(),
   );
 
   const cases: [string, number, number][] = [
@@ -145,12 +146,12 @@ describe("sourceLineAt", () => {
   });
 
   test("clamps even when an anchor points past sourceLineCount", () => {
-    const m = buildLineMap([{ sourceLine: 99, topCssPx: 100 }], 4, 400);
+    const m = buildLineMap([{ sourceLine: 99, topCssPx: 100 }], 4, 400, new Set());
     expect(sourceLineAt(m, 200, false)).toBe(4);
   });
 
   test("returns a line across the whole range with only the two virtual anchors", () => {
-    const m = buildLineMap([], 10, 200);
+    const m = buildLineMap([], 10, 200, new Set());
     expect(sourceLineAt(m, 0, false)).toBe(1);
     expect(sourceLineAt(m, 100, false)).toBe(6);
     expect(sourceLineAt(m, 200, false)).toBe(10);
@@ -164,12 +165,10 @@ describe("sourceLineAt's laid-out-line snapping", () => {
     { sourceLine: 5, topCssPx: 300 },
   ];
   const map = buildLineMap(anchors, 6, 400, laidOutSourceLines);
-  const bare = buildLineMap(anchors, 6, 400);
 
+  // Without the set, the same positions interpolate to 2 and 4 (fixed in the sourceLineAt suite).
   test("landing on a line with no height falls back to the previous real line", () => {
-    expect(sourceLineAt(bare, 50, false)).toBe(2);
     expect(sourceLineAt(map, 50, false)).toBe(1);
-    expect(sourceLineAt(bare, 200, false)).toBe(4);
     expect(sourceLineAt(map, 200, false)).toBe(3);
   });
 
@@ -181,10 +180,5 @@ describe("sourceLineAt's laid-out-line snapping", () => {
   test("jumpToEnd is not narrowed, matching nvim's `G` on a trailing blank line", () => {
     const trailing = buildLineMap(anchors, 6, 400, new Set([1, 2, 3, 4, 5]));
     expect(sourceLineAt(trailing, 350, true)).toBe(6);
-  });
-
-  test("with nothing found going back, the interpolated value stands", () => {
-    const none = buildLineMap(anchors, 6, 400, new Set());
-    expect(sourceLineAt(none, 200, false)).toBe(4);
   });
 });
