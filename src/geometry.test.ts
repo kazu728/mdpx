@@ -45,6 +45,30 @@ describe("resolveGeometry", () => {
     expect(g.exceedsFrameLimit).toBe(true);
   });
 
+  test("a relayed viewport with no room for a read-ahead tile still stays full resolution", () => {
+    const g = resolveGeometry({ cols: 6000, rows: 3 }, cell, relayed);
+    expect(g.renderScale).toBe(2);
+    expect<number>(g.tileHeightPx).toBe(2 * cell.cellHpx);
+    expect(g.exceedsFrameLimit).toBe(false);
+    expect(g.maxResident).toBe(2);
+  });
+
+  test("a relayed viewport with no room for a read-ahead tile even downscaled still downscales", () => {
+    const g = resolveGeometry({ cols: 24000, rows: 3 }, cell, relayed);
+    expect(g.renderScale).toBe(1);
+    expect<number>(g.tileHeightPx).toBe(2 * cell.cellHpx);
+    expect(g.exceedsFrameLimit).toBe(false);
+    expect(g.maxResident).toBe(2);
+  });
+
+  test("a directly connected terminal drops the read-ahead tile rather than the two visible ones", () => {
+    const g = resolveGeometry({ cols: 723, rows: 201 }, cell, direct);
+    expect(g.renderScale).toBe(2);
+    expect<number>(g.tileHeightPx).toBe(4092);
+    expect(g.exceedsFrameLimit).toBe(false);
+    expect(g.maxResident).toBe(3);
+  });
+
   test("an odd one-row viewport stays full resolution when reduced scrolling cannot reach its tail", () => {
     const g = resolveGeometry(
       { cols: 10000, rows: 2 },

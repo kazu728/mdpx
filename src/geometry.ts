@@ -61,43 +61,35 @@ function tileHeightCandidates(cellHpx: number): TileAlignedPx[] {
   return candidates;
 }
 
+/**
+ * Prefers the tallest tile that leaves storage for one read-ahead tile, and falls back to the
+ * tallest tile that merely fits a frame — fewer, taller tiles cost less to capture and place.
+ */
 function capturePlanAtScale(
   screenWidthPx: number,
   viewportHeightPx: number,
   cellHpx: number,
   renderScale: number,
   limits: GraphicsLimits,
-  requireReadAhead: boolean,
 ): CapturePlan | null {
   const imgWidthPx = toImagePx(screenWidthPx, renderScale);
+  let withoutReadAhead: CapturePlan | null = null;
   for (const tileHeightPx of tileHeightCandidates(cellHpx)) {
+    const imageTileHeightPx = toImagePx(tileHeightPx, renderScale);
     const tilesInFrame = maxTilesInFrame(viewportHeightPx, tileHeightPx);
-    if (
-      !fitsGraphicsFrame(
-        limits,
-        imgWidthPx,
-        toImagePx(tileHeightPx, renderScale),
-        tilesInFrame,
-      )
-    ) {
-      continue;
-    }
-    const tileBytes = imgWidthPx * toImagePx(tileHeightPx, renderScale) * 4;
+    if (!fitsGraphicsFrame(limits, imgWidthPx, imageTileHeightPx, tilesInFrame)) continue;
+    const tileBytes = imgWidthPx * imageTileHeightPx * 4;
     const visibleTileFloor = tilesInFrame + 1;
-    if (
-      requireReadAhead &&
-      residentTileCapacity(tileBytes, limits) < visibleTileFloor + 1
-    ) {
-      continue;
-    }
-    return {
+    const plan: CapturePlan = {
       renderScale,
       tileHeightPx,
       exceedsFrameLimit: false,
       maxResident: maxResidentTiles(tileBytes, limits, visibleTileFloor),
     };
+    if (residentTileCapacity(tileBytes, limits) >= visibleTileFloor + 1) return plan;
+    withoutReadAhead ??= plan;
   }
-  return null;
+  return withoutReadAhead;
 }
 
 function resolveCapturePlan(
@@ -113,41 +105,20 @@ function resolveCapturePlan(
     cellHpx,
     CSS_SCALE,
     limits,
-    true,
   );
   if (fullResolution) return fullResolution;
-
-  const fullResolutionWithoutReadAhead = capturePlanAtScale(
-    screenWidthPx,
-    viewportHeightPx,
-    cellHpx,
-    CSS_SCALE,
-    limits,
-    false,
-  );
-  if (fullResolutionWithoutReadAhead) return fullResolutionWithoutReadAhead;
 
   const canReduce =
     limits.frameBytes !== null &&
     viewportHeightPx >= scrollUnitPx(cellHpx, REDUCED_SCALE);
   if (canReduce) {
-    const reduced =
-      capturePlanAtScale(
-        screenWidthPx,
-        viewportHeightPx,
-        cellHpx,
-        REDUCED_SCALE,
-        limits,
-        true,
-      ) ??
-      capturePlanAtScale(
-        screenWidthPx,
-        viewportHeightPx,
-        cellHpx,
-        REDUCED_SCALE,
-        limits,
-        false,
-      );
+    const reduced = capturePlanAtScale(
+      screenWidthPx,
+      viewportHeightPx,
+      cellHpx,
+      REDUCED_SCALE,
+      limits,
+    );
     if (reduced) return reduced;
   }
 
