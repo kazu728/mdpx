@@ -106,21 +106,17 @@ function getRenderer(highlighter: Highlighter): MarkdownIt {
   const escape = md.utils.escapeHtml;
   md.renderer.rules.fence = (tokens, idx, _options, env: RenderEnv) => {
     const token = tokens[idx]!;
-    const lang = token.info.trim().split(/\s+/g)[0] ?? "";
-    const line = token.map ? String(token.map[0]! + 1) : null;
+    const lang = token.info.trim().split(/\s+/g)[0]!;
+    const line = String(token.map![0] + 1);
     if (lang === "mermaid") {
       env.hasMermaid = true;
-      const anchor = line ? ` ${SOURCE_LINE}="${line}"` : "";
-      return `<pre class="mermaid"${anchor}>${escape(token.content)}</pre>\n`;
+      return `<pre class="mermaid" ${SOURCE_LINE}="${line}">${escape(token.content)}</pre>\n`;
     }
-    const transformers = line
-      ? [dropShikiBackground, sourceLineAttr(line)]
-      : [dropShikiBackground];
     const toHtml = (l: string) =>
       highlighter.codeToHtml(token.content, {
         lang: l,
         theme: SHIKI_THEME[env.theme],
-        transformers,
+        transformers: [dropShikiBackground, sourceLineAttr(line)],
       });
     try {
       return toHtml(lang || "text") + "\n";
