@@ -159,12 +159,7 @@ function resolveCapturePlan(
   return {
     renderScale,
     tileHeightPx,
-    exceedsFrameLimit: !fitsGraphicsFrame(
-      limits,
-      imgWidthPx,
-      imageTileHeightPx,
-      tilesInFrame,
-    ),
+    exceedsFrameLimit: true,
     maxResident: maxResidentTiles(
       imgWidthPx * imageTileHeightPx * 4,
       limits,
