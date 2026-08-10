@@ -5,12 +5,12 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { resolveAssets, type Assets, type Theme } from "./html.ts";
 import { Chrome, resolveExecutable } from "./chrome.ts";
-import { NvimCursor, parseNvimEnv } from "./nvim.ts";
+import { NvimCursor } from "./nvim.ts";
 import { Pipeline } from "./pipeline.ts";
 import { Scheduler } from "./scheduler.ts";
 import { sanitizeTerminalBlock, sanitizeTerminalLine } from "./text.ts";
-import { Term, parseCellSize } from "./term.ts";
-import { resolveGeometry, type CellSize } from "./geometry.ts";
+import { Term } from "./term.ts";
+import { resolveGeometry } from "./geometry.ts";
 
 const CELL_QUERY_MS = 200;
 const GRAPHICS_QUERY_TIMEOUT_MS = 200;
@@ -28,10 +28,7 @@ function usageExit(msg: string): never {
 }
 
 function unsupportedTerminalExit(): never {
-  process.stderr.write(
-    "mdpx: run this in a terminal that supports the kitty graphics protocol\n" +
-      "terminals that do not report cell metrics (some multiplexers) can set MDPX_CELL=<heightPx>,<widthPx>\n",
-  );
+  process.stderr.write("mdpx: run this in a terminal that supports the kitty graphics protocol\n");
   process.exit(1);
 }
 
@@ -55,22 +52,13 @@ async function main(): Promise<void> {
 
   if (!process.stdout.isTTY || !process.stdin.isTTY) unsupportedTerminalExit();
 
-  const mdpxCell = process.env.MDPX_CELL;
-  const cellOverride = parseCellSize(mdpxCell);
-  if (mdpxCell && !cellOverride) {
-    warn(`ignoring MDPX_CELL (malformed <heightPx>,<widthPx> or out-of-range value): ${mdpxCell}`);
-  }
-
-  const nvimTarget = parseNvimEnv(process.env.MDPX_NVIM);
-  if (nvimTarget.mode === "off" && nvimTarget.warning) warn(nvimTarget.warning);
-
   const chromeExecutable = await resolveExecutable();
 
   const term = new Term();
   term.enableInput();
 
   const chrome = new Chrome(chromeExecutable);
-  const nvim = new NvimCursor(mdPath, nvimTarget);
+  const nvim = new NvimCursor(mdPath);
   let dir: string | null = null;
   let watcher: FSWatcher | null = null;
   let debounce: ReturnType<typeof setTimeout> | null = null;
@@ -103,15 +91,12 @@ async function main(): Promise<void> {
     void shutdown(1, `mdpx: ${e instanceof Error ? e.stack : e}\n`);
   });
 
-  const resolveCell = async (): Promise<CellSize | null> =>
-    cellOverride ?? (await term.queryCellSize(CELL_QUERY_MS));
-
-  const cell = await resolveCell();
+  const cell = await term.queryCellSize(CELL_QUERY_MS);
   if (!cell) {
     term.restore();
     unsupportedTerminalExit();
   }
-  if (!cellOverride && !(await term.queryKittyGraphics(GRAPHICS_QUERY_TIMEOUT_MS))) {
+  if (!(await term.queryKittyGraphics(GRAPHICS_QUERY_TIMEOUT_MS))) {
     term.restore();
     unsupportedTerminalExit();
   }
@@ -166,7 +151,7 @@ async function main(): Promise<void> {
     const seq = ++resizeSeq;
     void (async () => {
       if (shuttingDown) return;
-      const c = await resolveCell();
+      const c = await term.queryCellSize(CELL_QUERY_MS);
       if (!c || shuttingDown || seq !== resizeSeq) return;
       pipeline.execute(scheduler.dispatch({ type: "resize", geometry: resolveGeometry(term.size(), c) }));
     })();

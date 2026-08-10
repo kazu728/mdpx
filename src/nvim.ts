@@ -20,26 +20,8 @@ export type JumpResult =
   | "window-missing"
   | "failed";
 
-export type NvimTarget =
-  | { mode: "auto" }
-  | { mode: "socket"; path: string }
-  | { mode: "off"; warning?: string };
-
 export function socketPathFits(path: string): boolean {
   return Buffer.byteLength(path) < SUN_PATH_MAX;
-}
-
-export function parseNvimEnv(value: string | undefined): NvimTarget {
-  const v = value?.trim();
-  if (!v) return { mode: "auto" };
-  if (v === "0" || v === "off") return { mode: "off" };
-  if (!socketPathFits(v)) {
-    return {
-      mode: "off",
-      warning: `ignoring MDPX_NVIM (unix socket path is ${SUN_PATH_MAX} bytes or longer): ${v}`,
-    };
-  }
-  return { mode: "socket", path: v };
 }
 
 export function socketPid(fileName: string): number | null {
@@ -186,28 +168,20 @@ export async function listSockets(root: string): Promise<string[]> {
 }
 
 export class NvimCursor {
-  private readonly enabled: boolean;
-  private readonly forcedSocket: string | null;
   private lastWorkingSocket: string | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pending: number | null = null;
   private running = false;
   private readonly aborter = new AbortController();
 
-  constructor(
-    private readonly mdPath: string,
-    target: NvimTarget,
-  ) {
-    this.enabled = target.mode !== "off";
-    this.forcedSocket = target.mode === "socket" ? target.path : null;
-  }
+  constructor(private readonly mdPath: string) {}
 
   /**
    * The same line as last time is sent again. The nvim cursor may have moved independently, so
    * skipping equal values would leave positions misaligned when the user scrolls back.
    */
   send(line: number): void {
-    if (!this.enabled || this.aborter.signal.aborted) return;
+    if (this.aborter.signal.aborted) return;
     this.pending = line;
     this.arm();
   }
@@ -272,7 +246,6 @@ export class NvimCursor {
   }
 
   private async discover(): Promise<string[]> {
-    if (this.forcedSocket) return [this.forcedSocket];
     const root = socketRoot();
     return root ? listSockets(root) : [];
   }

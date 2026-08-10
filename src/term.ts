@@ -47,16 +47,6 @@ function validCellDimensionPx(n: number): boolean {
   return Number.isFinite(n) && n > 0 && n <= MAX_CELL_PX;
 }
 
-export function parseCellSize(value: string | undefined): CellSize | null {
-  const m = value?.trim().match(/^(\d+)[,x](\d+)$/);
-  if (!m) return null;
-  const cellHpx = Number(m[1]);
-  const cellWpx = Number(m[2]);
-  return validCellDimensionPx(cellHpx) && validCellDimensionPx(cellWpx)
-    ? { cellHpx, cellWpx }
-    : null;
-}
-
 /**
  * Waiting forever on an OSC/DCS/APC whose ST/BEL never comes would pile every
  * later input into the buffer and kill key input permanently — in raw mode even Ctrl-C is just byte

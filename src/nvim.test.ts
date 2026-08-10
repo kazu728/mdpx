@@ -6,35 +6,10 @@ import {
   jumpExpr,
   listSockets,
   parseJumpResult,
-  parseNvimEnv,
   socketPathFits,
   socketPid,
   type JumpResult,
 } from "./nvim.ts";
-
-describe("parseNvimEnv", () => {
-  test("unset and empty mean auto-discovery", () => {
-    expect(parseNvimEnv(undefined)).toEqual({ mode: "auto" });
-    expect(parseNvimEnv("")).toEqual({ mode: "auto" });
-    expect(parseNvimEnv("   ")).toEqual({ mode: "auto" });
-  });
-
-  test("0 / off disable it with no warning (an explicit choice is simply obeyed)", () => {
-    expect(parseNvimEnv("0")).toEqual({ mode: "off" });
-    expect(parseNvimEnv("off")).toEqual({ mode: "off" });
-  });
-
-  test("a path pins that socket", () => {
-    expect(parseNvimEnv("/tmp/nvim.sock")).toEqual({ mode: "socket", path: "/tmp/nvim.sock" });
-  });
-
-  test("a path of 104 bytes or more is disabled with a stated reason", () => {
-    const long = "/tmp/" + "x".repeat(120);
-    const result = parseNvimEnv(long);
-    expect(result.mode).toBe("off");
-    expect(result.mode === "off" && result.warning).toContain("104");
-  });
-});
 
 describe("socketPathFits", () => {
   test("the boundary is 104 bytes (sun_path on macOS)", () => {

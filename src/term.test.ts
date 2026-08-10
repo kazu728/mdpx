@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Term, parseCellSize, type Key } from "./term.ts";
+import { Term, type Key } from "./term.ts";
 
 const ESC = "\x1b";
 
@@ -17,25 +17,6 @@ function capture(fn: () => void): string {
   }
   return out;
 }
-
-describe("parseCellSize", () => {
-  test("parses H,W / HxW / surrounding whitespace", () => {
-    expect(parseCellSize("31,14")).toEqual({ cellHpx: 31, cellWpx: 14 });
-    expect(parseCellSize("31x14")).toEqual({ cellHpx: 31, cellWpx: 14 });
-    expect(parseCellSize("  31,14 ")).toEqual({ cellHpx: 31, cellWpx: 14 });
-  });
-
-  test("unset, malformed, non-positive, and out-of-range all yield null", () => {
-    expect(parseCellSize(undefined)).toBeNull();
-    expect(parseCellSize("")).toBeNull();
-    expect(parseCellSize("31")).toBeNull();
-    expect(parseCellSize("0,14")).toBeNull();
-    expect(parseCellSize("31,-1")).toBeNull();
-    expect(parseCellSize("abc")).toBeNull();
-    expect(parseCellSize("2000,14")).toBeNull();
-    expect(parseCellSize("999999999999999999999,14")).toBeNull();
-  });
-});
 
 describe("Term.enterAltScreen", () => {
   test("the initial output still carries CSI 2J", () => {

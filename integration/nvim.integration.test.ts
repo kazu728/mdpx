@@ -177,7 +177,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
 
   test("NvimCursor finds the socket through default-location discovery and sends", async () => {
     await sendCursor(socket, mdPath, 1);
-    const cursor = new NvimCursor(mdPath, { mode: "auto" });
+    const cursor = new NvimCursor(mdPath);
     try {
       cursor.send(6);
       await settle();
@@ -190,7 +190,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
   test("back-to-back sends deliver only the newest line (debounce and coalescing)", async () => {
     await sendCursor(socket, mdPath, 1);
     await query("nvim_command('let g:moves = 0 | autocmd CursorMoved * let g:moves = g:moves + 1')");
-    const cursor = new NvimCursor(mdPath, { mode: "auto" });
+    const cursor = new NvimCursor(mdPath);
     try {
       for (const line of [2, 3, 4, 9]) cursor.send(line);
       await settle();
@@ -204,7 +204,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
   test("a key repeat resuming after a settle still rides the debounce (no send storm)", async () => {
     await sendCursor(socket, mdPath, 1);
     await query("nvim_command('let g:moves = 0 | autocmd CursorMoved * let g:moves = g:moves + 1')");
-    const cursor = new NvimCursor(mdPath, { mode: "auto" });
+    const cursor = new NvimCursor(mdPath);
     try {
       cursor.send(2);
       // Re-enter during an in-flight send to verify that the next line waits for a new debounce.
@@ -237,7 +237,7 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
       await waitFor("decoy socket", async () => (await listSockets(runDir)).length === 2);
       expect((await listSockets(runDir))[0]).toContain("/aa/");
       await sendCursor(socket, mdPath, 1);
-      const cursor = new NvimCursor(mdPath, { mode: "auto" });
+      const cursor = new NvimCursor(mdPath);
       try {
         cursor.send(8);
         await settle();
@@ -251,21 +251,9 @@ describe.skipIf(!nvimPath)("nvim cursor following", () => {
     }
   }, POLL_TEST_TIMEOUT_MS);
 
-  test("MDPX_NVIM=off sends nothing", async () => {
-    await sendCursor(socket, mdPath, 4);
-    const cursor = new NvimCursor(mdPath, { mode: "off" });
-    try {
-      cursor.send(9);
-      await settle();
-      expect(await cursorLine()).toBe(4);
-    } finally {
-      cursor.close();
-    }
-  });
-
   test("the queued line is dropped after close (no stray send on exit)", async () => {
     await sendCursor(socket, mdPath, 4);
-    const cursor = new NvimCursor(mdPath, { mode: "auto" });
+    const cursor = new NvimCursor(mdPath);
     cursor.send(9);
     cursor.close();
     cursor.send(7);
