@@ -4,6 +4,8 @@ Preview your Markdown the way GitHub will render it — math, Mermaid diagrams, 
 highlighted code included — without leaving the terminal. The view re-renders every
 time you save.
 
+![mdpx demo](./assets/demo.gif)
+
 ## Requirements
 
 - A terminal that speaks the kitty graphics protocol (kitty, Ghostty, WezTerm)
