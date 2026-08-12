@@ -19,9 +19,9 @@ const MAX_CONSECUTIVE_CHROME_FAILURES = 2;
 type ShootAction = Extract<Action, { type: "shoot" }>;
 
 interface PipelineDeps {
-  chrome: Chrome;
+  chrome: Pick<Chrome, "load" | "collectAnchors" | "shoot" | "restart">;
   scheduler: Scheduler;
-  term: Term;
+  term: Pick<Term, "write">;
   mdPath: string;
   mdDir: string;
   fileName: string;
@@ -37,6 +37,7 @@ export class Pipeline {
   private consecutiveFailures = 0;
   private lastPlacements: number[] = [];
   private theme: Theme = "light";
+  private page: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: PipelineDeps) {}
 
@@ -74,6 +75,13 @@ export class Pipeline {
     const map = this.lineMaps.get(v.displayGen);
     if (!map) return null;
     return sourceLineAt(map, v.scrollPx / CSS_SCALE, jumpToEnd);
+  }
+
+  /** A capture interrupted by a navigation never settles, and wedges every later capture. */
+  private onPage<T>(work: () => Promise<T>): Promise<T> {
+    const turn = this.page.then(work);
+    this.page = turn.catch(() => {});
+    return turn;
   }
 
   private async attempt<T>(fn: (restarted: boolean) => Promise<T>): Promise<T> {
@@ -134,7 +142,7 @@ export class Pipeline {
     }
     let loaded: { documentHeightCssPx: number; anchors: Anchor[] };
     try {
-      loaded = await this.attempt(() => this.loadWithAnchors());
+      loaded = await this.onPage(() => this.attempt(() => this.loadWithAnchors()));
     } catch (e) {
       if (e instanceof ContentError && !isShuttingDown()) {
         this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
@@ -167,10 +175,12 @@ export class Pipeline {
     const { gen, tileIndex, clip } = action;
     let base64: string;
     try {
-      base64 = await this.attempt(async (restarted) => {
-        if (restarted) await this.loadCurrentGeometry();
-        return chrome.shoot(clip);
-      });
+      base64 = await this.onPage(() =>
+        this.attempt(async (restarted) => {
+          if (restarted) await this.loadCurrentGeometry();
+          return chrome.shoot(clip);
+        }),
+      );
     } catch (e) {
       if (e instanceof ContentError && !isShuttingDown()) {
         this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
