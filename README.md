@@ -15,7 +15,7 @@ time you save.
 ## Install
 
 ```sh
-npm install -g mdpx
+npm install -g mdpx-cli
 ```
 
 ## Usage
