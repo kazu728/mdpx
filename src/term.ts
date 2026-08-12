@@ -5,6 +5,10 @@ import type { ScrollDelta } from "./scheduler.ts";
 const ESC = "\x1b";
 const ALT_ENTER = `${ESC}[?1049h`;
 const ALT_EXIT = `${ESC}[?1049l`;
+// Alt-screen has no scrollback, and mdpx never enables mouse reporting, so the wheel reaches us only
+// as cursor keys under alternate scroll. Terminals that default it off would drop the wheel entirely.
+const ALT_SCROLL_ENTER = `${ESC}[?1007h`;
+const ALT_SCROLL_EXIT = `${ESC}[?1007l`;
 const HIDE_CURSOR = `${ESC}[?25l`;
 const SHOW_CURSOR = `${ESC}[?25h`;
 // CSI 2J can wipe every stored kitty image, so it is only safe before the first transfer — entering
@@ -293,12 +297,12 @@ export class Term {
 
   enterAltScreen(): void {
     this.alt = true;
-    this.write(ALT_ENTER + HIDE_CURSOR + CLEAR_SCREEN);
+    this.write(ALT_ENTER + ALT_SCROLL_ENTER + HIDE_CURSOR + CLEAR_SCREEN);
   }
 
   restore(): void {
     if (this.alt) {
-      this.write(deleteAll() + SHOW_CURSOR + ALT_EXIT);
+      this.write(deleteAll() + SHOW_CURSOR + ALT_SCROLL_EXIT + ALT_EXIT);
       this.alt = false;
     }
     if (this.resyncTimer) clearTimeout(this.resyncTimer);

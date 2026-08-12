@@ -24,6 +24,19 @@ describe("Term.enterAltScreen", () => {
     const out = capture(() => term.enterAltScreen());
     expect(out).toContain(`${ESC}[2J`);
   });
+
+  test("requests alternate scroll so the wheel arrives as cursor keys", () => {
+    const term = new Term();
+    const out = capture(() => term.enterAltScreen());
+    expect(out).toContain(`${ESC}[?1007h`);
+  });
+
+  test("releases alternate scroll on restore", () => {
+    const term = new Term();
+    capture(() => term.enterAltScreen());
+    const out = capture(() => term.restore());
+    expect(out).toContain(`${ESC}[?1007l`);
+  });
 });
 
 function inject(term: Term, seq: string): void {
