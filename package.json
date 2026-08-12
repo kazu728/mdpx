@@ -1,7 +1,18 @@
 {
   "name": "mdpx",
   "version": "0.1.0",
-  "description": "A Markdown viewer for kitty graphics terminals, driven by Chrome snapshots",
+  "description": "Markdown preview in your terminal, with math, Mermaid diagrams, and GitHub styling",
+  "keywords": [
+    "markdown",
+    "preview",
+    "terminal",
+    "cli",
+    "kitty",
+    "kitty-graphics",
+    "mermaid",
+    "katex",
+    "github-markdown"
+  ],
   "license": "MIT",
   "author": "Kazuki Matsuo <kazuki.matsuo.728@gmail.com>",
   "repository": {
