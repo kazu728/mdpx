@@ -3,7 +3,13 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import MarkdownIt from "markdown-it";
 import taskLists from "markdown-it-task-lists";
-import { createHighlighter, type Highlighter, type ShikiTransformer } from "shiki";
+import {
+  bundledLanguagesInfo,
+  createHighlighter,
+  type BundledLanguage,
+  type Highlighter,
+  type ShikiTransformer,
+} from "shiki";
 import { countSourceLines } from "./linemap.ts";
 
 const require = createRequire(import.meta.url);
@@ -61,14 +67,23 @@ const LANGS = [
   "java", "javascript", "json", "jsonc", "jsx", "kotlin", "lua", "make",
   "markdown", "nix", "php", "python", "ruby", "rust", "scala", "sql", "swift",
   "toml", "tsx", "typescript", "xml", "yaml",
-];
+] satisfies BundledLanguage[];
+
+const configuredLanguages = new Set<string>(LANGS);
+const languageByName = new Map<string, BundledLanguage>();
+for (const info of bundledLanguagesInfo) {
+  const names = [info.id, ...(info.aliases ?? [])];
+  if (names.some((name) => configuredLanguages.has(name))) {
+    for (const name of names) languageByName.set(name, info.id as BundledLanguage);
+  }
+}
 
 let highlighterPromise: Promise<Highlighter> | null = null;
 function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
       themes: Object.values(SHIKI_THEME),
-      langs: LANGS,
+      langs: [],
     }).catch((e) => {
       highlighterPromise = null;
       throw e;
@@ -85,6 +100,10 @@ function stripMetaTags(html: string): string {
 interface RenderEnv {
   theme: Theme;
   hasMermaid?: boolean;
+}
+
+function fenceLanguage(token: Token): string {
+  return token.info.trim().split(/\s+/g)[0]!;
 }
 
 let rendererCache: MarkdownIt | null = null;
@@ -106,7 +125,7 @@ function getRenderer(highlighter: Highlighter): MarkdownIt {
   const escape = md.utils.escapeHtml;
   md.renderer.rules.fence = (tokens, idx, _options, env: RenderEnv) => {
     const token = tokens[idx]!;
-    const lang = token.info.trim().split(/\s+/g)[0]!;
+    const lang = fenceLanguage(token);
     const line = String(token.map![0] + 1);
     if (lang === "mermaid") {
       env.hasMermaid = true;
@@ -197,6 +216,13 @@ export async function buildHtml(input: BuildHtmlInput): Promise<BuildHtmlResult>
 
   const env: RenderEnv = { theme: input.theme };
   const tokens = md.parse(input.markdown, env);
+  const languages = new Set<BundledLanguage>();
+  for (const token of tokens) {
+    if (token.type !== "fence") continue;
+    const language = languageByName.get(fenceLanguage(token));
+    if (language) languages.add(language);
+  }
+  if (languages.size > 0) await highlighter.loadLanguage(...languages);
   const body = stripMetaTags(md.renderer.render(tokens, md.options, env));
 
   let base = pathToFileURL(input.mdDir).href;

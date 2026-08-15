@@ -56,6 +56,17 @@ describe("buildHtml", () => {
     expect(html).toMatch(/<span style="color:/);
   });
 
+  test("a configured language not used earlier is loaded when its fence appears", async () => {
+    const { html } = await buildHtml({
+      markdown: "```rust\nfn main() {}\n```\n",
+      mdDir: "/tmp/docs",
+      assets: resolveAssets("light"),
+      theme: "light",
+    });
+    expect(html).toMatch(/<pre class="shiki github-light/);
+    expect(html).toMatch(/<span style="color:/);
+  });
+
   test("light keeps shiki, the background, mermaid, and the CSS all light", async () => {
     const html = await build("/tmp/docs", "light");
     expect(html).toContain("github-markdown-light.css");
