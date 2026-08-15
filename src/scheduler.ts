@@ -124,7 +124,7 @@ export class Scheduler {
   }
 
   private onTrigger(): Action[] {
-    // A trigger during recapture yields to the new generation.
+    // Do not interrupt a page operation: once it settles, discard the remaining stale work.
     if (this.pipeGen && !this.refetchingDisplayedGeneration) {
       this.rerun = true;
       return [];
@@ -246,6 +246,7 @@ export class Scheduler {
     const g = this.pipeGen;
     if (!g || g.gen !== gen) return [];
     if (g.invalidatedByResize) return this.abortInvalidatedGeneration();
+    if (this.rerun) return this.abortSupersededGeneration();
 
     const { tiles, truncated, contentHeightPx } = computeTiles(
       documentHeightPx,
@@ -303,6 +304,7 @@ export class Scheduler {
     this.shootInFlight = false;
     g.resident.add(tileIndex);
     if (g.invalidatedByResize) return this.abortInvalidatedGeneration();
+    if (this.rerun) return this.abortSupersededGeneration();
     const freed = this.evictToSize(g, this.geometry.maxResident);
     const actions = this.drive();
     const withRedraw = actions[0]?.type === "redraw" ? actions : [{ type: "redraw" } as Action, ...actions];
@@ -343,6 +345,14 @@ export class Scheduler {
   private abortInvalidatedGeneration(): Action[] {
     // Free transferred images before replacing the invalidated generation.
     const ids = this.residentIds(this.pipeGen!);
+    const actions: Action[] = ids.length ? [{ type: "deleteGen", imageIds: ids }] : [];
+    actions.push(...this.startPipeline());
+    return actions;
+  }
+
+  private abortSupersededGeneration(): Action[] {
+    const g = this.pipeGen!;
+    const ids = g === this.displayGen ? [] : this.residentIds(g);
     const actions: Action[] = ids.length ? [{ type: "deleteGen", imageIds: ids }] : [];
     actions.push(...this.startPipeline());
     return actions;

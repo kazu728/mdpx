@@ -107,16 +107,57 @@ describe("generation switch", () => {
 });
 
 describe("trigger coalescing", () => {
-  test("two triggers while running lead to exactly one re-run afterwards", () => {
+  test("two triggers during layout start exactly one new generation as soon as layout settles", () => {
+    const s = new Scheduler(GEO);
+    s.dispatch({ type: "trigger" });
+    expect(s.dispatch({ type: "trigger" })).toEqual([]);
+    expect(s.dispatch({ type: "trigger" })).toEqual([]);
+    const next = s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 1500 });
+    expect(next.filter((a) => a.type === "shoot")).toEqual([]);
+    expect(next.filter((a) => a.type === "render")).toEqual([{ type: "render", gen: 2 }]);
+  });
+
+  test("a save during capture drops the rest of the stale queue after the in-flight tile", () => {
+    const s = new Scheduler(GEO);
+    s.dispatch({ type: "trigger" });
+    s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 1500 });
+    s.dispatch({ type: "trigger" });
+
+    const next = s.dispatch({ type: "tileReady", gen: 1, tileIndex: 0 });
+    expect(shoots(next)).toEqual([]);
+    expect(next.filter((a) => a.type === "deleteGen")).toEqual([
+      { type: "deleteGen", imageIds: [imageId(1, 0)] },
+    ]);
+    expect(next.filter((a) => a.type === "render")).toEqual([{ type: "render", gen: 2 }]);
+  });
+
+  test("a tile captured after promotion remains resident when the rest of its queue is superseded", () => {
     const s = new Scheduler(GEO);
     s.dispatch({ type: "trigger" });
     s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 1500 });
     s.dispatch({ type: "tileReady", gen: 1, tileIndex: 0 });
-    expect(s.dispatch({ type: "trigger" })).toEqual([]);
-    expect(s.dispatch({ type: "trigger" })).toEqual([]);
-    s.dispatch({ type: "tileReady", gen: 1, tileIndex: 1 });
-    const last = s.dispatch({ type: "tileReady", gen: 1, tileIndex: 2 });
-    expect(last.filter((a) => a.type === "render")).toEqual([{ type: "render", gen: 2 }]);
+    s.dispatch({ type: "trigger" });
+
+    const next = s.dispatch({ type: "tileReady", gen: 1, tileIndex: 1 });
+    expect(next.filter((a) => a.type === "deleteGen")).toEqual([]);
+    expect(next.filter((a) => a.type === "render")).toEqual([{ type: "render", gen: 2 }]);
+    expect(shown(s).resident.has(1)).toBe(true);
+  });
+
+  test("superseding an unpromoted generation frees every tile already transferred for it", () => {
+    const s = newDisplayedGen1();
+    s.dispatch({ type: "key", delta: { kind: "lines", n: 10 } });
+    s.dispatch({ type: "trigger" });
+    s.dispatch({ type: "renderDone", gen: 2, documentHeightPx: 1500 });
+    s.dispatch({ type: "tileReady", gen: 2, tileIndex: 0 });
+    s.dispatch({ type: "trigger" });
+
+    const next = s.dispatch({ type: "tileReady", gen: 2, tileIndex: 1 });
+    expect(next.filter((a) => a.type === "deleteGen")).toEqual([
+      { type: "deleteGen", imageIds: [imageId(2, 0), imageId(2, 1)] },
+    ]);
+    expect(next.filter((a) => a.type === "render")).toEqual([{ type: "render", gen: 3 }]);
+    expect(s.viewState().displayGen).toBe(1);
   });
 });
 
