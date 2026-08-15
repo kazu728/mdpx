@@ -47,7 +47,7 @@ export class Chrome {
       handleSIGTERM: false,
       handleSIGHUP: false,
     });
-    this.page = await this.browser.newPage();
+    this.page = (await this.browser.pages())[0] ?? (await this.browser.newPage());
   }
 
   async load(
