@@ -19,6 +19,7 @@ export async function resolveExecutable(): Promise<string | null> {
   }
 }
 
+const STABLE_FONTS_MS = 500;
 const STABLE_IMG_DECODE_MS = 1000;
 const STABLE_MERMAID_MS = 3000;
 
@@ -78,7 +79,8 @@ export class Chrome {
       }
       throw e;
     }
-    await page.evaluate(() => document.fonts.ready);
+    // Bound fonts.ready: it can stall behind a slow external image.
+    await Promise.race([page.evaluate(() => document.fonts.ready), sleep(STABLE_FONTS_MS)]);
     await Promise.race([
       page.evaluate(() =>
         Promise.all(Array.from(document.images).map((img) => img.decode().catch(() => {}))).then(
@@ -91,7 +93,9 @@ export class Chrome {
       .waitForFunction("window.__mermaidDone === true", { timeout: STABLE_MERMAID_MS })
       .catch(() => {});
     const documentHeightCssPx = await page.evaluate(() =>
-      Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
+      // documentElement.scrollHeight includes the 900px viewport, so a short document would
+      // report the blank area below its body as scrollable content. The body height is the text.
+      document.body.scrollHeight,
     );
     return documentHeightCssPx;
   }
