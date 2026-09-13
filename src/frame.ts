@@ -52,7 +52,7 @@ export function renderFrame(
 }
 
 function statusBar(view: ViewState, filename: string, pendingVisible: boolean): string {
-  const { geometry, scrollPx, phase } = view;
+  const { geometry, scrollPx, phase, pendingScrollPx } = view;
   const shown = view.displayGen !== null ? view : null;
   const max = shown
     ? maxScrollPx(
@@ -65,7 +65,9 @@ function statusBar(view: ViewState, filename: string, pendingVisible: boolean): 
   const pct = !shown ? "--" : max > 0 ? String(Math.round((scrollPx / max) * 100)) : "100";
   const state = pendingVisible
     ? "rendering…"
-    : phase === "rendering"
+    : pendingScrollPx !== null
+      ? "scrolling…"
+      : phase === "rendering"
       ? shown
         ? "updating"
         : "rendering…"

@@ -30,6 +30,7 @@ function makeView(): ViewState {
     contentHeightPx,
     phase: "ready",
     failure: false,
+    pendingScrollPx: null,
   };
 }
 
@@ -122,6 +123,7 @@ describe("source rect when downscaled", () => {
       contentHeightPx,
       phase: "ready",
       failure: false,
+      pendingScrollPx: null,
     };
   }
 

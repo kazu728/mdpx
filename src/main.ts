@@ -126,6 +126,7 @@ async function main(): Promise<void> {
     chrome,
     scheduler,
     term,
+    nvim,
     mdPath,
     mdDir,
     fileName,
@@ -139,10 +140,9 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     if (k.type === "quit") return void shutdown(0);
     if (k.type === "theme") return pipeline.toggleTheme();
+    // Cursor sync rides on scrollCommitted inside execute, so pure renders and
+    // resizes never move the editor while deferred scrolls sync on commit.
     pipeline.execute(scheduler.dispatch({ type: "key", delta: k.delta }));
-    // Cursor sync is caused by keys only; renders and resizes must not move the editor.
-    const line = pipeline.displayedSourceLine(k.delta.kind === "bottom");
-    if (line !== null) nvim.send(line);
   });
 
   // Rapid resizes can resolve an older query late, so seq keeps only the newest from winning.

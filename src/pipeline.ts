@@ -22,6 +22,7 @@ interface PipelineDeps {
   chrome: Pick<Chrome, "load" | "collectAnchors" | "shoot" | "restart" | "imagesPending" | "waitForLateImages">;
   scheduler: Scheduler;
   term: Pick<Term, "write">;
+  nvim?: { send: (line: number) => void };
   mdPath: string;
   mdDir: string;
   fileName: string;
@@ -44,7 +45,7 @@ export class Pipeline {
   constructor(private readonly deps: PipelineDeps) {}
 
   execute(actions: Action[]): void {
-    const { scheduler, term, fileName } = this.deps;
+    const { scheduler, term, fileName, nvim } = this.deps;
     for (const a of actions) {
       switch (a.type) {
         case "redraw": {
@@ -64,6 +65,12 @@ export class Pipeline {
         case "releaseGen":
           this.releaseGen(a.gen);
           break;
+        case "scrollCommitted": {
+          if (!nvim) break;
+          const line = this.displayedSourceLine(a.jumpToEnd);
+          if (line !== null) nvim.send(line);
+          break;
+        }
         case "render":
           void this.runRender(a.gen);
           break;

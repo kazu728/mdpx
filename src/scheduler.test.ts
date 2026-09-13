@@ -164,7 +164,7 @@ describe("trigger coalescing", () => {
 });
 
 describe("scrolling to an untransferred tile", () => {
-  test("blank, then the capture order is rebuilt, then the transfer places it", () => {
+  test("keeps the old display while capturing, then commits with the same notification", () => {
     const s = new Scheduler(GEO);
     s.dispatch({ type: "trigger" });
     s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 1500 });
@@ -172,15 +172,106 @@ describe("scrolling to an untransferred tile", () => {
 
     const k = s.dispatch({ type: "key", delta: { kind: "bottom" } });
     expect(has(k, "redraw")).toBe(true);
+    expect(has(k, "scrollCommitted")).toBe(false);
+    // The old display stays on screen; the request waits as pending.
+    expect<number>(s.viewState().scrollPx).toBe(0);
+    expect<number | null>(s.viewState().pendingScrollPx).toBe(1000);
     const vs = shown(s);
-    const vis = visibleTiles(vs.scrollPx, 50, 10, vs.tiles).map((p) => p.tileIndex);
-    expect(vis).toContain(2);
+    const pend = vs.pendingScrollPx!;
+    expect(visibleTiles(pend, 50, 10, vs.tiles).map((p) => p.tileIndex)).toContain(2);
     expect(vs.resident.has(2)).toBe(false);
 
     expect(shoots(s.dispatch({ type: "tileReady", gen: 1, tileIndex: 1 }))).toEqual([2]);
     const after = s.dispatch({ type: "tileReady", gen: 1, tileIndex: 2 });
     expect(has(after, "redraw")).toBe(true);
+    expect(after).toContainEqual({ type: "scrollCommitted", jumpToEnd: true });
     expect(shown(s).resident.has(2)).toBe(true);
+    expect<number>(s.viewState().scrollPx).toBe(1000);
+    expect<number | null>(s.viewState().pendingScrollPx).toBe(null);
+  });
+});
+
+describe("scroll intent and resync", () => {
+  test("short document: g and G keep intent despite identical coordinates", () => {
+    const s = new Scheduler(GEO);
+    s.dispatch({ type: "trigger" });
+    s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 100 });
+    s.dispatch({ type: "tileReady", gen: 1, tileIndex: 0 });
+    expect(s.viewState().displayGen).toBe(1);
+    expect<number>(s.viewState().scrollPx).toBe(0);
+
+    const g = s.dispatch({ type: "key", delta: { kind: "top" } });
+    expect(g).toContainEqual({ type: "scrollCommitted", jumpToEnd: false });
+    expect<number>(s.viewState().scrollPx).toBe(0);
+
+    const bottom = s.dispatch({ type: "key", delta: { kind: "bottom" } });
+    expect(bottom).toContainEqual({ type: "scrollCommitted", jumpToEnd: true });
+    expect<number>(s.viewState().scrollPx).toBe(0);
+  });
+
+  test("repeating g at top and G at bottom still notifies", () => {
+    const s = newDisplayedGen1();
+    const g1 = s.dispatch({ type: "key", delta: { kind: "top" } });
+    expect(g1).toContainEqual({ type: "scrollCommitted", jumpToEnd: false });
+
+    const gb = s.dispatch({ type: "key", delta: { kind: "bottom" } });
+    expect(gb).toContainEqual({ type: "scrollCommitted", jumpToEnd: true });
+    expect<number>(s.viewState().scrollPx).toBe(1000);
+
+    const gb2 = s.dispatch({ type: "key", delta: { kind: "bottom" } });
+    expect(gb2).toContainEqual({ type: "scrollCommitted", jumpToEnd: true });
+    expect<number>(s.viewState().scrollPx).toBe(1000);
+  });
+});
+
+describe("same-generation stall", () => {
+  test("abandoning the move keeps the display without releasing its images", () => {
+    const tight: Geometry = { ...GEO, maxResident: 1, maxTotalResident: 1 };
+    const s = new Scheduler(tight);
+    s.dispatch({ type: "trigger" });
+    s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 5000 });
+    s.dispatch({ type: "tileReady", gen: 1, tileIndex: 0 });
+    expect(s.viewState().displayGen).toBe(1);
+
+    const k = s.dispatch({ type: "key", delta: { kind: "bottom" } });
+    expect(s.viewState().displayGen).toBe(1);
+    expect<number>(s.viewState().scrollPx).toBe(0);
+    expect<number | null>(s.viewState().pendingScrollPx).toBe(null);
+    expect(s.viewState().failure).toBe(true);
+    expect(k.some((a) => a.type === "releaseGen")).toBe(false);
+    expect(k.some((a) => a.type === "deleteGen")).toBe(false);
+    expect(shown(s).resident.has(0)).toBe(true);
+  });
+});
+
+describe("scroll vs update failure", () => {
+  test("a refetch failure clears on the next move, an update failure survives scroll", () => {
+    const tight: Geometry = { ...GEO, maxResident: 2, maxTotalResident: 4 };
+    const s = new Scheduler(tight);
+    s.dispatch({ type: "trigger" });
+    let acts = s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 5000 });
+    for (let i = 0; i < 20; i++) {
+      const sh = shoots(acts);
+      if (!sh.length) break;
+      acts = s.dispatch({ type: "tileReady", gen: 1, tileIndex: sh[0]! });
+    }
+    s.dispatch({ type: "key", delta: { kind: "bottom" } });
+    expect<number | null>(s.viewState().pendingScrollPx).not.toBe(null);
+
+    s.dispatch({ type: "renderFailed", gen: 1 });
+    expect(s.viewState().displayGen).toBe(1);
+    expect(s.viewState().failure).toBe(true);
+
+    const next = s.dispatch({ type: "key", delta: { kind: "top" } });
+    expect(next).toContainEqual({ type: "scrollCommitted", jumpToEnd: false });
+    expect(s.viewState().failure).toBe(false);
+
+    const u = newDisplayedGen1();
+    u.dispatch({ type: "trigger" });
+    u.dispatch({ type: "renderFailed", gen: 2 });
+    expect(u.viewState().failure).toBe(true);
+    u.dispatch({ type: "key", delta: { kind: "lines", n: 1 } });
+    expect(u.viewState().failure).toBe(true);
   });
 });
 
@@ -219,7 +310,7 @@ describe("scrolling when downscaled", () => {
       s.dispatch({ type: "key", delta: down });
       expect(s.viewState().scrollPx).toBeGreaterThan(before);
       s.dispatch({ type: "key", delta: up });
-      expect(s.viewState().scrollPx).toBe(before);
+      expect<number>(s.viewState().scrollPx).toBe(before);
     }
   });
 
