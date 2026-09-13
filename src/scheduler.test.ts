@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Scheduler, type Action, type GenView } from "./scheduler.ts";
 import type { Geometry } from "./geometry.ts";
-import { imageId } from "./kitty.ts";
+import { IMAGE_ID_GENERATION_STRIDE, imageId } from "./kitty.ts";
 import { alignedTileHeightPx, visibleTiles } from "./viewport.ts";
 
 const GEO: Geometry = {
@@ -13,7 +13,9 @@ const GEO: Geometry = {
   renderScale: 2,
   tileHeightPx: alignedTileHeightPx(10, 50),
   exceedsFrameLimit: false,
+  exceedsStorage: false,
   maxResident: 64,
+  maxTotalResident: 128,
 };
 const shoots = (as: Action[]) =>
   as.filter((a): a is Action & { type: "shoot" } => a.type === "shoot").map((a) => a.tileIndex);
@@ -192,7 +194,9 @@ describe("scrolling when downscaled", () => {
     renderScale: 1,
     tileHeightPx: alignedTileHeightPx(31, 64),
     exceedsFrameLimit: false,
+    exceedsStorage: false,
     maxResident: 64,
+    maxTotalResident: 128,
   };
 
   function displayed(): Scheduler {
@@ -273,6 +277,14 @@ describe("resize", () => {
     s.dispatch({ type: "tileReady", gen: 1, tileIndex: 0 });
     const orphan = s.dispatch({ type: "tileReady", gen: 1, tileIndex: 5 });
     expect(orphan).toEqual([{ type: "deleteGen", imageIds: [imageId(1, 5)] }]);
+  });
+
+  test("a resize reporting the current geometry keeps the display and starts nothing", () => {
+    const s = newDisplayedGen1();
+    const r = s.dispatch({ type: "resize", geometry: { ...GEO } });
+    expect(r).toEqual([{ type: "redraw" }]);
+    expect(s.viewState().displayGen).toBe(1);
+    expect(shown(s).resident.size).toBe(3);
   });
 });
 
@@ -361,11 +373,40 @@ describe("renderFailed", () => {
     expect(s.viewState().displayGen).toBe(1);
     expect(shown(s).resident.has(0)).toBe(true);
     expect(s.viewState().phase).toBe("ready");
+    expect(s.viewState().failure).toBe(false);
 
     s.dispatch({ type: "key", delta: { kind: "bottom" } });
     expect(s.dispatch({ type: "trigger" }).filter((a) => a.type === "render")).toEqual([
       { type: "render", gen: 2 },
     ]);
+  });
+
+  test("a failed first render flags failure with no display", () => {
+    const s = new Scheduler(GEO);
+    s.dispatch({ type: "trigger" });
+    expect(s.viewState().failure).toBe(false);
+    s.dispatch({ type: "renderFailed", gen: 1 });
+    expect(s.viewState().displayGen).toBe(null);
+    expect(s.viewState().failure).toBe(true);
+  });
+
+  test("a failed update keeps the display, flags failure, and clears it on the next success", () => {
+    const s = newDisplayedGen1();
+    s.dispatch({ type: "trigger" });
+    s.dispatch({ type: "renderFailed", gen: 2 });
+    expect(s.viewState().displayGen).toBe(1);
+    expect(s.viewState().failure).toBe(true);
+
+    s.dispatch({ type: "trigger" });
+    expect(s.viewState().failure).toBe(true);
+    let acts = s.dispatch({ type: "renderDone", gen: 3, documentHeightPx: 1500 });
+    for (let i = 0; i < 20; i++) {
+      const sh = shoots(acts);
+      if (!sh.length) break;
+      acts = s.dispatch({ type: "tileReady", gen: 3, tileIndex: sh[0]! });
+    }
+    expect(s.viewState().displayGen).toBe(3);
+    expect(s.viewState().failure).toBe(false);
   });
 });
 
@@ -469,5 +510,258 @@ describe("resident tile budget", () => {
     const late = s.dispatch({ type: "tileReady", gen: 1, tileIndex: inFlight });
     expect(late.some((a) => a.type === "deleteGen" && a.imageIds.includes(imageId(1, inFlight)))).toBe(false);
     expect(shown(s).resident.has(inFlight)).toBe(true);
+  });
+});
+
+describe("cross-generation storage", () => {
+  const TIGHT: Geometry = { ...GEO, maxResident: 3, maxTotalResident: 4 };
+  const LOOSE: Geometry = { ...GEO, maxResident: 3, maxTotalResident: 128 };
+
+  interface UpdateRecord {
+    prePromotionTrims: number[];
+    promotionDeletes: number[];
+    prePromotionShoots: number[];
+  }
+
+  function runStraddledUpdate(geo: Geometry): UpdateRecord {
+    const s = new Scheduler(geo);
+    s.dispatch({ type: "trigger" });
+    let acts = s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 5000 });
+    for (let i = 0; i < 20; i++) {
+      const sh = shoots(acts);
+      if (!sh.length) break;
+      acts = s.dispatch({ type: "tileReady", gen: 1, tileIndex: sh[0]! });
+    }
+    s.dispatch({ type: "key", delta: { kind: "lines", n: 10 } });
+    const atScroll = shown(s);
+    const visibleOld = new Set(
+      visibleTiles(atScroll.scrollPx, 50, 10, atScroll.tiles).map((p) => p.tileIndex),
+    );
+    expect([...visibleOld].sort()).toEqual([0, 1]);
+
+    const oldAlive = new Set<number>(atScroll.resident);
+    const newAlive = new Set<number>();
+    const rec: UpdateRecord = { prePromotionTrims: [], promotionDeletes: [], prePromotionShoots: [] };
+    let promoted = false;
+
+    const applyBatch = (batch: Action[]) => {
+      const promotionBatch = !promoted && s.viewState().displayGen === 2;
+      for (const a of batch) {
+        if (a.type !== "deleteGen") continue;
+        for (const id of a.imageIds) {
+          const gen = Math.floor(id / IMAGE_ID_GENERATION_STRIDE);
+          const idx = id % IMAGE_ID_GENERATION_STRIDE;
+          if (gen === 1) {
+            if (promotionBatch) rec.promotionDeletes.push(id);
+            else {
+              expect(visibleOld.has(idx)).toBe(false);
+              rec.prePromotionTrims.push(id);
+            }
+            oldAlive.delete(idx);
+          } else {
+            newAlive.delete(idx);
+          }
+        }
+      }
+      for (const a of batch) {
+        if (a.type !== "shoot" || a.gen !== 2) continue;
+        if (promotionBatch || promoted) {
+          expect(newAlive.size + 1).toBeLessThanOrEqual(geo.maxResident);
+        } else {
+          expect(visibleOld.has(a.tileIndex)).toBe(true);
+          expect(oldAlive.size + newAlive.size + 1).toBeLessThanOrEqual(geo.maxTotalResident);
+          rec.prePromotionShoots.push(a.tileIndex);
+        }
+        newAlive.add(a.tileIndex);
+      }
+      if (s.viewState().displayGen === 2) promoted = true;
+    };
+
+    s.dispatch({ type: "trigger" });
+    acts = s.dispatch({ type: "renderDone", gen: 2, documentHeightPx: 5000 });
+    applyBatch(acts);
+    for (let i = 0; i < 20 && s.viewState().phase === "rendering"; i++) {
+      const pending: number[] = [];
+      const scan = (batch: Action[]) => {
+        for (const a of batch) if (a.type === "shoot" && a.gen === 2) pending.push(a.tileIndex);
+      };
+      scan(acts);
+      const next = pending[pending.length - 1]!;
+      acts = s.dispatch({ type: "tileReady", gen: 2, tileIndex: next });
+      applyBatch(acts);
+    }
+    expect(promoted).toBe(true);
+    expect(s.viewState().phase).toBe("ready");
+    expect(oldAlive.size).toBe(0);
+    return rec;
+  }
+
+  test("a tight budget trims old read-ahead before new transfers, never visible tiles", () => {
+    const rec = runStraddledUpdate(TIGHT);
+    expect(rec.prePromotionShoots).toEqual([0, 1]);
+    expect(rec.prePromotionTrims).toEqual([imageId(1, 2)]);
+    expect(rec.promotionDeletes.slice().sort((a, b) => a - b)).toEqual(
+      [imageId(1, 0), imageId(1, 1)].sort((a, b) => a - b),
+    );
+  });
+
+  test("a loose budget performs no pre-promotion trim (control: the tight test discriminates)", () => {
+    const rec = runStraddledUpdate(LOOSE);
+    expect(rec.prePromotionShoots).toEqual([0, 1]);
+    expect(rec.prePromotionTrims).toEqual([]);
+    expect(rec.promotionDeletes.slice().sort((a, b) => a - b)).toEqual(
+      [imageId(1, 0), imageId(1, 1), imageId(1, 2)].sort((a, b) => a - b),
+    );
+  });
+});
+
+describe("storage overflow single-generation mode", () => {
+  const OVERFLOW: Geometry = {
+    ...GEO,
+    maxResident: 3,
+    maxTotalResident: 3,
+    exceedsFrameLimit: false,
+    exceedsStorage: true,
+  };
+
+  function displayedGen1(): Scheduler {
+    const s = new Scheduler(OVERFLOW);
+    s.dispatch({ type: "trigger" });
+    let acts = s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 5000 });
+    for (let i = 0; i < 20; i++) {
+      const sh = shoots(acts);
+      if (!sh.length) break;
+      acts = s.dispatch({ type: "tileReady", gen: 1, tileIndex: sh[0]! });
+    }
+    expect(s.viewState().displayGen).toBe(1);
+    return s;
+  }
+
+  test("never transfers beyond maxTotalResident, dropping the old display first", () => {
+    const s = displayedGen1();
+    // Straddle a tile boundary so the new display needs two tiles: old visible [0,1] plus the
+    // next transfer no longer fits, forcing the old display to go before the new display lands.
+    s.dispatch({ type: "key", delta: { kind: "lines", n: 10 } });
+    const atScroll = shown(s);
+    expect(
+      visibleTiles(atScroll.scrollPx, 50, 10, atScroll.tiles)
+        .map((p) => p.tileIndex)
+        .sort(),
+    ).toEqual([0, 1]);
+    s.dispatch({ type: "trigger" });
+    let acts = s.dispatch({ type: "renderDone", gen: 2, documentHeightPx: 5000 });
+    let liveOld = new Set<number>(shown(s).resident);
+    let liveNew = new Set<number>();
+    let prePromotionRelease = false;
+    let sawNullBeforeDisplay = false;
+    let promoted = false;
+    for (let i = 0; i < 20 && s.viewState().phase === "rendering"; i++) {
+      for (const a of acts) {
+        if (a.type === "deleteGen") {
+          for (const id of a.imageIds) {
+            const gen = Math.floor(id / IMAGE_ID_GENERATION_STRIDE);
+            const idx = id % IMAGE_ID_GENERATION_STRIDE;
+            (gen === 1 ? liveOld : liveNew).delete(idx);
+          }
+        }
+        if (a.type === "releaseGen" && a.gen === 1 && !promoted) prePromotionRelease = true;
+        if (a.type === "shoot" && a.gen === 2) {
+          // The transfer lands before tileReady, so live + 1 must still fit.
+          expect(liveOld.size + liveNew.size + 1).toBeLessThanOrEqual(OVERFLOW.maxTotalResident);
+          expect(liveNew.size + 1).toBeLessThanOrEqual(OVERFLOW.maxResident);
+          liveNew.add(a.tileIndex);
+        }
+      }
+      const pending = acts.filter(
+        (a): a is Action & { type: "shoot" } => a.type === "shoot" && a.gen === 2,
+      );
+      if (!pending.length) break;
+      acts = s.dispatch({ type: "tileReady", gen: 2, tileIndex: pending[pending.length - 1]!.tileIndex });
+      if (s.viewState().displayGen === 2) promoted = true;
+      else if (s.viewState().displayGen === null) sawNullBeforeDisplay = true;
+      expect(liveOld.size + liveNew.size).toBeLessThanOrEqual(OVERFLOW.maxTotalResident);
+    }
+    expect(s.viewState().displayGen).toBe(2);
+    // Old display must go before the new two-tile display lands (not at promotion).
+    expect(prePromotionRelease).toBe(true);
+    expect(sawNullBeforeDisplay).toBe(true);
+  });
+
+  test("promotion deletes old images and releases the old generation", () => {
+    const s = displayedGen1();
+    s.dispatch({ type: "trigger" });
+    let acts = s.dispatch({ type: "renderDone", gen: 2, documentHeightPx: 5000 });
+    let sawDelete = false;
+    let sawRelease = false;
+    for (let i = 0; i < 20 && s.viewState().phase === "rendering"; i++) {
+      for (const a of acts) {
+        if (a.type === "deleteGen" && a.imageIds.includes(imageId(1, 0))) sawDelete = true;
+        if (a.type === "releaseGen" && a.gen === 1) sawRelease = true;
+      }
+      const pending = shoots(acts);
+      if (!pending.length) break;
+      acts = s.dispatch({ type: "tileReady", gen: 2, tileIndex: pending[pending.length - 1]! });
+    }
+    expect(s.viewState().displayGen).toBe(2);
+    expect(sawDelete).toBe(true);
+    expect(sawRelease).toBe(true);
+  });
+
+  test("a failed generation releases its files while the displayed generation keeps its own", () => {
+    const s = displayedGen1();
+    s.dispatch({ type: "trigger" });
+    const f = s.dispatch({ type: "renderFailed", gen: 2 });
+    expect(f.some((a) => a.type === "releaseGen" && a.gen === 2)).toBe(true);
+    expect(f.some((a) => a.type === "releaseGen" && a.gen === 1)).toBe(false);
+    expect(s.viewState().displayGen).toBe(1);
+  });
+});
+
+describe("capped settle", () => {
+  test("an undisplayable generation settles instead of sticking in rendering, retry and resize recover", async () => {
+    const { resolveGeometry } = await import("./geometry.ts");
+    const { detectGraphicsLimits } = await import("./capacity.ts");
+    const relayed = detectGraphicsLimits({ HERDR_ENV: "1" });
+    const cell = { cellHpx: 31, cellWpx: 14 };
+    const geo400 = resolveGeometry({ cols: 400, rows: 400 }, cell, relayed);
+    expect(geo400.exceedsStorage).toBe(true);
+    const s = new Scheduler(geo400);
+    s.dispatch({ type: "trigger" });
+    let acts = s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 399 * 31 });
+    let shots = 0;
+    for (let i = 0; i < 300; i++) {
+      const sh = shoots(acts);
+      if (!sh.length) break;
+      // Never overflow even while heading for the inevitable settle.
+      acts = s.dispatch({ type: "tileReady", gen: 1, tileIndex: sh[0]! });
+      shots++;
+    }
+    expect(shots).toBeGreaterThan(0);
+    // Settled as capped, not stuck processing: no display, but ready for retry.
+    expect(s.viewState().displayGen).toBe(null);
+    expect(s.viewState().phase).toBe("ready");
+    expect(shots).toBeLessThan(201);
+    // Update retry issues work instead of going silent.
+    expect(s.dispatch({ type: "trigger" }).some((a) => a.type === "render")).toBe(true);
+  });
+
+  test("resize from a settled generation restarts at the new geometry", async () => {
+    const { resolveGeometry } = await import("./geometry.ts");
+    const { detectGraphicsLimits } = await import("./capacity.ts");
+    const relayed = detectGraphicsLimits({ HERDR_ENV: "1" });
+    const cell = { cellHpx: 31, cellWpx: 14 };
+    const s = new Scheduler(resolveGeometry({ cols: 400, rows: 400 }, cell, relayed));
+    s.dispatch({ type: "trigger" });
+    let acts = s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 399 * 31 });
+    for (let i = 0; i < 300; i++) {
+      const sh = shoots(acts);
+      if (!sh.length) break;
+      acts = s.dispatch({ type: "tileReady", gen: 1, tileIndex: sh[0]! });
+    }
+    expect(s.viewState().phase).toBe("ready");
+    const geo80 = resolveGeometry({ cols: 80, rows: 24 }, cell, relayed);
+    const r = s.dispatch({ type: "resize", geometry: geo80 });
+    expect(r.some((a) => a.type === "render")).toBe(true);
+    expect(s.viewState().geometry.cols).toBe(80);
   });
 });

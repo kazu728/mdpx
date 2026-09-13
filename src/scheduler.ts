@@ -35,7 +35,8 @@ export type Action =
   | { type: "render"; gen: number }
   | { type: "shoot"; gen: number; tileIndex: number; clip: Clip }
   | { type: "redraw" }
-  | { type: "deleteGen"; imageIds: number[] };
+  | { type: "deleteGen"; imageIds: number[] }
+  | { type: "releaseGen"; gen: number };
 
 type Phase = "rendering" | "ready";
 
@@ -43,6 +44,8 @@ interface ViewBase {
   geometry: Geometry;
   scrollPx: ScrollAlignedPx;
   phase: Phase;
+  /** The last render failed and no newer generation has displayed since. */
+  failure: boolean;
 }
 
 export interface BlankView extends ViewBase {
@@ -69,6 +72,23 @@ interface GenState {
   invalidatedByResize: boolean;
 }
 
+/** Resize events can repeat the current dimensions; only a real change invalidates captures. */
+function sameGeometry(a: Geometry, b: Geometry): boolean {
+  return (
+    a.rows === b.rows &&
+    a.cols === b.cols &&
+    a.cellHpx === b.cellHpx &&
+    a.imgWidthPx === b.imgWidthPx &&
+    a.viewportWidthCssPx === b.viewportWidthCssPx &&
+    a.renderScale === b.renderScale &&
+    a.tileHeightPx === b.tileHeightPx &&
+    a.exceedsFrameLimit === b.exceedsFrameLimit &&
+    a.exceedsStorage === b.exceedsStorage &&
+    a.maxResident === b.maxResident &&
+    a.maxTotalResident === b.maxTotalResident
+  );
+}
+
 export class Scheduler {
   private geometry: Geometry;
   private scrollPx: ScrollAlignedPx = SCROLL_TOP;
@@ -79,6 +99,7 @@ export class Scheduler {
   private shootQueue: number[] = [];
   private rerun = false;
   private refetchingDisplayedGeneration = false;
+  private failedGen: number | null = null;
 
   constructor(geometry: Geometry) {
     this.geometry = geometry;
@@ -110,6 +131,7 @@ export class Scheduler {
       geometry: this.geometry,
       scrollPx: this.scrollPx,
       phase: this.pipeGen && !this.refetchingDisplayedGeneration ? "rendering" : "ready",
+      failure: this.failedGen !== null,
     };
     const g = this.displayGen;
     if (!g) return { ...base, displayGen: null };
@@ -133,14 +155,18 @@ export class Scheduler {
   }
 
   private onResize(geometry: Geometry): Action[] {
+    // The terminal can report a resize without any dimension change; restarting the pipeline
+    // then would blank a healthy display for nothing.
+    if (sameGeometry(this.geometry, geometry)) return [{ type: "redraw" }];
     this.geometry = geometry;
-    // Resize invalidates captured geometry; free its images before rerendering.
+    // Resize invalidates captured geometry; free its images and files before rerendering.
     const old = this.displayGen;
     this.displayGen = null;
     const actions: Action[] = [];
     if (old && old !== this.pipeGen) {
       const ids = this.residentIds(old);
       if (ids.length) actions.push({ type: "deleteGen", imageIds: ids });
+      actions.push({ type: "releaseGen", gen: old.gen });
     }
     if (this.pipeGen) {
       this.pipeGen.invalidatedByResize = true;
@@ -245,8 +271,7 @@ export class Scheduler {
   private onRenderDone(gen: number, documentHeightPx: number): Action[] {
     const g = this.pipeGen;
     if (!g || g.gen !== gen) return [];
-    if (g.invalidatedByResize) return this.abortInvalidatedGeneration();
-    if (this.rerun) return this.abortSupersededGeneration();
+    if (g.invalidatedByResize || this.rerun) return this.abortStalePipeline();
 
     const { tiles, truncated, contentHeightPx } = computeTiles(
       documentHeightPx,
@@ -272,7 +297,7 @@ export class Scheduler {
   private onRenderFailed(gen: number): Action[] {
     const g = this.pipeGen;
     if (!g || g.gen !== gen) return [];
-    // On failure, discard unpromoted images; promoted images stay visible and are recaptured later.
+    // On failure, discard unpromoted images and files; promoted images stay visible and are recaptured later.
     const promoted = this.displayGen === g;
     this.pipeGen = null;
     this.shootQueue = [];
@@ -281,6 +306,8 @@ export class Scheduler {
     if (!promoted) {
       const ids = this.residentIds(g);
       if (ids.length) actions.push({ type: "deleteGen", imageIds: ids });
+      actions.push({ type: "releaseGen", gen: g.gen });
+      this.failedGen = g.gen;
     }
     actions.push({ type: "redraw" });
     if (this.rerun) actions.push(...this.startPipeline());
@@ -303,8 +330,7 @@ export class Scheduler {
     }
     this.shootInFlight = false;
     g.resident.add(tileIndex);
-    if (g.invalidatedByResize) return this.abortInvalidatedGeneration();
-    if (this.rerun) return this.abortSupersededGeneration();
+    if (g.invalidatedByResize || this.rerun) return this.abortStalePipeline();
     const freed = this.evictToSize(g, this.geometry.maxResident);
     const actions = this.drive();
     const withRedraw = actions[0]?.type === "redraw" ? actions : [{ type: "redraw" } as Action, ...actions];
@@ -342,18 +368,16 @@ export class Scheduler {
     return freed;
   }
 
-  private abortInvalidatedGeneration(): Action[] {
-    // Free transferred images before replacing the invalidated generation.
-    const ids = this.residentIds(this.pipeGen!);
-    const actions: Action[] = ids.length ? [{ type: "deleteGen", imageIds: ids }] : [];
-    actions.push(...this.startPipeline());
-    return actions;
-  }
-
-  private abortSupersededGeneration(): Action[] {
+  /** Discards an unpromoted pipeline generation and starts the next one. */
+  private abortStalePipeline(): Action[] {
+    // Free transferred images and files before replacing the invalidated generation.
     const g = this.pipeGen!;
-    const ids = g === this.displayGen ? [] : this.residentIds(g);
-    const actions: Action[] = ids.length ? [{ type: "deleteGen", imageIds: ids }] : [];
+    const actions: Action[] = [];
+    if (g !== this.displayGen) {
+      const ids = this.residentIds(g);
+      if (ids.length) actions.push({ type: "deleteGen", imageIds: ids });
+      actions.push({ type: "releaseGen", gen: g.gen });
+    }
     actions.push(...this.startPipeline());
     return actions;
   }
@@ -376,11 +400,13 @@ export class Scheduler {
         const old = this.displayGen;
         this.scrollPx = promoScroll;
         this.displayGen = g;
+        if (this.failedGen !== null && g.gen >= this.failedGen) this.failedGen = null;
         // Place the new generation before deleting the old one to avoid a blank frame between them.
         actions.push({ type: "redraw" });
         if (old) {
           const ids = this.residentIds(old);
           if (ids.length) actions.push({ type: "deleteGen", imageIds: ids });
+          actions.push({ type: "releaseGen", gen: old.gen });
         }
       }
     }
@@ -388,15 +414,57 @@ export class Scheduler {
     if (!this.shootInFlight) {
       const next = this.nextShoot();
       if (next !== null) {
+        let old = this.displayGen !== g ? this.displayGen : null;
+        if (old) {
+          const freedOld = this.evictToSize(old, this.geometry.maxTotalResident - g.resident.size - 1);
+          if (freedOld.length) actions.push({ type: "deleteGen", imageIds: freedOld });
+        }
         // The terminal receives the transfer before tileReady, so reserve decoded storage first.
-        const freed = this.evictToSize(g, this.geometry.maxResident - 1);
+        const newBudget = Math.min(
+          this.geometry.maxResident - 1,
+          this.geometry.maxTotalResident - (old?.resident.size ?? 0) - 1,
+        );
+        const freed = this.evictToSize(g, newBudget);
         if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
-        this.shootInFlight = true;
-        actions.push(this.shootAction(g, next));
+        const oldSize = old?.resident.size ?? 0;
+        const newSize = g.resident.size;
+        const fitsResident = newSize + 1 <= this.geometry.maxResident;
+        const fitsTotal = oldSize + newSize + 1 <= this.geometry.maxTotalResident;
+        if (!fitsResident || !fitsTotal) {
+          if (this.geometry.exceedsStorage && old) {
+            // Single-generation mode: old+new can never fit, so drop the old display now
+            // instead of overflowing terminal storage with the third image.
+            // evictToSize already removed read-ahead from resident, so the remainder is visible.
+            const ids = this.residentIds(old);
+            if (ids.length) actions.push({ type: "deleteGen", imageIds: ids });
+            actions.push({ type: "releaseGen", gen: old.gen });
+            this.displayGen = null;
+            old = null;
+            const retryTotal = g.resident.size + 1 <= this.geometry.maxTotalResident;
+            const retryResident = g.resident.size + 1 <= this.geometry.maxResident;
+            if (retryTotal && retryResident) {
+              this.shootInFlight = true;
+              actions.push(this.shootAction(g, next));
+            } else {
+              // Even alone the next image does not fit: settle as capped so update/resize can retry.
+              this.settleStalled(g, actions);
+            }
+          } else {
+            // Not enough evictable (non-visible) tiles: settle as capped so update/resize can retry.
+            this.settleStalled(g, actions);
+          }
+        } else {
+          this.shootInFlight = true;
+          actions.push(this.shootAction(g, next));
+        }
       } else if (this.displayGen === g) {
         this.pipeGen = null;
         this.refetchingDisplayedGeneration = false;
         if (this.rerun) actions.push(...this.startPipeline());
+      } else {
+        // Queue exhausted but visible incomplete: capacity shortage, not processing.
+        // Settle as capped so update/resize can retry instead of leaving rendering stuck.
+        this.settleStalled(g, actions);
       }
     }
     return actions;
@@ -404,6 +472,23 @@ export class Scheduler {
 
   private residentIds(g: GenState): number[] {
     return Array.from(g.resident, (i) => imageId(g.gen, i));
+  }
+
+  /**
+   * Capacity shortage is settled, not processing: drop the undisplayable generation so a later
+   * update or resize can retry, instead of leaving displayGen:null/phase:rendering stuck with an
+   * exhausted (or permanently blocked) queue that no tileReady will ever resume.
+   */
+  private settleStalled(g: GenState, actions: Action[]): void {
+    const ids = this.residentIds(g);
+    if (ids.length) actions.push({ type: "deleteGen", imageIds: ids });
+    actions.push({ type: "releaseGen", gen: g.gen });
+    if (this.pipeGen === g) this.pipeGen = null;
+    this.shootQueue = [];
+    this.shootInFlight = false;
+    this.refetchingDisplayedGeneration = false;
+    actions.push({ type: "redraw" });
+    if (this.rerun) actions.push(...this.startPipeline());
   }
 
   private nextShoot(): number | null {
