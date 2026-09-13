@@ -14,7 +14,6 @@ import { countSourceLines } from "./linemap.ts";
 
 const require = createRequire(import.meta.url);
 
-// The plugin is CJS assigning exports.default, which Node's ESM import leaves wrapped and md.use rejects.
 const katex: typeof import("@vscode/markdown-it-katex").default = require(
   "@vscode/markdown-it-katex",
 ).default;
@@ -41,10 +40,7 @@ const SHIKI_THEME: Record<Theme, string> = { light: "github-light", dark: "githu
 const PAGE_BG: Record<Theme, string> = { light: "#ffffff", dark: "#0d1117" };
 const MERMAID_THEME: Record<Theme, string> = { light: "default", dark: "dark" };
 
-// shiki writes background-color straight onto the <pre>, cancelling github-markdown-css's code block
-// background (its themed box, rounded corners, and padding). Strip just the background colour to
-// keep GitHub's box. The order of declarations is an internal shiki detail, so this drops every
-// background-color regardless of position rather than assuming one.
+// Keep github-markdown-css by stripping shiki's <pre> background.
 const dropShikiBackground: ShikiTransformer = {
   pre(node) {
     const style = node.properties.style;
@@ -69,11 +65,10 @@ const LANGS = [
   "toml", "tsx", "typescript", "xml", "yaml",
 ] satisfies BundledLanguage[];
 
-const configuredLanguages = new Set<string>(LANGS);
 const languageByName = new Map<string, BundledLanguage>();
 for (const info of bundledLanguagesInfo) {
   const names = [info.id, ...(info.aliases ?? [])];
-  if (names.some((name) => configuredLanguages.has(name))) {
+  if (names.some((name) => (LANGS as readonly string[]).includes(name))) {
     for (const name of names) languageByName.set(name, info.id as BundledLanguage);
   }
 }
@@ -92,7 +87,7 @@ function getHighlighter(): Promise<Highlighter> {
   return highlighterPromise;
 }
 
-/** Neutralize body meta tags. Escaping (not deleting) can't forge `<<meta>meta ...>` into a tag. */
+/** Escaping (not deleting) keeps `<<meta>meta ...>` from becoming a tag. */
 function stripMetaTags(html: string): string {
   return html.replace(/<(\/?)(meta)\b/gi, (_m, slash: string, word: string) => `&lt;${slash}${word}`);
 }
@@ -114,7 +109,6 @@ function getRenderer(highlighter: Highlighter): MarkdownIt {
   md.use(taskLists);
   md.use(katex);
 
-  // Attach source-line anchors to block tokens; fences are handled by the custom renderer below.
   const renderToken = md.renderer.renderToken.bind(md.renderer);
   md.renderer.renderToken = (tokens, idx, options) => {
     const token = tokens[idx]!;
@@ -148,7 +142,7 @@ function getRenderer(highlighter: Highlighter): MarkdownIt {
   return md;
 }
 
-/** Keep only source lines with rendered height, using the innermost mapped token for each line. */
+/** Only source lines with rendered height, via the innermost mapped token. */
 function findLaidOutSourceLines(tokens: readonly Token[], sourceLineCount: number): Set<number> {
   const sourceLines = new Set<number>();
   const mark = (from: number, to: number) => {
@@ -172,7 +166,6 @@ function findLaidOutSourceLines(tokens: readonly Token[], sourceLineCount: numbe
     if (!token.map || isContainer[i]) continue;
     const start = token.map[0] + 1;
     if (token.type === "fence") {
-      // The token map includes the fence delimiters; count rendered content instead.
       const rows = token.content.split("\n");
       mark(start + 1, start + (rows[rows.length - 1] === "" ? rows.length - 1 : rows.length));
     } else {
@@ -182,19 +175,15 @@ function findLaidOutSourceLines(tokens: readonly Token[], sourceLineCount: numbe
   return sourceLines;
 }
 
-// Body scripts lack the nonce and remain inert. Keep file: out of script-src so <base> cannot enable
-// external body scripts; mermaid is loaded from file:// with the nonce. connect-src blocks network
-// requests, and stripMetaTags closes top-level navigation.
 function contentSecurityPolicy(nonce: string): string {
   return [
     "default-src 'none'",
-    // Mermaid does not require eval; allowing it would widen the damage from a compromised script.
     `script-src 'nonce-${nonce}'`,
     "style-src 'unsafe-inline' file:",
     "img-src file: data: https: http:",
     "font-src file:",
     "connect-src 'none'",
-    "base-uri file:", // allow our own file:// base while blocking relative-URL hijacking via <base href="http://…"> in the body
+    "base-uri file:",
   ].join("; ");
 }
 

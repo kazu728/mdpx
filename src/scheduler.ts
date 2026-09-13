@@ -5,12 +5,8 @@ import {
   contentRows,
   CSS_SCALE,
   maxScrollPx,
-  NO_CONTENT_HEIGHT,
-  SCROLL_TOP,
   scrollUnitPx,
   visibleTiles,
-  type ContentHeightPx,
-  type ScrollAlignedPx,
   type ScrollDirection,
   type Tile,
 } from "./viewport.ts";
@@ -43,12 +39,10 @@ type Phase = "rendering" | "ready";
 
 interface ViewBase {
   geometry: Geometry;
-  scrollPx: ScrollAlignedPx;
+  scrollPx: number;
   phase: Phase;
-  /** The last render failed and no newer generation has displayed since. */
   failure: boolean;
-  /** Latest requested scroll while the display stays behind; null once settled. */
-  pendingScrollPx: ScrollAlignedPx | null;
+  pendingScrollPx: number | null;
 }
 
 export interface BlankView extends ViewBase {
@@ -60,46 +54,47 @@ export interface GenView extends ViewBase {
   tiles: Tile[];
   resident: ReadonlySet<number>;
   truncated: boolean;
-  contentHeightPx: ContentHeightPx;
+  contentHeightPx: number;
 }
 
-/** Distinguishes no displayed generation from a displayed empty document. */
+/** No displayed generation vs. a displayed empty document. */
 export type ViewState = BlankView | GenView;
 
 interface GenState {
   gen: number;
   tiles: Tile[];
-  contentHeightPx: ContentHeightPx;
+  contentHeightPx: number;
   resident: Set<number>;
   truncated: boolean;
   invalidatedByResize: boolean;
 }
 
-/** Resize events can repeat the current dimensions; only a real change invalidates captures. */
+const GEOMETRY_KEYS = [
+  "rows",
+  "cols",
+  "cellHpx",
+  "imgWidthPx",
+  "viewportWidthCssPx",
+  "renderScale",
+  "tileHeightPx",
+  "exceedsFrameLimit",
+  "exceedsStorage",
+  "maxResident",
+  "maxTotalResident",
+] as const;
+
 function sameGeometry(a: Geometry, b: Geometry): boolean {
-  return (
-    a.rows === b.rows &&
-    a.cols === b.cols &&
-    a.cellHpx === b.cellHpx &&
-    a.imgWidthPx === b.imgWidthPx &&
-    a.viewportWidthCssPx === b.viewportWidthCssPx &&
-    a.renderScale === b.renderScale &&
-    a.tileHeightPx === b.tileHeightPx &&
-    a.exceedsFrameLimit === b.exceedsFrameLimit &&
-    a.exceedsStorage === b.exceedsStorage &&
-    a.maxResident === b.maxResident &&
-    a.maxTotalResident === b.maxTotalResident
-  );
+  return GEOMETRY_KEYS.every((k) => a[k] === b[k]);
 }
 
 interface PendingRequest {
-  scrollPx: ScrollAlignedPx;
+  scrollPx: number;
   jumpToEnd: boolean;
 }
 
 export class Scheduler {
   private geometry: Geometry;
-  private scrollPx: ScrollAlignedPx = SCROLL_TOP;
+  private scrollPx = 0;
   private genCounter = 0;
   private displayGen: GenState | null = null;
   private pipeGen: GenState | null = null;
@@ -157,7 +152,6 @@ export class Scheduler {
   }
 
   private onTrigger(): Action[] {
-    // Do not interrupt a page operation: once it settles, discard the remaining stale work.
     if (this.pipeGen && !this.refetchingDisplayedGeneration) {
       this.rerun = true;
       return [];
@@ -166,13 +160,9 @@ export class Scheduler {
   }
 
   private onResize(geometry: Geometry): Action[] {
-    // The terminal can report a resize without any dimension change; restarting the pipeline
-    // then would blank a healthy display for nothing.
     if (sameGeometry(this.geometry, geometry)) return [{ type: "redraw" }];
     this.geometry = geometry;
-    // A new layout invalidates scroll coordinates, so drop any outstanding scroll request.
     this.pending = null;
-    // Resize invalidates captured geometry; free its images and files before rerendering.
     const old = this.displayGen;
     this.displayGen = null;
     const actions: Action[] = [];
@@ -196,7 +186,7 @@ export class Scheduler {
     this.pipeGen = {
       gen: this.genCounter,
       tiles: [],
-      contentHeightPx: NO_CONTENT_HEIGHT,
+      contentHeightPx: 0,
       resident: new Set(),
       truncated: false,
       invalidatedByResize: false,
@@ -215,7 +205,6 @@ export class Scheduler {
     const contentHeightPx = shown.contentHeightPx;
     let px: number = this.pending?.scrollPx ?? this.scrollPx;
     let direction: ScrollDirection = 0;
-    // Keep movement on the scroll unit so clampScroll cannot introduce drift.
     const unit = scrollUnitPx(cellHpx, renderScale);
     switch (delta.kind) {
       case "lines":
@@ -240,8 +229,6 @@ export class Scheduler {
     const req = clampScroll(px, contentHeightPx, this.contentRows, cellHpx, renderScale);
     const jumpToEnd = delta.kind === "bottom";
     this.pending = { scrollPx: req, jumpToEnd };
-    // Fast path in the displayed generation: everything visible is already resident,
-    // so the display can move without blanking. Pure prefetch continues afterwards.
     if (this.allVisibleResident(shown, req)) {
       const committed = this.pending;
       this.scrollPx = req;
@@ -249,7 +236,6 @@ export class Scheduler {
       this.scrollFailed = false;
       const pg = this.pipeGen;
       if (pg && pg.tiles.length > 0 && pg !== shown) {
-        // An update is capturing: retarget its queue at the committed position.
         const pgScroll = clampScroll(req, pg.contentHeightPx, this.contentRows, cellHpx, renderScale);
         this.shootQueue = this.queueAround(pg, pgScroll, direction, this.geometry.maxResident);
         return [{ type: "redraw" }, { type: "scrollCommitted", jumpToEnd: committed.jumpToEnd }];
@@ -258,7 +244,6 @@ export class Scheduler {
       actions.push(...this.startPrefetchIfNeeded(direction));
       return actions;
     }
-    // Slow path: keep the old display while the request captures.
     const pg = this.pipeGen;
     if (pg && pg.tiles.length > 0) {
       const pgScroll =
@@ -269,7 +254,6 @@ export class Scheduler {
       return [{ type: "redraw" }];
     }
     if (pg) {
-      // An update is still in layout: renderDone will build the queue around pending.
       return [{ type: "redraw" }];
     }
     return [{ type: "redraw" }, ...this.startRefetchForPending(direction)];
@@ -277,11 +261,10 @@ export class Scheduler {
 
   private queueAround(
     g: GenState,
-    scroll: ScrollAlignedPx,
+    scroll: number,
     direction: ScrollDirection = 0,
     limit: number = this.geometry.maxResident,
   ): number[] {
-    // Read-ahead must never take a queue slot away from a tile needed by the current frame.
     const visible = visibleTiles(scroll, this.contentRows, this.geometry.cellHpx, g.tiles).map(
       (placement) => placement.tileIndex,
     );
@@ -296,7 +279,7 @@ export class Scheduler {
     return [...visible, ...nearby].slice(0, Math.max(0, limit));
   }
 
-  private clampPendingToGen(g: GenState): ScrollAlignedPx | null {
+  private clampPendingToGen(g: GenState): number | null {
     if (!this.pending) return null;
     return clampScroll(
       this.pending.scrollPx,
@@ -307,7 +290,17 @@ export class Scheduler {
     );
   }
 
-  private visibleSet(g: GenState, scroll: ScrollAlignedPx): Set<number> {
+  private takeCommitted(g: GenState): { jumpToEnd: boolean } | null {
+    const pend = this.clampPendingToGen(g);
+    if (pend === null || !this.pending || !this.allVisibleResident(g, pend)) return null;
+    const committed = this.pending;
+    this.scrollPx = pend;
+    this.pending = null;
+    this.scrollFailed = false;
+    return { jumpToEnd: committed.jumpToEnd };
+  }
+
+  private visibleSet(g: GenState, scroll: number): Set<number> {
     return new Set(
       visibleTiles(scroll, this.contentRows, this.geometry.cellHpx, g.tiles).map(
         (placement) => placement.tileIndex,
@@ -315,15 +308,13 @@ export class Scheduler {
     );
   }
 
-  /** Tiles that must survive eviction: the display plus any outstanding request. */
+  // Display plus any outstanding request must survive eviction.
   private protectedSet(g: GenState): Set<number> {
     const out = new Set<number>();
     if (g === this.displayGen) {
       for (const t of this.visibleSet(g, this.scrollPx)) out.add(t);
       const pend = this.clampPendingToGen(g);
       if (pend !== null && this.pending) {
-        // Keep fallback tiles for the old generation even while a new one captures,
-        // so an update failure can resume the requested scroll from the old pixels.
         for (const t of this.visibleSet(g, pend)) out.add(t);
       }
       return out;
@@ -336,7 +327,6 @@ export class Scheduler {
     return this.visibleSet(g, this.scrollFor(g));
   }
 
-  /** Steady prefetch around the display after a fast commit; no temporary burst. */
   private startPrefetchIfNeeded(direction: ScrollDirection): Action[] {
     const g = this.displayGen;
     if (!g || this.pipeGen || g.tiles.length === 0) return [];
@@ -348,7 +338,6 @@ export class Scheduler {
     return this.drive();
   }
 
-  /** Slow-path capture for pending while keeping the old display on screen. */
   private startRefetchForPending(direction: ScrollDirection): Action[] {
     const g = this.displayGen;
     const pend = g ? this.clampPendingToGen(g) : null;
@@ -386,7 +375,6 @@ export class Scheduler {
   private onRenderFailed(gen: number): Action[] {
     const g = this.pipeGen;
     if (!g || g.gen !== gen) return [];
-    // On failure, discard unpromoted images and files; promoted images stay visible and are recaptured later.
     const promoted = this.displayGen === g;
     this.pipeGen = null;
     this.shootQueue = [];
@@ -399,7 +387,6 @@ export class Scheduler {
       actions.push({ type: "releaseGen", gen: g.gen });
       this.failedGen = g.gen;
       if (this.rerun) {
-        // A coalesced update wins over resuming the old scroll; pending retargets at renderDone.
         actions.push({ type: "redraw" });
         actions.push(...this.startPipeline());
         return actions;
@@ -407,11 +394,8 @@ export class Scheduler {
       const shown = this.displayGen;
       const pend = shown ? this.clampPendingToGen(shown) : null;
       if (shown && pend !== null && this.pending) {
-        if (this.allVisibleResident(shown, pend)) {
-          const committed = this.pending;
-          this.scrollPx = pend;
-          this.pending = null;
-          this.scrollFailed = false;
+        const committed = this.takeCommitted(shown);
+        if (committed) {
           actions.push({ type: "redraw" });
           actions.push({ type: "scrollCommitted", jumpToEnd: committed.jumpToEnd });
           actions.push(...this.startPrefetchIfNeeded(0));
@@ -428,7 +412,6 @@ export class Scheduler {
       return actions;
     }
     if (this.pending) {
-      // The requested move is abandoned but the old display stays usable.
       this.pending = null;
       this.scrollFailed = true;
       const shown = this.displayGen!;
@@ -446,16 +429,11 @@ export class Scheduler {
   private onTileReady(gen: number, tileIndex: number): Action[] {
     const g = this.pipeGen;
     if (!g || g.gen !== gen) {
-      // A late tile for the displayed generation is still usable; otherwise delete it.
       const shown = this.displayGen;
       if (shown && shown.gen === gen) {
         shown.resident.add(tileIndex);
-        const pend = this.clampPendingToGen(shown);
-        if (pend !== null && this.pending && this.allVisibleResident(shown, pend)) {
-          const committed = this.pending;
-          this.scrollPx = pend;
-          this.pending = null;
-          this.scrollFailed = false;
+        const committed = this.takeCommitted(shown);
+        if (committed) {
           const freed = this.evictToSize(shown, this.geometry.maxResident);
           const actions: Action[] = [
             { type: "redraw" },
@@ -482,7 +460,7 @@ export class Scheduler {
     return freed.length ? [...withRedraw, { type: "deleteGen", imageIds: freed }] : withRedraw;
   }
 
-  private scrollFor(g: GenState): ScrollAlignedPx {
+  private scrollFor(g: GenState): number {
     if (g === this.displayGen) return this.scrollPx;
     const base = this.pending?.scrollPx ?? this.scrollPx;
     return clampScroll(
@@ -494,8 +472,7 @@ export class Scheduler {
     );
   }
 
-  // Visible tiles are never evicted because doing so would punch a black hole in the current frame.
-  // While a scroll is outstanding, its target joins the protected set so the request can complete.
+  // Visible tiles are never evicted; an outstanding scroll target joins them.
   private evictToSize(g: GenState, maxSize: number): number[] {
     if (g.resident.size <= maxSize) return [];
     const visible = this.protectedSet(g);
@@ -510,9 +487,7 @@ export class Scheduler {
     return freed;
   }
 
-  /** Discards an unpromoted pipeline generation and starts the next one. */
   private abortStalePipeline(): Action[] {
-    // Free transferred images and files before replacing the invalidated generation.
     const g = this.pipeGen!;
     const actions: Action[] = [];
     if (g !== this.displayGen) {
@@ -541,7 +516,6 @@ export class Scheduler {
         this.pending = null;
         if (committed) this.scrollFailed = false;
         if (this.failedGen !== null && g.gen >= this.failedGen) this.failedGen = null;
-        // Place the new generation before deleting the old one to avoid a blank frame between them.
         actions.push({ type: "redraw" });
         if (committed) actions.push({ type: "scrollCommitted", jumpToEnd: committed.jumpToEnd });
         if (old) {
@@ -553,15 +527,10 @@ export class Scheduler {
         if (shrunk.length) actions.push({ type: "deleteGen", imageIds: shrunk });
       }
     } else if (this.pending) {
-      // Same-generation scroll: switch the display only once its tiles are resident.
-      const pend = this.clampPendingToGen(g);
-      if (pend !== null && this.allVisibleResident(g, pend)) {
-        const committed = this.pending;
-        this.scrollPx = pend;
-        this.pending = null;
-        if (committed) this.scrollFailed = false;
+      const committed = this.takeCommitted(g);
+      if (committed) {
         actions.push({ type: "redraw" });
-        if (committed) actions.push({ type: "scrollCommitted", jumpToEnd: committed.jumpToEnd });
+        actions.push({ type: "scrollCommitted", jumpToEnd: committed.jumpToEnd });
         const shrunk = this.evictToSize(g, this.geometry.maxResident);
         if (shrunk.length) actions.push({ type: "deleteGen", imageIds: shrunk });
       }
@@ -576,9 +545,8 @@ export class Scheduler {
           if (freedOld.length) actions.push({ type: "deleteGen", imageIds: freedOld });
         }
         const temporary = this.pending !== null && g === this.pipeGen;
-        // The terminal receives the transfer before tileReady, so reserve decoded storage first.
-        // While a scroll is outstanding the new generation may burst to the total budget;
-        // the steady per-generation cap is restored by the post-commit shrink above.
+        // Reserve decoded storage before the transfer lands; a pending scroll may burst
+        // to the total budget until the post-commit shrink restores the steady cap.
         const newBudget = temporary
           ? this.geometry.maxTotalResident - (old?.resident.size ?? 0) - 1
           : Math.min(
@@ -595,9 +563,7 @@ export class Scheduler {
           : newSize + 1 <= this.geometry.maxResident && fitsTotal;
         if (!fits) {
           if (this.geometry.exceedsStorage && old) {
-            // Single-generation mode: old+new can never fit, so drop the old display now
-            // instead of overflowing terminal storage with the third image.
-            // evictToSize already removed read-ahead from resident, so the remainder is visible.
+            // Single-generation mode: drop the old display instead of overflowing storage.
             const ids = this.residentIds(old);
             if (ids.length) actions.push({ type: "deleteGen", imageIds: ids });
             actions.push({ type: "releaseGen", gen: old.gen });
@@ -609,11 +575,9 @@ export class Scheduler {
               this.shootInFlight = true;
               actions.push(this.shootAction(g, next));
             } else {
-              // Even alone the next image does not fit: settle as capped so update/resize can retry.
               this.settleStalled(g, actions);
             }
           } else {
-            // Not enough evictable (non-visible) tiles: settle as capped so update/resize can retry.
             this.settleStalled(g, actions);
           }
         } else {
@@ -622,8 +586,6 @@ export class Scheduler {
         }
       } else if (this.displayGen === g) {
         if (this.pending) {
-          // Queue exhausted but the request is still incomplete: abandon the move,
-          // keep the old display, and evict only the unneeded fetch results.
           this.settleStalled(g, actions);
         } else {
           this.pipeGen = null;
@@ -631,8 +593,6 @@ export class Scheduler {
           if (this.rerun) actions.push(...this.startPipeline());
         }
       } else {
-        // Queue exhausted but visible incomplete: capacity shortage, not processing.
-        // Settle as capped so update/resize can retry instead of leaving rendering stuck.
         this.settleStalled(g, actions);
       }
     }
@@ -643,26 +603,17 @@ export class Scheduler {
     return Array.from(g.resident, (i) => imageId(g.gen, i));
   }
 
-  /**
-   * Capacity shortage is settled, not processing: drop the undisplayable generation so a later
-   * update or resize can retry, instead of leaving displayGen:null/phase:rendering stuck with an
-   * exhausted (or permanently blocked) queue that no tileReady will ever resume.
-   *
-   * Same-generation stalls abandon the move instead: the old display stays, only the
-   * unneeded fetch results are evicted, and the generation (HTML/map) is kept.
-   */
+  // Shortage settles instead of sticking in rendering: drop the undisplayable
+  // generation so a later update/resize can retry. Same-generation stalls keep
+  // the display and only evict unneeded fetches.
   private settleStalled(g: GenState, actions: Action[]): void {
     if (g === this.displayGen) {
-      // Abandoning a requested move is a scroll failure like a refetch renderFailed;
-      // a prefetch stall with no outstanding request leaves the failure state alone.
       if (this.pending) this.scrollFailed = true;
       this.pending = null;
       if (this.pipeGen === g) this.pipeGen = null;
       this.shootQueue = [];
       this.shootInFlight = false;
       this.refetchingDisplayedGeneration = false;
-      // Show the settled display (clearing the scroll-waiting state) before
-      // deleting images the old position no longer needs.
       actions.push({ type: "redraw" });
       const freed = this.evictToSize(g, this.geometry.maxResident);
       if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
@@ -679,11 +630,8 @@ export class Scheduler {
     const shown = this.displayGen;
     const pend = shown ? this.clampPendingToGen(shown) : null;
     if (shown && pend !== null && this.pending) {
-      if (this.allVisibleResident(shown, pend)) {
-        const committed = this.pending;
-        this.scrollPx = pend;
-        this.pending = null;
-        this.scrollFailed = false;
+      const committed = this.takeCommitted(shown);
+      if (committed) {
         actions.push({ type: "redraw" });
         actions.push({ type: "scrollCommitted", jumpToEnd: committed.jumpToEnd });
         actions.push(...this.startPrefetchIfNeeded(0));
@@ -725,7 +673,7 @@ export class Scheduler {
     };
   }
 
-  private allVisibleResident(g: GenState, scroll: ScrollAlignedPx): boolean {
+  private allVisibleResident(g: GenState, scroll: number): boolean {
     const vis = visibleTiles(scroll, this.contentRows, this.geometry.cellHpx, g.tiles);
     return vis.every((p) => g.resident.has(p.tileIndex));
   }

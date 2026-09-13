@@ -5,21 +5,17 @@ import type { ScrollDelta } from "./scheduler.ts";
 const ESC = "\x1b";
 const ALT_ENTER = `${ESC}[?1049h`;
 const ALT_EXIT = `${ESC}[?1049l`;
-// Alt-screen has no scrollback, and mdpx never enables mouse reporting, so the wheel reaches us only
-// as cursor keys under alternate scroll. Terminals that default it off would drop the wheel entirely.
 const ALT_SCROLL_ENTER = `${ESC}[?1007h`;
 const ALT_SCROLL_EXIT = `${ESC}[?1007l`;
 const HIDE_CURSOR = `${ESC}[?25l`;
 const SHOW_CURSOR = `${ESC}[?25h`;
-// CSI 2J can wipe every stored kitty image, so it is only safe before the first transfer — entering
-// alt-screen. Later frames erase with CSI 0J (frame.ts).
+// CSI 2J wipes stored kitty images; only safe before the first transfer. Later frames use CSI 0J.
 const CLEAR_SCREEN = `${ESC}[2J`;
 
 export type Key = { type: "quit" } | { type: "theme" } | { type: "scroll"; delta: ScrollDelta };
 
 const MAX_CELL_PX = 1000;
 
-// The probe ID is below every generation-scoped image ID, so it cannot collide with a real tile.
 const GFX_PROBE_ID = 31;
 
 const KEY_Q = "q".charCodeAt(0);
@@ -52,11 +48,8 @@ function validCellDimensionPx(n: number): boolean {
 }
 
 /**
- * Waiting forever on an OSC/DCS/APC whose ST/BEL never comes would pile every
- * later input into the buffer and kill key input permanently — in raw mode even Ctrl-C is just byte
- * 0x03, so the parser swallows it and nothing but a kill from another terminal can exit.
- * Terminal replies (DA, 16t, kitty graphics) are all small and immediate, so anything lingering past
- * these limits is dropped and the parser resynchronizes.
+ * An unterminated OSC/DCS/APC would pile up input and kill keys permanently
+ * (raw mode swallows even Ctrl-C), so lingerers are dropped and resynced.
  */
 const MAX_PENDING_BYTES = 256;
 const RESYNC_MS = 200;
@@ -139,11 +132,8 @@ export class Term {
   }
 
   /**
-   * Query kitty graphics support. Sends a 1x1 graphics query (`a=q` neither
-   * stores nor displays anything; it only reports support) followed immediately by a Primary DA
-   * (ESC[c) as a sync marker. A supporting terminal returns the `_G` reply before the DA; a
-   * non-supporting one ignores the unknown APC and returns only the DA. If neither arrives, the
-   * timeout counts as unsupported.
+   * 1x1 query (a=q) reports support without storing; Primary DA is the sync marker.
+   * _G before DA means supported, DA only means not, timeout means not.
    */
   queryKittyGraphics(timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
@@ -179,10 +169,7 @@ export class Term {
       if (i + 1 >= buf.length) break;
       const kind = buf[i + 1]!;
       if (kind === CSI_INTRODUCER) {
-        // CSI: parameter and intermediate bytes (0x20–0x3f) followed by a final byte (0x40–0x7e).
-        // Anything with an out-of-range byte (a C0 control) is a malformed sequence, so consume only
-        // the ESC and re-read. Skipping every byte to the terminator would eat a Ctrl-C (0x03) in the
-        // middle and make it impossible to exit.
+        // Malformed CSI consumes only ESC so an embedded Ctrl-C can still quit.
         let j = i + 2;
         while (j < buf.length && buf[j]! >= 0x20 && buf[j]! <= 0x3f) j++;
         if (j >= buf.length) break;
@@ -207,9 +194,7 @@ export class Term {
         kind === PM_INTRODUCER ||
         kind === SOS_INTRODUCER
       ) {
-        // String-type sequences are read whole, up to an ST (ESC \) or BEL. Dropping only the single
-        // ESC byte would let the payload misfire as key input. The kitty graphics reply (ESC _ G …)
-        // is used solely for the capability query; other replies are discarded.
+        // String sequences are read whole; only ESC _ G (kitty reply) is observed.
         const end = stringTerminatorEnd(buf, i + 2);
         if (end === -1) break;
         if (kind === APC_INTRODUCER && buf[i + 2] === KITTY_GRAPHICS_MARKER) {
@@ -217,8 +202,7 @@ export class Term {
         }
         i = end;
       } else {
-        // A lone ESC (what follows is separate key input). Consume only the ESC so the next byte is
-        // not lost. Consuming two here would swallow the follow-up of ESC→j or ESC→arrow (ESC[B).
+        // A lone ESC consumes one byte so ESC→j / ESC→arrow keeps its follow-up.
         i += 1;
       }
     }

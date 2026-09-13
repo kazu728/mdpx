@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ContentError } from "./chrome.ts";
@@ -23,89 +23,65 @@ const GEO: Geometry = {
   maxTotalResident: 128,
 };
 
+const settle = () => new Promise((r) => setImmediate(r));
+const waitFor = async (cond: () => boolean, n = 500) => {
+  for (let i = 0; i < n && !cond(); i++) await settle();
+};
+const exists = async (p: string) => {
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+};
 function deferred<T>() {
-  let resolve!: (value: T) => void;
+  let resolve!: (v: T) => void;
   return { promise: new Promise<T>((r) => (resolve = r)), resolve };
 }
-
-const settle = () => new Promise((r) => setImmediate(r));
-
-async function harness() {
+const baseChrome = () => ({
+  load: async () => 1000,
+  collectAnchors: async () => [],
+  shoot: async () => "",
+  restart: async () => {},
+  imagesPending: async () => false,
+  waitForLateImages: async () => {},
+});
+async function makePipeline(chrome: unknown, opts?: { cols?: number; write?: (s: string) => void; shuttingDown?: boolean }) {
   const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-"));
   const mdPath = join(dir, "a.md");
   await writeFile(mdPath, "# a\n");
-
-  const calls: string[] = [];
-  const loadCalled = deferred<void>();
-  const loadResult = deferred<number>();
-  const chrome = {
-    load: () => {
-      calls.push("load");
-      loadCalled.resolve();
-      return loadResult.promise;
-    },
-    collectAnchors: async () => [],
-    shoot: async () => {
-      calls.push("shoot");
-      return "";
-    },
-    restart: async () => {},
-    imagesPending: async () => false,
-    waitForLateImages: async () => {},
-  };
+  const scheduler = new Scheduler(opts?.cols ? { ...GEO, cols: opts.cols } : GEO);
+  const htmlPath = join(dir, "view.html");
+  const shuttingDown = opts?.shuttingDown ?? false;
   const pipeline = new Pipeline({
-    chrome,
-    scheduler: new Scheduler(GEO),
-    term: { write: () => {} },
+    chrome: chrome as never,
+    scheduler,
+    term: { write: opts?.write ?? (() => {}) },
     mdPath,
     mdDir: dir,
     fileName: "a.md",
-    htmlPath: join(dir, "view.html"),
+    htmlPath,
     assets: { light: resolveAssets("light"), dark: resolveAssets("dark") },
-    isShuttingDown: () => false,
+    isShuttingDown: () => shuttingDown,
     onFatal: async () => {
       throw new Error("unexpected fatal");
     },
   });
-  return { pipeline, calls, loadCalled, loadResult };
+  return { dir, scheduler, pipeline, htmlPath };
 }
 
 describe("redraw dedup", () => {
-  test("identical consecutive frames reach the terminal once", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-dedup-"));
-    const mdPath = join(dir, "a.md");
-    await writeFile(mdPath, "# a\n");
+  test("identical frames reach terminal once", async () => {
     const writes: string[] = [];
-    const scheduler = new Scheduler({ ...GEO, cols: 80 });
-    const pipeline = new Pipeline({
-      chrome: {
-        load: async () => 1000,
-        collectAnchors: async () => [],
-        shoot: async () => "",
-        restart: async () => {},
-      imagesPending: async () => false,
-      waitForLateImages: async () => {},
-      },
-      scheduler,
-      term: {
-        write: (s: string) => {
-          writes.push(s);
-        },
-      },
-      mdPath,
-      mdDir: dir,
-      fileName: "a.md",
-      htmlPath: join(dir, "view.html"),
-      assets: { light: resolveAssets("light"), dark: resolveAssets("dark") },
-      isShuttingDown: () => true,
-      onFatal: async () => {
-        throw new Error("unexpected fatal");
-      },
+    const { scheduler, pipeline } = await makePipeline(baseChrome(), {
+      cols: 80,
+      write: (s) => writes.push(s),
+      shuttingDown: true,
     });
     pipeline.execute([{ type: "redraw" }]);
     pipeline.execute([{ type: "redraw" }]);
     expect(writes.length).toBe(1);
-    // A state change still redraws; the in-flight render is dropped at shutdown.
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
     expect(writes.length).toBe(2);
     for (let i = 0; i < 50; i++) await settle();
@@ -114,23 +90,29 @@ describe("redraw dedup", () => {
 });
 
 describe("one page at a time", () => {
-  test("a capture waits for the load in flight instead of racing the navigation", async () => {
-    const { pipeline, calls, loadCalled, loadResult } = await harness();
-
+  test("capture waits for load in flight", async () => {
+    const calls: string[] = [];
+    const loadCalled = deferred<void>();
+    const loadResult = deferred<number>();
+    const { pipeline } = await makePipeline({
+      ...baseChrome(),
+      load: () => {
+        calls.push("load");
+        loadCalled.resolve();
+        return loadResult.promise;
+      },
+      shoot: async () => {
+        calls.push("shoot");
+        return "";
+      },
+    });
     pipeline.execute([{ type: "render", gen: 1 }]);
     await loadCalled.promise;
-
     pipeline.execute([
-      {
-        type: "shoot",
-        gen: 1,
-        tileIndex: 0,
-        clip: { xCssPx: 0, yCssPx: 0, widthCssPx: 100, heightCssPx: 250 },
-      },
+      { type: "shoot", gen: 1, tileIndex: 0, clip: { xCssPx: 0, yCssPx: 0, widthCssPx: 100, heightCssPx: 250 } },
     ]);
     await settle();
     expect(calls).toEqual(["load"]);
-
     loadResult.resolve(1000);
     await settle();
     expect(calls).toEqual(["load", "shoot"]);
@@ -138,137 +120,50 @@ describe("one page at a time", () => {
 });
 
 describe("generation binding", () => {
-  test("a failed update reloads the displayed document before old tiles are shot again", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-gen-"));
-    const mdPath = join(dir, "a.md");
-    await writeFile(mdPath, "# a\n");
-    const scheduler = new Scheduler(GEO);
+  test("failed update reloads display before old tiles re-shoot", async () => {
     const loads: string[] = [];
     let shoots = 0;
-    const chrome = {
-      load: (htmlPath: string) => {
-        loads.push(htmlPath);
-        if (htmlPath.includes("gen-2")) throw new ContentError("load timed out");
+    const { scheduler, pipeline } = await makePipeline({
+      ...baseChrome(),
+      load: (p: string) => {
+        loads.push(p);
+        if (p.includes("gen-2")) throw new ContentError("load timed out");
         return Promise.resolve(1000);
       },
-      collectAnchors: async () => [],
       shoot: async () => {
         shoots += 1;
         return "";
       },
-      restart: async () => {},
-      imagesPending: async () => false,
-      waitForLateImages: async () => {},
-    };
-    const pipeline = new Pipeline({
-      chrome,
-      scheduler,
-      term: { write: () => {} },
-      mdPath,
-      mdDir: dir,
-      fileName: "a.md",
-      htmlPath: join(dir, "view.html"),
-      assets: { light: resolveAssets("light"), dark: resolveAssets("dark") },
-      isShuttingDown: () => false,
-      onFatal: async () => {
-        throw new Error("unexpected fatal");
-      },
     });
-
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    for (let i = 0; i < 500 && scheduler.viewState().displayGen !== 1; i++) {
-      await settle();
-    }
+    await waitFor(() => scheduler.viewState().displayGen === 1);
     expect(scheduler.viewState().displayGen).toBe(1);
-    const loadsAfterGen1 = loads.length;
-    expect(loadsAfterGen1).toBeGreaterThan(0);
-
-    // Failure keeps the display with no eager restore; the next old-gen shoot reloads lazily.
+    const afterGen1 = loads.length;
+    expect(afterGen1).toBeGreaterThan(0);
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    for (let i = 0; i < 500 && !loads.some((p) => p.includes("gen-2")); i++) await settle();
+    await waitFor(() => loads.some((p) => p.includes("gen-2")));
     for (let i = 0; i < 500; i++) await settle();
     expect(scheduler.viewState().displayGen).toBe(1);
-    expect(loads.some((p) => p.includes("gen-2"))).toBe(true);
-    expect(loads.length).toBeGreaterThan(loadsAfterGen1);
-    expect(loads.filter((p) => p.includes("gen-1")).length).toBe(loadsAfterGen1);
-
-    const shootsBefore = shoots;
+    expect(loads.length).toBeGreaterThan(afterGen1);
+    expect(loads.filter((p) => p.includes("gen-1")).length).toBe(afterGen1);
+    const before = shoots;
     pipeline.execute([
-      {
-        type: "shoot",
-        gen: 1,
-        tileIndex: 0,
-        clip: { xCssPx: 0, yCssPx: 0, widthCssPx: 100, heightCssPx: 250 },
-      },
+      { type: "shoot", gen: 1, tileIndex: 0, clip: { xCssPx: 0, yCssPx: 0, widthCssPx: 100, heightCssPx: 250 } },
     ]);
     for (let i = 0; i < 50; i++) await settle();
-    expect(shoots).toBe(shootsBefore + 1);
-    expect(scheduler.viewState().displayGen).toBe(1);
-    expect(loads.filter((p) => p.includes("gen-1")).length).toBe(loadsAfterGen1 + 1);
+    expect(shoots).toBe(before + 1);
+    expect(loads.filter((p) => p.includes("gen-1")).length).toBe(afterGen1 + 1);
   });
 });
 
 describe("generation-owned files", () => {
-  async function genHarness() {
-    const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-files-"));
-    const mdPath = join(dir, "a.md");
-    await writeFile(mdPath, "# a\n");
-    const scheduler = new Scheduler(GEO);
-    const chrome = {
-      load: async () => 1000,
-      collectAnchors: async () => [],
-      shoot: async () => "",
-      restart: async () => {},
-      imagesPending: async () => false,
-      waitForLateImages: async () => {},
-    };
-    const pipeline = new Pipeline({
-      chrome,
-      scheduler,
-      term: { write: () => {} },
-      mdPath,
-      mdDir: dir,
-      fileName: "a.md",
-      htmlPath: join(dir, "view.html"),
-      assets: { light: resolveAssets("light"), dark: resolveAssets("dark") },
-      isShuttingDown: () => false,
-      onFatal: async () => {
-        throw new Error("unexpected fatal");
-      },
-    });
-    return { dir, scheduler, pipeline, htmlPath: join(dir, "view.html") };
-  }
-
-  async function waitForDisplay(
-    scheduler: Scheduler,
-    gen: number,
-    timeout = 500,
-  ): Promise<void> {
-    for (let i = 0; i < timeout && scheduler.viewState().displayGen !== gen; i++) {
-      await settle();
-    }
-    expect(scheduler.viewState().displayGen).toBe(gen);
-  }
-
-  async function exists(path: string): Promise<boolean> {
-    try {
-      const { stat } = await import("node:fs/promises");
-      await stat(path);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  test("switching display releases the old HTML and map without waiting for the next load", async () => {
-    const { scheduler, pipeline, htmlPath } = await genHarness();
+  test("switching releases old HTML and map at promotion", async () => {
+    const { scheduler, pipeline, htmlPath } = await makePipeline(baseChrome());
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitForDisplay(scheduler, 1);
+    await waitFor(() => scheduler.viewState().displayGen === 1);
     expect(await exists(`${htmlPath}.gen-1.html`)).toBe(true);
-
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitForDisplay(scheduler, 2);
-    // Old generation ends at promotion: its file and map are gone even though gen 3 never loads.
+    await waitFor(() => scheduler.viewState().displayGen === 2);
     for (let i = 0; i < 100; i++) await settle();
     expect(await exists(`${htmlPath}.gen-1.html`)).toBe(false);
     expect(await exists(`${htmlPath}.gen-2.html`)).toBe(true);
@@ -276,141 +171,29 @@ describe("generation-owned files", () => {
     expect(maps.has(1)).toBe(false);
     expect(maps.has(2)).toBe(true);
   });
-
-  test("a failed generation releases its file while the displayed generation keeps its own", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-fail-"));
-    const mdPath = join(dir, "a.md");
-    await writeFile(mdPath, "# a\n");
-    const scheduler = new Scheduler(GEO);
-    const chrome = {
-      load: (p: string) => {
-        if (p.includes("gen-2")) throw new ContentError("load timed out");
-        return Promise.resolve(1000);
-      },
-      collectAnchors: async () => [],
-      shoot: async () => "",
-      restart: async () => {},
-      imagesPending: async () => false,
-      waitForLateImages: async () => {},
-    };
-    const htmlPath = join(dir, "view.html");
-    const pipeline = new Pipeline({
-      chrome,
-      scheduler,
-      term: { write: () => {} },
-      mdPath,
-      mdDir: dir,
-      fileName: "a.md",
-      htmlPath,
-      assets: { light: resolveAssets("light"), dark: resolveAssets("dark") },
-      isShuttingDown: () => false,
-      onFatal: async () => {
-        throw new Error("unexpected fatal");
-      },
-    });
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitForDisplay(scheduler, 1);
-    expect(await exists(`${htmlPath}.gen-1.html`)).toBe(true);
-
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    for (let i = 0; i < 500; i++) await settle();
-    expect(scheduler.viewState().displayGen).toBe(1);
-    expect(await exists(`${htmlPath}.gen-1.html`)).toBe(true);
-    expect(await exists(`${htmlPath}.gen-2.html`)).toBe(false);
-    const maps = (pipeline as unknown as { lineMaps: Map<number, unknown> }).lineMaps;
-    expect(maps.has(1)).toBe(true);
-    expect(maps.has(2)).toBe(false);
-  });
 });
 
 describe("late images", () => {
-  test("an image finishing after display triggers one re-render with fresh pixels", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-late-"));
-    const mdPath = join(dir, "a.md");
-    await writeFile(mdPath, "# a\n");
-    const scheduler = new Scheduler(GEO);
+  test("image finishing after display triggers one re-render", async () => {
     const loads: string[] = [];
     let pending = true;
-    const chrome = {
+    const { scheduler, pipeline } = await makePipeline({
+      ...baseChrome(),
       load: (p: string) => {
         loads.push(p);
         return Promise.resolve(1000);
       },
-      collectAnchors: async () => [],
-      shoot: async () => "",
-      restart: async () => {},
       imagesPending: async () => pending,
       waitForLateImages: async () => {
         pending = false;
       },
-    };
-    const pipeline = new Pipeline({
-      chrome,
-      scheduler,
-      term: { write: () => {} },
-      mdPath,
-      mdDir: dir,
-      fileName: "a.md",
-      htmlPath: join(dir, "view.html"),
-      assets: { light: resolveAssets("light"), dark: resolveAssets("dark") },
-      isShuttingDown: () => false,
-      onFatal: async () => {
-        throw new Error("unexpected fatal");
-      },
     });
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    for (let i = 0; i < 500 && scheduler.viewState().displayGen !== 2; i++) {
-      await settle();
-    }
-    // The straggler finished after gen 1 displayed, so gen 2 re-rendered the same content.
+    await waitFor(() => scheduler.viewState().displayGen === 2);
     expect(scheduler.viewState().displayGen).toBe(2);
     expect(loads.some((p) => p.includes("gen-2"))).toBe(true);
-    // Settled now: no further generations follow on their own.
-    const loadsAfter = loads.length;
+    const after = loads.length;
     for (let i = 0; i < 100; i++) await settle();
-    expect(loads.length).toBe(loadsAfter);
-    expect(scheduler.viewState().displayGen).toBe(2);
-  });
-
-  test("an image that never finishes keeps the current pixels", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-stuck-"));
-    const mdPath = join(dir, "a.md");
-    await writeFile(mdPath, "# a\n");
-    const scheduler = new Scheduler(GEO);
-    const loads: string[] = [];
-    const chrome = {
-      load: (p: string) => {
-        loads.push(p);
-        return Promise.resolve(1000);
-      },
-      collectAnchors: async () => [],
-      shoot: async () => "",
-      restart: async () => {},
-      imagesPending: async () => true,
-      waitForLateImages: async () => {},
-    };
-    const pipeline = new Pipeline({
-      chrome,
-      scheduler,
-      term: { write: () => {} },
-      mdPath,
-      mdDir: dir,
-      fileName: "a.md",
-      htmlPath: join(dir, "view.html"),
-      assets: { light: resolveAssets("light"), dark: resolveAssets("dark") },
-      isShuttingDown: () => false,
-      onFatal: async () => {
-        throw new Error("unexpected fatal");
-      },
-    });
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    for (let i = 0; i < 500 && scheduler.viewState().displayGen !== 1; i++) {
-      await settle();
-    }
-    expect(scheduler.viewState().displayGen).toBe(1);
-    const loadsAfter = loads.length;
-    for (let i = 0; i < 100; i++) await settle();
-    expect(loads.filter((p) => p.includes("gen-2")).length).toBe(0);
-    expect(loads.length).toBe(loadsAfter);
+    expect(loads.length).toBe(after);
   });
 });

@@ -32,15 +32,14 @@ function keys(control: string): Record<string, string> {
 }
 
 describe("imageId", () => {
-  test("uses a separate ID range for each generation and is always at least 1", () => {
+  test("separate range per generation, at least 1", () => {
     expect(imageId(1, 0)).toBe(IMAGE_ID_GENERATION_STRIDE);
     expect(imageId(2, 5)).toBe(2 * IMAGE_ID_GENERATION_STRIDE + 5);
-    expect(imageId(1, 0)).toBeGreaterThan(0);
   });
 });
 
 describe("transmit", () => {
-  test("splits at the 4096 boundary and continues the m flag", () => {
+  test("splits at 4096 with m flag", () => {
     const b64 = "A".repeat(MAX_PAYLOAD_CHUNK_SIZE * 2 + 10);
     const apcs = parseApc(transmit(imageId(3, 1), b64));
     expect(apcs).toHaveLength(3);
@@ -48,7 +47,6 @@ describe("transmit", () => {
     expect(apcs[1]!.payload.length).toBe(MAX_PAYLOAD_CHUNK_SIZE);
     expect(apcs[2]!.payload.length).toBe(10);
     expect(keys(apcs[0]!.control)).toMatchObject({ a: "t", f: "100", t: "d", i: String(imageId(3, 1)), q: "1", m: "1" });
-    expect(keys(apcs[1]!.control).m).toBe("1");
     expect(keys(apcs[2]!.control).m).toBe("0");
     expect(apcs[1]!.control).toBe("m=1");
   });
@@ -62,7 +60,7 @@ describe("transmit", () => {
 });
 
 describe("place", () => {
-  test("the source rect and display cell parameters", () => {
+  test("source rect and display cells", () => {
     const s = place({
       id: 2053,
       sourceXImagePx: 0,
@@ -82,15 +80,11 @@ describe("place", () => {
 });
 
 describe("delete", () => {
-  test("deletePlacement removes the placement only (d=i)", () => {
+  test("placement/image/all use d=i/d=I/d=A", () => {
     expect(keys(parseApc(deletePlacement(2053))[0]!.control)).toMatchObject({
       a: "d", d: "i", i: "2053", p: String(TILE_PLACEMENT_ID),
     });
-  });
-  test("deleteImage frees the data (d=I)", () => {
     expect(keys(parseApc(deleteImage(2053))[0]!.control)).toMatchObject({ a: "d", d: "I", i: "2053" });
-  });
-  test("deleteAll removes everything (d=A)", () => {
     expect(keys(parseApc(deleteAll())[0]!.control)).toMatchObject({ a: "d", d: "A" });
   });
 });

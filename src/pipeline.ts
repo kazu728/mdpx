@@ -33,7 +33,6 @@ interface PipelineDeps {
 }
 
 export class Pipeline {
-  // Each generation owns its HTML file and line map; both are released when the generation ends.
   private readonly lineMaps = new Map<number, LineMap>();
   private consecutiveFailures = 0;
   private lastPlacements: number[] = [];
@@ -50,8 +49,6 @@ export class Pipeline {
       switch (a.type) {
         case "redraw": {
           const frame = renderFrame(scheduler.viewState(), fileName, this.lastPlacements);
-          // Prefetch completions redraw with no visible or status change; resending the identical
-          // frame only costs erase-and-replace bytes inside the sync block, so skip it.
           if (frame.escape !== this.lastEscape) {
             term.write(frame.escape);
             this.lastEscape = frame.escape;
@@ -94,7 +91,6 @@ export class Pipeline {
     return sourceLineAt(map, v.scrollPx / CSS_SCALE, jumpToEnd);
   }
 
-  /** A capture interrupted by a navigation never settles, and wedges every later capture. */
   private onPage<T>(work: () => Promise<T>): Promise<T> {
     const turn = this.page.then(work);
     this.page = turn.catch(() => {});
@@ -109,7 +105,7 @@ export class Pipeline {
         this.consecutiveFailures = 0;
         return r;
       } catch (e) {
-        if (e instanceof ContentError) throw e; // a restart fails the same way on the same content; keep the classes apart
+        if (e instanceof ContentError) throw e;
         this.consecutiveFailures += 1;
         if (this.consecutiveFailures >= MAX_CONSECUTIVE_CHROME_FAILURES) {
           return onFatal("mdpx: Chrome failed repeatedly\n");
@@ -129,27 +125,20 @@ export class Pipeline {
     return `${this.deps.htmlPath}.gen-${gen}.html`;
   }
 
-  private loadGenDocument(gen: number): Promise<number> {
+  private async loadGenDocument(gen: number): Promise<number> {
     const { chrome, scheduler } = this.deps;
     const g = scheduler.viewState().geometry;
-    // Invalidate first: a failed load taints the page, so a stale match must never skip reload.
     this.loadedGen = null;
-    return chrome.load(this.htmlFor(gen), g.viewportWidthCssPx, g.renderScale).then((h) => {
-      this.loadedGen = gen;
-      return h;
-    });
+    const h = await chrome.load(this.htmlFor(gen), g.viewportWidthCssPx, g.renderScale);
+    this.loadedGen = gen;
+    return h;
   }
 
-  /** Load and collect anchors together so they stay matched to the page. */
-  private async loadWithAnchors(
-    gen: number,
-  ): Promise<{ documentHeightCssPx: number; anchors: Anchor[] }> {
+  /** Load and collect anchors together so they match the same page. */
+  private async loadWithAnchors(gen: number): Promise<{ documentHeightCssPx: number; anchors: Anchor[] }> {
     const documentHeightCssPx = await this.loadGenDocument(gen);
-    return { documentHeightCssPx, anchors: await this.deps.chrome.collectAnchors() };
-  }
-
-  private rememberLineMap(gen: number, map: LineMap): void {
-    this.lineMaps.set(gen, map);
+    const anchors = await this.deps.chrome.collectAnchors();
+    return { documentHeightCssPx, anchors };
   }
 
   /** A generation ends in the scheduler; its HTML and map end here. */
@@ -182,7 +171,7 @@ export class Pipeline {
       }
       throw e;
     }
-    this.rememberLineMap(
+    this.lineMaps.set(
       gen,
       buildLineMap(
         loaded.anchors,
@@ -229,11 +218,7 @@ export class Pipeline {
     }
   }
 
-  /**
-   * Images decoded after the initial measure leave stale tiles: shifted layout, or same-box
-   * pixels for dimension-specified images that height comparison alone would miss. Re-render
-   * once the stragglers finish; a still-pending image after the budget keeps current pixels.
-   */
+  // Late images leave stale tiles; re-render once stragglers finish within budget.
   private async settleLateImages(gen: number): Promise<void> {
     const { chrome, scheduler, isShuttingDown } = this.deps;
     try {
@@ -244,8 +229,6 @@ export class Pipeline {
       if (scheduler.viewState().displayGen !== gen) return;
       if (await chrome.imagesPending()) return;
       this.execute(scheduler.dispatch({ type: "trigger" }));
-    } catch {
-      // Best-effort background check: a broken page surfaces through the normal capture path.
-    }
+    } catch {}
   }
 }

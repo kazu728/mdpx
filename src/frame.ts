@@ -1,5 +1,5 @@
+import stringWidth from "string-width";
 import { deletePlacement, imageId, place } from "./kitty.ts";
-import { displayWidth, sanitizeTerminalLine, truncateToDisplayWidth } from "./text.ts";
 import { CSS_SCALE, contentRows, maxScrollPx, toImagePx, visibleTiles } from "./viewport.ts";
 import type { ViewState } from "./scheduler.ts";
 
@@ -78,8 +78,7 @@ function statusBar(view: ViewState, filename: string, pendingVisible: boolean): 
         : shown && shown.truncated && scrollPx >= max
           ? "truncated"
           : "";
-  // Keep capacity out of the transient state chain: it must survive at the end of a truncated document.
-  // Transfer overflow is "too wide" (one image does not fit); storage-only overflow is "too many".
+  // Capacity outlives transient states so it survives at a truncated tail.
   const capacity = geometry.exceedsFrameLimit
     ? "too wide"
     : geometry.exceedsStorage
@@ -87,7 +86,7 @@ function statusBar(view: ViewState, filename: string, pendingVisible: boolean): 
       : geometry.renderScale < CSS_SCALE
         ? "low-res"
         : "";
-  const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");
+  const left = [`${sanitizeTerminalBlock(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");
   const right = "q:quit";
   const cols = geometry.cols;
   const { text, displayWidth: leftW } = truncateToDisplayWidth(left, cols);
@@ -97,4 +96,29 @@ function statusBar(view: ViewState, filename: string, pendingVisible: boolean): 
       ? text + " ".repeat(cols - leftW - rightW) + right
       : text + " ".repeat(cols - leftW);
   return `${ESC}[7m${line}${ESC}[0m`;
+}
+
+export function sanitizeTerminalBlock(s: string): string {
+  return s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "?");
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+export function displayWidth(text: string): number {
+  return stringWidth(text);
+}
+
+export function truncateToDisplayWidth(
+  text: string,
+  maxDisplayWidth: number,
+): { text: string; displayWidth: number } {
+  let truncatedText = "";
+  let displayWidth = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    const segmentWidth = stringWidth(segment);
+    if (displayWidth + segmentWidth > maxDisplayWidth) break;
+    truncatedText += segment;
+    displayWidth += segmentWidth;
+  }
+  return { text: truncatedText, displayWidth };
 }

@@ -1,12 +1,4 @@
 import {
-  detectGraphicsLimits,
-  fitsGraphicsFrame,
-  maxResidentTiles,
-  maxTilesInFrame,
-  totalTileCapacity,
-  type GraphicsLimits,
-} from "./capacity.ts";
-import {
   alignedTileHeightPx,
   CSS_SCALE,
   contentRows,
@@ -14,8 +6,67 @@ import {
   REDUCED_SCALE,
   scrollUnitPx,
   toImagePx,
-  type TileAlignedPx,
 } from "./viewport.ts";
+
+export interface GraphicsLimits {
+  frameBytes: number | null;
+  storageBytes: number;
+}
+
+const HERDR_RELAY: GraphicsLimits = {
+  frameBytes: 32 * 1024 * 1024 - 2 * 1024 * 1024,
+  storageBytes: 64 * 1024 * 1024,
+};
+
+// 320MB is the kitty protocol quota (decoded pixels, not PNG bytes).
+const DIRECT: GraphicsLimits = { frameBytes: null, storageBytes: 320_000_000 };
+
+export function detectGraphicsLimits(env: NodeJS.ProcessEnv = process.env): GraphicsLimits {
+  const v = env.HERDR_ENV;
+  return v !== undefined && v !== "" && v !== "0" ? HERDR_RELAY : DIRECT;
+}
+
+const KITTY_CHUNK_BYTES = 3072;
+
+function transferSize(dataLenBytes: number): number {
+  return (
+    Math.ceil(dataLenBytes / 3) * 4 + Math.ceil(dataLenBytes / KITTY_CHUNK_BYTES) * 16 + 1024
+  );
+}
+
+function tileCount(storageBytes: number, tileBytes: number): number {
+  return Math.floor(storageBytes / Math.max(1, tileBytes));
+}
+
+/** Decoded-tile count with no bookkeeping margin. */
+export function totalTileCapacity(tileBytes: number, limits: GraphicsLimits): number {
+  return tileCount(limits.storageBytes, tileBytes);
+}
+
+/** Working set stays below terminal eviction and never below the visible floor. */
+export function maxResidentTiles(
+  tileBytes: number,
+  limits: GraphicsLimits,
+  minTiles: number,
+): number {
+  return Math.max(minTiles, tileCount(limits.storageBytes * 0.8, tileBytes));
+}
+
+/** Worst case touches one extra boundary while straddling. */
+export function maxTilesInFrame(viewportHeightPx: number, tileHeightPx: number): number {
+  return Math.max(1, Math.ceil(viewportHeightPx / Math.max(1, tileHeightPx)) + 1);
+}
+
+export function fitsGraphicsFrame(
+  limits: GraphicsLimits,
+  imageWidthPx: number,
+  tileHeightPx: number,
+): boolean {
+  return (
+    limits.frameBytes === null ||
+    transferSize(imageWidthPx * tileHeightPx * 4) <= limits.frameBytes
+  );
+}
 
 export interface CellSize {
   cellHpx: number;
@@ -31,14 +82,12 @@ export interface Geometry extends ScreenSize {
   cellHpx: number;
   imgWidthPx: number;
   viewportWidthCssPx: number;
-  /** Downscaling shrinks the image in both directions; kitty scales the placement back up. */
   renderScale: number;
-  tileHeightPx: TileAlignedPx;
+  tileHeightPx: number;
   exceedsFrameLimit: boolean;
-  /** True when one image fits transfer but old+new visible tiles do not fit storage. */
+  /** One image fits transfer but old+new visible tiles do not fit storage. */
   exceedsStorage: boolean;
   maxResident: number;
-  /** Bound on old+new resident tiles combined. */
   maxTotalResident: number;
 }
 
@@ -51,28 +100,22 @@ export interface Clip {
 
 interface CapturePlan {
   renderScale: number;
-  tileHeightPx: TileAlignedPx;
+  tileHeightPx: number;
   exceedsFrameLimit: boolean;
   exceedsStorage: boolean;
   maxResident: number;
   maxTotalResident: number;
 }
 
-function tileHeightCandidates(cellHpx: number): TileAlignedPx[] {
+function tileHeightCandidates(cellHpx: number): number[] {
   const maximum = maximumTileHeightPx(cellHpx);
-  const candidates: TileAlignedPx[] = [];
+  const candidates: number[] = [];
   for (let rows = Math.floor(maximum / cellHpx); rows >= 1; rows -= 2) {
     candidates.push(alignedTileHeightPx(cellHpx, rows));
   }
   return candidates;
 }
 
-/**
- * Within one scale, capacity is mandatory and height is preference: one tile must fit the
- * transfer budget and the required generations of visible tiles must fit storage; the tallest
- * fitting tile wins, which is also the fewest tiles per screen. Candidates run tallest-first.
- * maxResident is capped to maxTotalResident so the fallback can never promise more than fits.
- */
 function cappedBudgets(
   tileBytes: number,
   minTiles: number,
@@ -85,6 +128,30 @@ function cappedBudgets(
   };
 }
 
+interface FittingTile {
+  tileHeightPx: number;
+  tilesInFrame: number;
+  tileBytes: number;
+}
+
+function fittingTiles(
+  screenWidthPx: number,
+  viewportHeightPx: number,
+  cellHpx: number,
+  renderScale: number,
+  limits: GraphicsLimits,
+): FittingTile[] {
+  const imgWidthPx = toImagePx(screenWidthPx, renderScale);
+  const out: FittingTile[] = [];
+  for (const tileHeightPx of tileHeightCandidates(cellHpx)) {
+    const tilesInFrame = maxTilesInFrame(viewportHeightPx, tileHeightPx);
+    const imageTileHeightPx = toImagePx(tileHeightPx, renderScale);
+    if (!fitsGraphicsFrame(limits, imgWidthPx, imageTileHeightPx)) continue;
+    out.push({ tileHeightPx, tilesInFrame, tileBytes: imgWidthPx * imageTileHeightPx * 4 });
+  }
+  return out;
+}
+
 function planAtScale(
   screenWidthPx: number,
   viewportHeightPx: number,
@@ -93,12 +160,13 @@ function planAtScale(
   limits: GraphicsLimits,
   generations: 1 | 2,
 ): CapturePlan | null {
-  const imgWidthPx = toImagePx(screenWidthPx, renderScale);
-  for (const tileHeightPx of tileHeightCandidates(cellHpx)) {
-    const tilesInFrame = maxTilesInFrame(viewportHeightPx, tileHeightPx);
-    const imageTileHeightPx = toImagePx(tileHeightPx, renderScale);
-    if (!fitsGraphicsFrame(limits, imgWidthPx, imageTileHeightPx)) continue;
-    const tileBytes = imgWidthPx * imageTileHeightPx * 4;
+  for (const { tileHeightPx, tilesInFrame, tileBytes } of fittingTiles(
+    screenWidthPx,
+    viewportHeightPx,
+    cellHpx,
+    renderScale,
+    limits,
+  )) {
     if (generations * tilesInFrame * tileBytes > limits.storageBytes) continue;
     return {
       renderScale,
@@ -111,7 +179,7 @@ function planAtScale(
   return null;
 }
 
-/** Among transfer-fitting tiles, the one with the smallest visible footprint overflows least. */
+/** Among transfer-fitting tiles, the smallest visible footprint overflows least. */
 function transferBestAtScale(
   screenWidthPx: number,
   viewportHeightPx: number,
@@ -119,14 +187,15 @@ function transferBestAtScale(
   renderScale: number,
   limits: GraphicsLimits,
 ): CapturePlan | null {
-  const imgWidthPx = toImagePx(screenWidthPx, renderScale);
   let best: CapturePlan | null = null;
   let bestSingleBytes = Number.POSITIVE_INFINITY;
-  for (const tileHeightPx of tileHeightCandidates(cellHpx)) {
-    const tilesInFrame = maxTilesInFrame(viewportHeightPx, tileHeightPx);
-    const imageTileHeightPx = toImagePx(tileHeightPx, renderScale);
-    if (!fitsGraphicsFrame(limits, imgWidthPx, imageTileHeightPx)) continue;
-    const tileBytes = imgWidthPx * imageTileHeightPx * 4;
+  for (const { tileHeightPx, tilesInFrame, tileBytes } of fittingTiles(
+    screenWidthPx,
+    viewportHeightPx,
+    cellHpx,
+    renderScale,
+    limits,
+  )) {
     const singleBytes = tilesInFrame * tileBytes;
     if (singleBytes >= bestSingleBytes) continue;
     bestSingleBytes = singleBytes;
@@ -169,63 +238,23 @@ function resolveCapturePlan(
   cellHpx: number,
   limits: GraphicsLimits,
 ): CapturePlan {
-  // Prefer full resolution while it fits transfer and old+new storage; only then try reduced.
-  // When old+new no longer fits, fall back to a single generation that still fits transfer:
-  // the scheduler drops the old display first instead of holding both. Transfer overflow is
-  // reported separately and never passed off as a storage fit.
-  const fullBoth = planAtScale(screenWidthPx, viewportHeightPx, cellHpx, CSS_SCALE, limits, 2);
-  if (fullBoth) return fullBoth;
-
   const canReduce =
     limits.frameBytes !== null &&
     viewportHeightPx >= scrollUnitPx(cellHpx, REDUCED_SCALE);
-  if (canReduce) {
-    const reducedBoth = planAtScale(
-      screenWidthPx,
-      viewportHeightPx,
-      cellHpx,
-      REDUCED_SCALE,
-      limits,
-      2,
-    );
-    if (reducedBoth) return reducedBoth;
+  const scales = canReduce ? [CSS_SCALE, REDUCED_SCALE] : [CSS_SCALE];
+  for (const scale of scales) {
+    const both = planAtScale(screenWidthPx, viewportHeightPx, cellHpx, scale, limits, 2);
+    if (both) return both;
   }
-
-  const fullSingle = planAtScale(screenWidthPx, viewportHeightPx, cellHpx, CSS_SCALE, limits, 1);
-  if (fullSingle) return fullSingle;
-  if (canReduce) {
-    const reducedSingle = planAtScale(
-      screenWidthPx,
-      viewportHeightPx,
-      cellHpx,
-      REDUCED_SCALE,
-      limits,
-      1,
-    );
-    if (reducedSingle) return reducedSingle;
+  for (const scale of scales) {
+    const single = planAtScale(screenWidthPx, viewportHeightPx, cellHpx, scale, limits, 1);
+    if (single) return single;
   }
-
-  const fullTransferBest = transferBestAtScale(
-    screenWidthPx,
-    viewportHeightPx,
-    cellHpx,
-    CSS_SCALE,
-    limits,
-  );
-  if (fullTransferBest) return fullTransferBest;
-  if (canReduce) {
-    const reducedTransferBest = transferBestAtScale(
-      screenWidthPx,
-      viewportHeightPx,
-      cellHpx,
-      REDUCED_SCALE,
-      limits,
-    );
-    if (reducedTransferBest) return reducedTransferBest;
+  for (const scale of scales) {
+    const best = transferBestAtScale(screenWidthPx, viewportHeightPx, cellHpx, scale, limits);
+    if (best) return best;
   }
-
-  // True transfer overflow: even the smallest tile does not fit one transaction.
-  // Keep the smallest to minimize the overflow; budgets stay capped so maxResident <= maxTotal.
+  // Even the smallest tile overflows one transaction; keep it to minimize the overflow.
   return smallestPlanAtScale(
     screenWidthPx,
     viewportHeightPx,
@@ -251,8 +280,7 @@ export function resolveGeometry(
     cell.cellHpx,
     limits,
   );
-  // At 1:1 the real image can be 1 px wider than the terminal, and cropping that pixel is sharper
-  // than resampling the whole image.
+  // At 1:1 cropping 1px is sharper than resampling the whole image.
   const imgWidthPx = toImagePx(screenWidthPx, plan.renderScale);
   return {
     rows,

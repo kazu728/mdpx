@@ -8,18 +8,17 @@ import { Chrome, resolveExecutable } from "./chrome.ts";
 import { NvimCursor } from "./nvim.ts";
 import { Pipeline } from "./pipeline.ts";
 import { Scheduler } from "./scheduler.ts";
-import { sanitizeTerminalBlock, sanitizeTerminalLine } from "./text.ts";
+import { sanitizeTerminalBlock } from "./frame.ts";
 import { Term } from "./term.ts";
 import { resolveGeometry } from "./geometry.ts";
 
 const CELL_QUERY_MS = 200;
 const GRAPHICS_QUERY_TIMEOUT_MS = 200;
 const WATCH_DEBOUNCE_MS = 100;
-const CHROME_CLOSE_TIMEOUT_MS = 1500; // the terminal is already restored, so a stuck close must not block exit
+const CHROME_CLOSE_TIMEOUT_MS = 1500;
 
-// Sanitize every external string before writing to the bare terminal; it may contain CSI/OSC.
 function warn(msg: string): void {
-  process.stderr.write(sanitizeTerminalLine(`mdpx: ${msg}`) + "\n");
+  process.stderr.write(sanitizeTerminalBlock(`mdpx: ${msg}`) + "\n");
 }
 
 function usageExit(msg: string): never {
@@ -28,11 +27,10 @@ function usageExit(msg: string): never {
 }
 
 function unsupportedTerminalExit(): never {
-  process.stderr.write("mdpx: run this in a terminal that supports the kitty graphics protocol\n");
+  warn("run this in a terminal that supports the kitty graphics protocol");
   process.exit(1);
 }
 
-// Resolve symlinks so relative assets and watching use the target; report TOCTOU as a usage error.
 function resolveMdPath(arg: string): string {
   try {
     const resolved = resolve(arg);
@@ -47,7 +45,6 @@ async function main(): Promise<void> {
   const mdPath = resolveMdPath(arg);
   const mdDir = dirname(mdPath);
   const fileName = basename(mdPath);
-  // Normalize macOS FSEvents names before comparing them.
   const watchTarget = fileName.normalize("NFC").toLowerCase();
 
   if (!process.stdout.isTTY || !process.stdin.isTTY) unsupportedTerminalExit();
@@ -67,7 +64,6 @@ async function main(): Promise<void> {
   async function shutdown(code: number, message?: string): Promise<never> {
     if (shuttingDown) return new Promise<never>(() => {});
     shuttingDown = true;
-    // Always reach process.exit, even if cleanup throws synchronously.
     try {
       if (debounce) clearTimeout(debounce);
       watcher?.close();
@@ -80,11 +76,9 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
-  // Install exit handlers before startup so cleanup also covers Chrome launch.
   term.onKey((k) => {
     if (k.type === "quit") void shutdown(0);
   });
-  // Handle SIGHUP too so a closed terminal does not orphan raw input, the watcher, or the temp dir.
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => void shutdown(0));
   process.on("uncaughtException", (e) => void shutdown(1, `mdpx: ${e?.stack ?? e}\n`));
   process.on("unhandledRejection", (e) => {
@@ -103,7 +97,6 @@ async function main(): Promise<void> {
 
   let assets: Record<Theme, Assets>;
   try {
-    // Resolve both themes up front so a missing stylesheet fails at startup, not on the first toggle.
     assets = { light: resolveAssets("light"), dark: resolveAssets("dark") };
     dir = await mkdtemp(join(tmpdir(), "mdpx-"));
   } catch (e) {
@@ -140,12 +133,9 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     if (k.type === "quit") return void shutdown(0);
     if (k.type === "theme") return pipeline.toggleTheme();
-    // Cursor sync rides on scrollCommitted inside execute, so pure renders and
-    // resizes never move the editor while deferred scrolls sync on commit.
     pipeline.execute(scheduler.dispatch({ type: "key", delta: k.delta }));
   });
 
-  // Rapid resizes can resolve an older query late, so seq keeps only the newest from winning.
   let resizeSeq = 0;
   term.onResizeEvent(() => {
     const seq = ++resizeSeq;
@@ -171,8 +161,6 @@ async function main(): Promise<void> {
   }
 
   term.enterAltScreen();
-  // From here a synchronous throw rejects main(), whose catch does not restore the terminal, and
-  // alt-screen is already entered — so route it through shutdown.
   try {
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
   } catch (e) {

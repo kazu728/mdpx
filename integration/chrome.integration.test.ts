@@ -61,15 +61,15 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
   });
 
   test("KaTeX is rendered server-side and .katex exists", async () => {
-    expect(await chrome.evaluate(() => document.querySelectorAll(".katex").length)).toBeGreaterThan(0);
+    expect(await chrome.page!.evaluate(() => document.querySelectorAll(".katex").length)).toBeGreaterThan(0);
   });
 
   test("Mermaid becomes SVG on the client", async () => {
-    expect(await chrome.evaluate(() => document.querySelectorAll(".mermaid svg").length)).toBe(1);
+    expect(await chrome.page!.evaluate(() => document.querySelectorAll(".mermaid svg").length)).toBe(1);
   });
 
   test("the image, code, and table are present in the DOM", async () => {
-    const dom = await chrome.evaluate(() => ({
+    const dom = await chrome.page!.evaluate(() => ({
       imgs: document.images.length,
       shiki: document.querySelectorAll("pre.shiki").length,
       table: document.querySelectorAll("table").length,
@@ -93,8 +93,8 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
       ).html,
     );
     await chrome.load(evil, CSS_WIDTH, CSS_SCALE);
-    expect(await chrome.evaluate(() => location.protocol)).toBe("file:");
-    expect(await chrome.evaluate(() => document.querySelectorAll("meta[http-equiv]").length)).toBe(1);
+    expect(await chrome.page!.evaluate(() => location.protocol)).toBe("file:");
+    expect(await chrome.page!.evaluate(() => document.querySelectorAll("meta[http-equiv]").length)).toBe(1);
     await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
   }, 30000);
 
@@ -116,7 +116,7 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
     test("a scroll px resolves to the fixture's heading line (including the physical px → CSS px conversion)", async () => {
       const md = await readFile(FIXTURE, "utf8");
       const anchors = await chrome.collectAnchors();
-      const documentHeightCssPx = await chrome.evaluate(() =>
+      const documentHeightCssPx = await chrome.page!.evaluate(() =>
         Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
       );
       const map = buildLineMap(
@@ -137,7 +137,7 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
     test("no scroll position ever lands on a blank line", async () => {
       const md = await readFile(FIXTURE, "utf8");
       const anchors = await chrome.collectAnchors();
-      const documentHeightCssPx = await chrome.evaluate(() =>
+      const documentHeightCssPx = await chrome.page!.evaluate(() =>
         Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
       );
       const map = buildLineMap(
