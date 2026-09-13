@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import { Chrome, ContentError } from "./chrome.ts";
 import { renderFrame } from "./frame.ts";
 import { buildHtml, type Assets, type Theme } from "./html.ts";
@@ -32,12 +32,14 @@ interface PipelineDeps {
 }
 
 export class Pipeline {
-  // Keep line maps per generation; lookups use only the displayed generation's map.
+  // Each generation owns its HTML file and line map; both are released when the generation ends.
   private readonly lineMaps = new Map<number, LineMap>();
   private consecutiveFailures = 0;
   private lastPlacements: number[] = [];
+  private lastEscape = "";
   private theme: Theme = "light";
   private page: Promise<unknown> = Promise.resolve();
+  private loadedGen: number | null = null;
 
   constructor(private readonly deps: PipelineDeps) {}
 
@@ -47,12 +49,20 @@ export class Pipeline {
       switch (a.type) {
         case "redraw": {
           const frame = renderFrame(scheduler.viewState(), fileName, this.lastPlacements);
-          term.write(frame.escape);
+          // Prefetch completions redraw with no visible or status change; resending the identical
+          // frame only costs erase-and-replace bytes inside the sync block, so skip it.
+          if (frame.escape !== this.lastEscape) {
+            term.write(frame.escape);
+            this.lastEscape = frame.escape;
+          }
           this.lastPlacements = frame.placements;
           break;
         }
         case "deleteGen":
           term.write(a.imageIds.map(deleteImage).join(""));
+          break;
+        case "releaseGen":
+          this.releaseGen(a.gen);
           break;
         case "render":
           void this.runRender(a.gen);
@@ -84,12 +94,11 @@ export class Pipeline {
     return turn;
   }
 
-  private async attempt<T>(fn: (restarted: boolean) => Promise<T>): Promise<T> {
+  private async attempt<T>(fn: () => Promise<T>): Promise<T> {
     const { chrome, onFatal } = this.deps;
-    let restarted = false;
     for (;;) {
       try {
-        const r = await fn(restarted);
+        const r = await fn();
         this.consecutiveFailures = 0;
         return r;
       } catch (e) {
@@ -104,37 +113,53 @@ export class Pipeline {
           const reason = restartError instanceof Error ? restartError.message : restartError;
           return onFatal(`mdpx: could not restart Chrome: ${reason}\n`);
         }
-        restarted = true;
+        this.loadedGen = null;
       }
     }
   }
 
-  private loadCurrentGeometry(): Promise<number> {
-    const { chrome, scheduler, htmlPath } = this.deps;
+  private htmlFor(gen: number): string {
+    return `${this.deps.htmlPath}.gen-${gen}.html`;
+  }
+
+  private loadGenDocument(gen: number): Promise<number> {
+    const { chrome, scheduler } = this.deps;
     const g = scheduler.viewState().geometry;
-    return chrome.load(htmlPath, g.viewportWidthCssPx, g.renderScale);
+    // Invalidate first: a failed load taints the page, so a stale match must never skip reload.
+    this.loadedGen = null;
+    return chrome.load(this.htmlFor(gen), g.viewportWidthCssPx, g.renderScale).then((h) => {
+      this.loadedGen = gen;
+      return h;
+    });
   }
 
   /** Load and collect anchors together so they stay matched to the page. */
-  private async loadWithAnchors(): Promise<{ documentHeightCssPx: number; anchors: Anchor[] }> {
-    const documentHeightCssPx = await this.loadCurrentGeometry();
+  private async loadWithAnchors(
+    gen: number,
+  ): Promise<{ documentHeightCssPx: number; anchors: Anchor[] }> {
+    const documentHeightCssPx = await this.loadGenDocument(gen);
     return { documentHeightCssPx, anchors: await this.deps.chrome.collectAnchors() };
   }
 
   private rememberLineMap(gen: number, map: LineMap): void {
-    const shown = this.deps.scheduler.viewState().displayGen;
     this.lineMaps.set(gen, map);
-    for (const k of this.lineMaps.keys()) if (k !== gen && k !== shown) this.lineMaps.delete(k);
+  }
+
+  /** A generation ends in the scheduler; its HTML and map end here. */
+  private releaseGen(gen: number): void {
+    this.lineMaps.delete(gen);
+    if (this.loadedGen === gen) this.loadedGen = null;
+    unlink(this.htmlFor(gen)).catch(() => {});
   }
 
   private async runRender(gen: number): Promise<void> {
-    const { scheduler, mdPath, mdDir, assets, htmlPath, isShuttingDown } = this.deps;
+    const { scheduler, mdPath, mdDir, assets, isShuttingDown } = this.deps;
     let md: string;
     let laidOutSourceLines: ReadonlySet<number>;
     try {
       md = await readFile(mdPath, "utf8");
       const built = await buildHtml({ markdown: md, mdDir, assets: assets[this.theme], theme: this.theme });
-      await writeFile(htmlPath, built.html);
+      await writeFile(this.htmlFor(gen), built.html);
       laidOutSourceLines = built.laidOutSourceLines;
     } catch {
       if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
@@ -142,7 +167,7 @@ export class Pipeline {
     }
     let loaded: { documentHeightCssPx: number; anchors: Anchor[] };
     try {
-      loaded = await this.onPage(() => this.attempt(() => this.loadWithAnchors()));
+      loaded = await this.onPage(() => this.attempt(() => this.loadWithAnchors(gen)));
     } catch (e) {
       if (e instanceof ContentError && !isShuttingDown()) {
         this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
@@ -176,8 +201,8 @@ export class Pipeline {
     let base64: string;
     try {
       base64 = await this.onPage(() =>
-        this.attempt(async (restarted) => {
-          if (restarted) await this.loadCurrentGeometry();
+        this.attempt(async () => {
+          if (this.loadedGen !== gen) await this.loadGenDocument(gen);
           return chrome.shoot(clip);
         }),
       );
