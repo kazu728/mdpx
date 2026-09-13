@@ -50,6 +50,8 @@ async function harness() {
       return "";
     },
     restart: async () => {},
+    imagesPending: async () => false,
+    waitForLateImages: async () => {},
   };
   const pipeline = new Pipeline({
     chrome,
@@ -81,6 +83,8 @@ describe("redraw dedup", () => {
         collectAnchors: async () => [],
         shoot: async () => "",
         restart: async () => {},
+      imagesPending: async () => false,
+      waitForLateImages: async () => {},
       },
       scheduler,
       term: {
@@ -153,6 +157,8 @@ describe("generation binding", () => {
         return "";
       },
       restart: async () => {},
+      imagesPending: async () => false,
+      waitForLateImages: async () => {},
     };
     const pipeline = new Pipeline({
       chrome,
@@ -213,6 +219,8 @@ describe("generation-owned files", () => {
       collectAnchors: async () => [],
       shoot: async () => "",
       restart: async () => {},
+      imagesPending: async () => false,
+      waitForLateImages: async () => {},
     };
     const pipeline = new Pipeline({
       chrome,
@@ -282,6 +290,8 @@ describe("generation-owned files", () => {
       collectAnchors: async () => [],
       shoot: async () => "",
       restart: async () => {},
+      imagesPending: async () => false,
+      waitForLateImages: async () => {},
     };
     const htmlPath = join(dir, "view.html");
     const pipeline = new Pipeline({
@@ -310,5 +320,97 @@ describe("generation-owned files", () => {
     const maps = (pipeline as unknown as { lineMaps: Map<number, unknown> }).lineMaps;
     expect(maps.has(1)).toBe(true);
     expect(maps.has(2)).toBe(false);
+  });
+});
+
+describe("late images", () => {
+  test("an image finishing after display triggers one re-render with fresh pixels", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-late-"));
+    const mdPath = join(dir, "a.md");
+    await writeFile(mdPath, "# a\n");
+    const scheduler = new Scheduler(GEO);
+    const loads: string[] = [];
+    let pending = true;
+    const chrome = {
+      load: (p: string) => {
+        loads.push(p);
+        return Promise.resolve(1000);
+      },
+      collectAnchors: async () => [],
+      shoot: async () => "",
+      restart: async () => {},
+      imagesPending: async () => pending,
+      waitForLateImages: async () => {
+        pending = false;
+      },
+    };
+    const pipeline = new Pipeline({
+      chrome,
+      scheduler,
+      term: { write: () => {} },
+      mdPath,
+      mdDir: dir,
+      fileName: "a.md",
+      htmlPath: join(dir, "view.html"),
+      assets: { light: resolveAssets("light"), dark: resolveAssets("dark") },
+      isShuttingDown: () => false,
+      onFatal: async () => {
+        throw new Error("unexpected fatal");
+      },
+    });
+    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
+    for (let i = 0; i < 500 && scheduler.viewState().displayGen !== 2; i++) {
+      await settle();
+    }
+    // The straggler finished after gen 1 displayed, so gen 2 re-rendered the same content.
+    expect(scheduler.viewState().displayGen).toBe(2);
+    expect(loads.some((p) => p.includes("gen-2"))).toBe(true);
+    // Settled now: no further generations follow on their own.
+    const loadsAfter = loads.length;
+    for (let i = 0; i < 100; i++) await settle();
+    expect(loads.length).toBe(loadsAfter);
+    expect(scheduler.viewState().displayGen).toBe(2);
+  });
+
+  test("an image that never finishes keeps the current pixels", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-stuck-"));
+    const mdPath = join(dir, "a.md");
+    await writeFile(mdPath, "# a\n");
+    const scheduler = new Scheduler(GEO);
+    const loads: string[] = [];
+    const chrome = {
+      load: (p: string) => {
+        loads.push(p);
+        return Promise.resolve(1000);
+      },
+      collectAnchors: async () => [],
+      shoot: async () => "",
+      restart: async () => {},
+      imagesPending: async () => true,
+      waitForLateImages: async () => {},
+    };
+    const pipeline = new Pipeline({
+      chrome,
+      scheduler,
+      term: { write: () => {} },
+      mdPath,
+      mdDir: dir,
+      fileName: "a.md",
+      htmlPath: join(dir, "view.html"),
+      assets: { light: resolveAssets("light"), dark: resolveAssets("dark") },
+      isShuttingDown: () => false,
+      onFatal: async () => {
+        throw new Error("unexpected fatal");
+      },
+    });
+    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
+    for (let i = 0; i < 500 && scheduler.viewState().displayGen !== 1; i++) {
+      await settle();
+    }
+    expect(scheduler.viewState().displayGen).toBe(1);
+    const loadsAfter = loads.length;
+    for (let i = 0; i < 100; i++) await settle();
+    expect(loads.filter((p) => p.includes("gen-2")).length).toBe(0);
+    expect(loads.length).toBe(loadsAfter);
   });
 });

@@ -22,6 +22,8 @@ export async function resolveExecutable(): Promise<string | null> {
 const STABLE_FONTS_MS = 500;
 const STABLE_IMG_DECODE_MS = 1000;
 const STABLE_MERMAID_MS = 3000;
+/** Extra budget for images still decoding after a generation displays. Never navigates. */
+const LATE_IMG_SETTLE_MS = 10000;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -81,23 +83,33 @@ export class Chrome {
     }
     // Bound fonts.ready: it can stall behind a slow external image.
     await Promise.race([page.evaluate(() => document.fonts.ready), sleep(STABLE_FONTS_MS)]);
-    await Promise.race([
-      page.evaluate(() =>
-        Promise.all(Array.from(document.images).map((img) => img.decode().catch(() => {}))).then(
-          () => {},
-        ),
-      ),
-      sleep(STABLE_IMG_DECODE_MS),
-    ]);
+    await Promise.race([this.decodeAllImages(), sleep(STABLE_IMG_DECODE_MS)]);
     await page
       .waitForFunction("window.__mermaidDone === true", { timeout: STABLE_MERMAID_MS })
       .catch(() => {});
-    const documentHeightCssPx = await page.evaluate(() =>
-      // documentElement.scrollHeight includes the 900px viewport, so a short document would
-      // report the blank area below its body as scrollable content. The body height is the text.
-      document.body.scrollHeight,
-    );
+    const documentHeightCssPx = await page.evaluate(() => document.body.scrollHeight);
     return documentHeightCssPx;
+  }
+
+  /** True while an image on the live page has not finished decoding. */
+  imagesPending(): Promise<boolean> {
+    return this.page!.evaluate(() => Array.from(document.images).some((img) => !img.complete));
+  }
+
+  /**
+   * Wait for late images on the live page without navigating, so a pathological load cannot
+   * time out again. Bounded: an image that never finishes leaves the current pixels in place.
+   */
+  async waitForLateImages(): Promise<void> {
+    await Promise.race([this.decodeAllImages(), sleep(LATE_IMG_SETTLE_MS)]);
+  }
+
+  private decodeAllImages(): Promise<void> {
+    return this.page!.evaluate(() =>
+      Promise.all(Array.from(document.images).map((img) => img.decode().catch(() => {}))).then(
+        () => {},
+      ),
+    );
   }
 
   collectAnchors(): Promise<Anchor[]> {

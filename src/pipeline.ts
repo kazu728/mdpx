@@ -19,7 +19,7 @@ const MAX_CONSECUTIVE_CHROME_FAILURES = 2;
 type ShootAction = Extract<Action, { type: "shoot" }>;
 
 interface PipelineDeps {
-  chrome: Pick<Chrome, "load" | "collectAnchors" | "shoot" | "restart">;
+  chrome: Pick<Chrome, "load" | "collectAnchors" | "shoot" | "restart" | "imagesPending" | "waitForLateImages">;
   scheduler: Scheduler;
   term: Pick<Term, "write">;
   mdPath: string;
@@ -215,6 +215,30 @@ export class Pipeline {
     }
     if (isShuttingDown()) return;
     term.write(transmit(imageId(gen, tileIndex), base64));
+    const before = scheduler.viewState().displayGen;
     this.execute(scheduler.dispatch({ type: "tileReady", gen, tileIndex }));
+    if (scheduler.viewState().displayGen === gen && before !== gen) {
+      void this.settleLateImages(gen);
+    }
+  }
+
+  /**
+   * Images decoded after the initial measure leave stale tiles: shifted layout, or same-box
+   * pixels for dimension-specified images that height comparison alone would miss. Re-render
+   * once the stragglers finish; a still-pending image after the budget keeps current pixels.
+   */
+  private async settleLateImages(gen: number): Promise<void> {
+    const { chrome, scheduler, isShuttingDown } = this.deps;
+    try {
+      if (isShuttingDown() || this.loadedGen !== gen) return;
+      if (!(await chrome.imagesPending())) return;
+      await chrome.waitForLateImages();
+      if (isShuttingDown() || this.loadedGen !== gen) return;
+      if (scheduler.viewState().displayGen !== gen) return;
+      if (await chrome.imagesPending()) return;
+      this.execute(scheduler.dispatch({ type: "trigger" }));
+    } catch {
+      // Best-effort background check: a broken page surfaces through the normal capture path.
+    }
   }
 }
