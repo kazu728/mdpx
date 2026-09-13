@@ -87,6 +87,27 @@ describe("buildHtml", () => {
     expect(await build("/tmp/docs", "dark")).toMatch(/<pre class="shiki github-dark/);
     expect(await build("/tmp/docs", "light")).toMatch(/<pre class="shiki github-light/);
   });
+
+  test("a body meta refresh is neutralized and never becomes a meta element", async () => {
+    const { html } = await buildHtml({
+      markdown: '<meta http-equiv="refresh" content="0;url=https://example.com/land">\n',
+      mdDir: "/tmp/docs",
+      assets: resolveAssets("light"),
+      theme: "light",
+    });
+    expect(html).not.toMatch(/<meta\b[^>]*http-equiv="refresh"/i);
+    expect(html).toMatch(/&lt;meta/i);
+  });
+
+  test("nested meta markers cannot join into a fresh tag (<<meta>...)", async () => {
+    const { html } = await buildHtml({
+      markdown: "<<meta>meta http-equiv=\"refresh\" content=\"0;url=https://example.com\">\n",
+      mdDir: "/tmp/docs",
+      assets: resolveAssets("light"),
+      theme: "light",
+    });
+    expect(html).not.toMatch(/<meta\b[^>]*refresh/i);
+  });
 });
 
 describe("data-source-line", () => {

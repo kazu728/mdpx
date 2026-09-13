@@ -92,9 +92,9 @@ function getHighlighter(): Promise<Highlighter> {
   return highlighterPromise;
 }
 
-/** Remove body meta tags so a meta refresh cannot navigate outside this document's CSP. */
+/** Neutralize body meta tags. Escaping (not deleting) can't forge `<<meta>meta ...>` into a tag. */
 function stripMetaTags(html: string): string {
-  return html.replace(/<meta\b[^>]*>/gi, "");
+  return html.replace(/<(\/?)(meta)\b/gi, (_m, slash: string, word: string) => `&lt;${slash}${word}`);
 }
 
 interface RenderEnv {
