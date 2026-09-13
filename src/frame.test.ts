@@ -18,7 +18,9 @@ function makeView(): ViewState {
       renderScale: 2,
       tileHeightPx: TILE_HEIGHT,
       exceedsFrameLimit: false,
+      exceedsStorage: false,
       maxResident: 64,
+      maxTotalResident: 128,
     },
     scrollPx: SCROLL_TOP,
     displayGen: 1,
@@ -27,6 +29,7 @@ function makeView(): ViewState {
     truncated: false,
     contentHeightPx,
     phase: "ready",
+    failure: false,
   };
 }
 
@@ -107,7 +110,9 @@ describe("source rect when downscaled", () => {
         renderScale: 1,
         tileHeightPx: TILE_HEIGHT,
         exceedsFrameLimit: false,
+        exceedsStorage: false,
         maxResident: 64,
+        maxTotalResident: 128,
       },
       scrollPx: SCROLL_TOP,
       displayGen: 1,
@@ -116,6 +121,7 @@ describe("source rect when downscaled", () => {
       truncated: false,
       contentHeightPx,
       phase: "ready",
+      failure: false,
     };
   }
 
@@ -142,5 +148,54 @@ describe("source rect when downscaled", () => {
     const { escape } = renderFrame(over, "a.md", []);
     expect(escape).toContain("too wide");
     expect(escape).not.toContain("low-res");
+  });
+
+  test("storage-only overflow is distinguished as \"too many\" (never passed off as low-res)", () => {
+    const v = reducedView();
+    const over = {
+      ...v,
+      geometry: { ...v.geometry, exceedsFrameLimit: false, exceedsStorage: true },
+    };
+    const { escape } = renderFrame(over, "a.md", []);
+    expect(escape).toContain("too many");
+    expect(escape).not.toContain("low-res");
+    expect(escape).not.toContain("too wide");
+  });
+
+  test("transfer overflow takes precedence over storage overflow", () => {
+    const v = reducedView();
+    const over = {
+      ...v,
+      geometry: { ...v.geometry, exceedsFrameLimit: true, exceedsStorage: true },
+    };
+    const { escape } = renderFrame(over, "a.md", []);
+    expect(escape).toContain("too wide");
+    expect(escape).not.toContain("too many");
+  });
+});
+
+describe("failure status", () => {
+  test("a failed first render is distinguished from an empty document", () => {
+    const v = makeView();
+    const failed: ViewState = { ...v, displayGen: null, failure: true };
+    const { escape } = renderFrame(failed, "a.md", []);
+    expect(escape).toContain("render failed");
+    const clean = renderFrame({ ...failed, failure: false }, "a.md", []);
+    expect(clean.escape).not.toContain("render failed");
+  });
+
+  test("a failed update keeps the old placements and reports the failure", () => {
+    const v = makeView();
+    const { escape } = renderFrame({ ...v, failure: true }, "a.md", []);
+    expect(escape).toContain("update failed");
+    // The displayed tiles are still placed; only the status changes.
+    expect(escape).toContain("a=p,");
+  });
+
+  test("an in-flight retry reports activity instead of the settled failure", () => {
+    const v = makeView();
+    const { escape } = renderFrame({ ...v, failure: true, phase: "rendering" }, "a.md", []);
+    expect(escape).toContain("updating");
+    expect(escape).not.toContain("update failed");
   });
 });

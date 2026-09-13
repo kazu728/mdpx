@@ -69,11 +69,22 @@ function statusBar(view: ViewState, filename: string, pendingVisible: boolean): 
       ? shown
         ? "updating"
         : "rendering…"
-      : shown && shown.truncated && scrollPx >= max
-        ? "truncated"
-        : "";
+      : view.failure
+        ? shown
+          ? "update failed"
+          : "render failed"
+        : shown && shown.truncated && scrollPx >= max
+          ? "truncated"
+          : "";
   // Keep capacity out of the transient state chain: it must survive at the end of a truncated document.
-  const capacity = geometry.exceedsFrameLimit ? "too wide" : geometry.renderScale < CSS_SCALE ? "low-res" : "";
+  // Transfer overflow is "too wide" (one image does not fit); storage-only overflow is "too many".
+  const capacity = geometry.exceedsFrameLimit
+    ? "too wide"
+    : geometry.exceedsStorage
+      ? "too many"
+      : geometry.renderScale < CSS_SCALE
+        ? "low-res"
+        : "";
   const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");
   const right = "q:quit";
   const cols = geometry.cols;
