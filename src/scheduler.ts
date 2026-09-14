@@ -472,7 +472,6 @@ export class Scheduler {
     );
   }
 
-  // Visible tiles are never evicted; an outstanding scroll target joins them.
   private evictToSize(g: GenState, maxSize: number): number[] {
     if (g.resident.size <= maxSize) return [];
     const visible = this.protectedSet(g);

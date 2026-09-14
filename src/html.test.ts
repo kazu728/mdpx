@@ -18,13 +18,21 @@ const x: number = 1;
 ![img](./pic.png)
 `;
 
-async function build(markdown: string = MD, theme: Theme = "light", mdDir = "/tmp/docs") {
-  return buildHtml({ markdown, mdDir, assets: resolveAssets(theme), theme });
+async function build(markdown: string = MD, theme: Theme = "light", mdDir = "/tmp/docs", annotateSourceLines = false) {
+  return buildHtml({ markdown, mdDir, assets: resolveAssets(theme), theme, annotateSourceLines });
 }
+
+describe("source annotations are opt-in", () => {
+  test("core output carries no data-source-line and no laidOutSourceLines by default", async () => {
+    const { html, laidOutSourceLines } = await build();
+    expect(html).not.toContain("data-source-line");
+    expect(laidOutSourceLines.size).toBe(0);
+  });
+});
 
 describe("buildHtml", () => {
   test("mermaid fence becomes <pre class=\"mermaid\">", async () => {
-    const { html } = await build();
+    const { html } = await build(MD, "light", "/tmp/docs", true);
     expect(html).toContain('<pre class="mermaid" data-source-line="5">graph TD; A--&gt;B\n</pre>');
     expect(html).not.toContain('<pre class="shiki"');
   });
@@ -98,7 +106,7 @@ describe("data-source-line", () => {
   ].join("\n");
 
   async function anchors(): Promise<[string, string][]> {
-    const { html } = await build(ANCHOR_MD);
+    const { html } = await build(ANCHOR_MD, "light", "/tmp/docs", true);
     return [...html.matchAll(/<(\w+)\b[^>]*\sdata-source-line="(\d+)"/g)].map((m) => [m[1]!, m[2]!] as [string, string]);
   }
 
@@ -152,7 +160,7 @@ describe("laidOutSourceLines", () => {
   ].join("\n");
 
   test("covers only lines with rendered height", async () => {
-    const { laidOutSourceLines } = await build(LAYOUT_MD);
+    const { laidOutSourceLines } = await build(LAYOUT_MD, "light", "/tmp/docs", true);
     const lines = [...laidOutSourceLines];
     expect(lines).toHaveLength(14);
     expect(lines).toEqual(expect.arrayContaining([1, 3, 4, 6, 8, 11, 23]));
@@ -162,7 +170,7 @@ describe("laidOutSourceLines", () => {
   });
 
   test("unclosed fence keeps its last row", async () => {
-    const { laidOutSourceLines } = await build(["```ts", "a", "", "b"].join("\n"));
+    const { laidOutSourceLines } = await build(["```ts", "a", "", "b"].join("\n"), "light", "/tmp/docs", true);
     expect([...laidOutSourceLines]).toEqual([2, 3, 4]);
   });
 });

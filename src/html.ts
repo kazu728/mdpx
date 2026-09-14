@@ -10,7 +10,7 @@ import {
   type Highlighter,
   type ShikiTransformer,
 } from "shiki";
-import { countSourceLines } from "./linemap.ts";
+import { countSourceLines } from "./sourcemap.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -101,9 +101,10 @@ function fenceLanguage(token: Token): string {
   return token.info.trim().split(/\s+/g)[0]!;
 }
 
-let rendererCache: MarkdownIt | null = null;
-function getRenderer(highlighter: Highlighter): MarkdownIt {
-  if (rendererCache) return rendererCache;
+const rendererCache = new Map<boolean, MarkdownIt>();
+function getRenderer(highlighter: Highlighter, annotateSourceLines: boolean): MarkdownIt {
+  const cached = rendererCache.get(annotateSourceLines);
+  if (cached) return cached;
 
   const md = new MarkdownIt({ html: true, linkify: true });
   md.use(taskLists);
@@ -112,7 +113,8 @@ function getRenderer(highlighter: Highlighter): MarkdownIt {
   const renderToken = md.renderer.renderToken.bind(md.renderer);
   md.renderer.renderToken = (tokens, idx, options) => {
     const token = tokens[idx]!;
-    if (token.nesting === 1 && token.map) token.attrSet(SOURCE_LINE, String(token.map[0]! + 1));
+    if (annotateSourceLines && token.nesting === 1 && token.map)
+      token.attrSet(SOURCE_LINE, String(token.map[0]! + 1));
     return renderToken(tokens, idx, options);
   };
 
@@ -123,13 +125,16 @@ function getRenderer(highlighter: Highlighter): MarkdownIt {
     const line = String(token.map![0] + 1);
     if (lang === "mermaid") {
       env.hasMermaid = true;
-      return `<pre class="mermaid" ${SOURCE_LINE}="${line}">${escape(token.content)}</pre>\n`;
+      const attr = annotateSourceLines ? ` ${SOURCE_LINE}="${line}"` : "";
+      return `<pre class="mermaid"${attr}>${escape(token.content)}</pre>\n`;
     }
     const toHtml = (l: string) =>
       highlighter.codeToHtml(token.content, {
         lang: l,
         theme: SHIKI_THEME[env.theme],
-        transformers: [dropShikiBackground, sourceLineAttr(line)],
+        transformers: annotateSourceLines
+          ? [dropShikiBackground, sourceLineAttr(line)]
+          : [dropShikiBackground],
       });
     try {
       return toHtml(lang || "text") + "\n";
@@ -138,7 +143,7 @@ function getRenderer(highlighter: Highlighter): MarkdownIt {
     }
   };
 
-  rendererCache = md;
+  rendererCache.set(annotateSourceLines, md);
   return md;
 }
 
@@ -192,6 +197,8 @@ export interface BuildHtmlInput {
   mdDir: string;
   assets: Assets;
   theme: Theme;
+  /** Emit data-source-line attrs and laidOutSourceLines for sourcemap consumers. */
+  annotateSourceLines?: boolean;
 }
 
 export interface BuildHtmlResult {
@@ -201,7 +208,8 @@ export interface BuildHtmlResult {
 
 export async function buildHtml(input: BuildHtmlInput): Promise<BuildHtmlResult> {
   const highlighter = await getHighlighter();
-  const md = getRenderer(highlighter);
+  const annotateSourceLines = input.annotateSourceLines ?? false;
+  const md = getRenderer(highlighter, annotateSourceLines);
 
   const env: RenderEnv = { theme: input.theme };
   const tokens = md.parse(input.markdown, env);
@@ -254,6 +262,8 @@ ${mermaid}
 `;
   return {
     html,
-    laidOutSourceLines: findLaidOutSourceLines(tokens, countSourceLines(input.markdown)),
+    laidOutSourceLines: annotateSourceLines
+      ? findLaidOutSourceLines(tokens, countSourceLines(input.markdown))
+      : new Set<number>(),
   };
 }

@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
-import { NvimCursor, listSockets, sendCursor, socketPid } from "../src/nvim.ts";
+import { NvimCursor, listSockets, sendCursor, socketPid } from "../src/sync/nvim.ts";
 
 const nvimPath = Bun.which("nvim");
 if (!nvimPath) {

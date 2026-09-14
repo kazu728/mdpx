@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import puppeteer, { TimeoutError, type Browser, type Page } from "puppeteer-core";
-import type { Anchor } from "./linemap.ts";
+import type { Anchor } from "./sourcemap.ts";
 import type { Clip } from "./geometry.ts";
 
 /** Content-caused failure (not a Chrome fault); the caller keeps the current frame. */
@@ -22,8 +22,6 @@ export async function resolveExecutable(): Promise<string | null> {
 const STABLE_FONTS_MS = 500;
 const STABLE_IMG_DECODE_MS = 1000;
 const STABLE_MERMAID_MS = 3000;
-/** Extra budget for images still decoding after display. Never navigates. */
-const LATE_IMG_SETTLE_MS = 10000;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -80,16 +78,6 @@ export class Chrome {
     return documentHeightCssPx;
   }
 
-  /** True while a live-page image has not finished decoding. */
-  imagesPending(): Promise<boolean> {
-    return this.page!.evaluate(() => Array.from(document.images).some((img) => !img.complete));
-  }
-
-  /** Wait without navigating; an image that never finishes keeps current pixels. */
-  async waitForLateImages(): Promise<void> {
-    await Promise.race([this.decodeAllImages(), sleep(LATE_IMG_SETTLE_MS)]);
-  }
-
   private decodeAllImages(): Promise<void> {
     return this.page!.evaluate(() =>
       Promise.all(Array.from(document.images).map((img) => img.decode().catch(() => {}))).then(
@@ -121,11 +109,6 @@ export class Chrome {
       encoding: "base64",
     });
     return data as string;
-  }
-
-  async restart(): Promise<void> {
-    await this.close();
-    await this.launch();
   }
 
   async close(): Promise<void> {

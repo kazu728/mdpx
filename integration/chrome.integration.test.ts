@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildHtml, resolveAssets } from "../src/html.ts";
 import { Chrome, resolveExecutable } from "../src/chrome.ts";
-import { buildLineMap, countSourceLines, sourceLineAt } from "../src/linemap.ts";
+import { buildLineMap, sourceLineAt } from "../src/sync/linemap.ts";
+import { countSourceLines } from "../src/sourcemap.ts";
 import { alignedTileHeightPx, CSS_SCALE } from "../src/viewport.ts";
 
 const exe = await resolveExecutable();
@@ -45,6 +46,7 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
       mdDir: dirname(FIXTURE),
       assets: resolveAssets("light"),
       theme: "light",
+      annotateSourceLines: true,
     });
     await writeFile(htmlPath, built.html);
     laidOutSourceLines = built.laidOutSourceLines;

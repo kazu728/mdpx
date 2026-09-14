@@ -1,17 +1,9 @@
-export interface Anchor {
-  sourceLine: number;
-  topCssPx: number;
-}
+import type { Anchor } from "../sourcemap.ts";
 
 export interface LineMap {
   anchors: Anchor[];
   sourceLineCount: number;
   laidOutSourceLines: ReadonlySet<number>;
-}
-
-export function countSourceLines(markdown: string): number {
-  const n = markdown.split("\n").length;
-  return Math.max(1, markdown.endsWith("\n") ? n - 1 : n);
 }
 
 export function buildLineMap(

@@ -3,26 +3,26 @@ import { Chrome, ContentError } from "./chrome.ts";
 import { renderFrame } from "./frame.ts";
 import { buildHtml, type Assets, type Theme } from "./html.ts";
 import { deleteImage, imageId, transmit } from "./kitty.ts";
-import {
-  buildLineMap,
-  countSourceLines,
-  sourceLineAt,
-  type Anchor,
-  type LineMap,
-} from "./linemap.ts";
 import { Scheduler, type Action } from "./scheduler.ts";
+import { countSourceLines, type Anchor, type FrameMeta } from "./sourcemap.ts";
 import { Term } from "./term.ts";
 import { CSS_SCALE } from "./viewport.ts";
 
-const MAX_CONSECUTIVE_CHROME_FAILURES = 2;
-
 type ShootAction = Extract<Action, { type: "shoot" }>;
 
+export interface ScrollInfo {
+  displayGen: number | null;
+  scrollPx: number;
+  jumpToEnd: boolean;
+}
+
 interface PipelineDeps {
-  chrome: Pick<Chrome, "load" | "collectAnchors" | "shoot" | "restart" | "imagesPending" | "waitForLateImages">;
+  chrome: Pick<Chrome, "load" | "collectAnchors" | "shoot">;
   scheduler: Scheduler;
   term: Pick<Term, "write">;
-  nvim?: { send: (line: number) => void };
+  onScroll?: (info: ScrollInfo) => void;
+  onFrameMapped?: (gen: number, meta: FrameMeta) => void;
+  onFrameReleased?: (gen: number) => void;
   mdPath: string;
   mdDir: string;
   fileName: string;
@@ -33,8 +33,6 @@ interface PipelineDeps {
 }
 
 export class Pipeline {
-  private readonly lineMaps = new Map<number, LineMap>();
-  private consecutiveFailures = 0;
   private lastPlacements: number[] = [];
   private lastEscape = "";
   private theme: Theme = "light";
@@ -44,7 +42,7 @@ export class Pipeline {
   constructor(private readonly deps: PipelineDeps) {}
 
   execute(actions: Action[]): void {
-    const { scheduler, term, fileName, nvim } = this.deps;
+    const { scheduler, term, fileName, onScroll } = this.deps;
     for (const a of actions) {
       switch (a.type) {
         case "redraw": {
@@ -63,9 +61,9 @@ export class Pipeline {
           this.releaseGen(a.gen);
           break;
         case "scrollCommitted": {
-          if (!nvim) break;
-          const line = this.displayedSourceLine(a.jumpToEnd);
-          if (line !== null) nvim.send(line);
+          if (!onScroll) break;
+          const v = scheduler.viewState();
+          onScroll({ displayGen: v.displayGen, scrollPx: v.scrollPx, jumpToEnd: a.jumpToEnd });
           break;
         }
         case "render":
@@ -83,42 +81,10 @@ export class Pipeline {
     this.execute(this.deps.scheduler.dispatch({ type: "trigger" }));
   }
 
-  displayedSourceLine(jumpToEnd: boolean): number | null {
-    const v = this.deps.scheduler.viewState();
-    if (v.displayGen === null) return null;
-    const map = this.lineMaps.get(v.displayGen);
-    if (!map) return null;
-    return sourceLineAt(map, v.scrollPx / CSS_SCALE, jumpToEnd);
-  }
-
   private onPage<T>(work: () => Promise<T>): Promise<T> {
     const turn = this.page.then(work);
     this.page = turn.catch(() => {});
     return turn;
-  }
-
-  private async attempt<T>(fn: () => Promise<T>): Promise<T> {
-    const { chrome, onFatal } = this.deps;
-    for (;;) {
-      try {
-        const r = await fn();
-        this.consecutiveFailures = 0;
-        return r;
-      } catch (e) {
-        if (e instanceof ContentError) throw e;
-        this.consecutiveFailures += 1;
-        if (this.consecutiveFailures >= MAX_CONSECUTIVE_CHROME_FAILURES) {
-          return onFatal("mdpx: Chrome failed repeatedly\n");
-        }
-        try {
-          await chrome.restart();
-        } catch (restartError) {
-          const reason = restartError instanceof Error ? restartError.message : restartError;
-          return onFatal(`mdpx: could not restart Chrome: ${reason}\n`);
-        }
-        this.loadedGen = null;
-      }
-    }
   }
 
   private htmlFor(gen: number): string {
@@ -143,49 +109,61 @@ export class Pipeline {
 
   /** A generation ends in the scheduler; its HTML and map end here. */
   private releaseGen(gen: number): void {
-    this.lineMaps.delete(gen);
+    this.deps.onFrameReleased?.(gen);
     if (this.loadedGen === gen) this.loadedGen = null;
     unlink(this.htmlFor(gen)).catch(() => {});
   }
 
   private async runRender(gen: number): Promise<void> {
-    const { scheduler, mdPath, mdDir, assets, isShuttingDown } = this.deps;
+    const { scheduler, mdPath, mdDir, assets, isShuttingDown, onFrameMapped } = this.deps;
     let md: string;
     let laidOutSourceLines: ReadonlySet<number>;
     try {
       md = await readFile(mdPath, "utf8");
-      const built = await buildHtml({ markdown: md, mdDir, assets: assets[this.theme], theme: this.theme });
+      const built = await buildHtml({
+        markdown: md,
+        mdDir,
+        assets: assets[this.theme],
+        theme: this.theme,
+        annotateSourceLines: onFrameMapped !== undefined,
+      });
       await writeFile(this.htmlFor(gen), built.html);
       laidOutSourceLines = built.laidOutSourceLines;
     } catch {
       if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
       return;
     }
-    let loaded: { documentHeightCssPx: number; anchors: Anchor[] };
+    let documentHeightCssPx: number;
     try {
-      loaded = await this.onPage(() => this.attempt(() => this.loadWithAnchors(gen)));
+      if (onFrameMapped) {
+        const loaded = await this.onPage(() => this.loadWithAnchors(gen));
+        documentHeightCssPx = loaded.documentHeightCssPx;
+        onFrameMapped(gen, {
+          anchors: loaded.anchors,
+          sourceLineCount: countSourceLines(md),
+          documentHeightCssPx: loaded.documentHeightCssPx,
+          laidOutSourceLines,
+        });
+      } else {
+        documentHeightCssPx = await this.onPage(() => this.loadGenDocument(gen));
+      }
     } catch (e) {
-      if (e instanceof ContentError && !isShuttingDown()) {
-        this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
+      if (e instanceof ContentError) {
+        if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
         return;
       }
-      throw e;
+      if (!isShuttingDown()) {
+        const reason = e instanceof Error ? e.message : String(e);
+        await this.deps.onFatal(`mdpx: Chrome failed: ${reason}\n`);
+      }
+      return;
     }
-    this.lineMaps.set(
-      gen,
-      buildLineMap(
-        loaded.anchors,
-        countSourceLines(md),
-        loaded.documentHeightCssPx,
-        laidOutSourceLines,
-      ),
-    );
     if (!isShuttingDown()) {
       this.execute(
         scheduler.dispatch({
           type: "renderDone",
           gen,
-          documentHeightPx: loaded.documentHeightCssPx * CSS_SCALE,
+          documentHeightPx: documentHeightCssPx * CSS_SCALE,
         }),
       );
     }
@@ -196,39 +174,23 @@ export class Pipeline {
     const { gen, tileIndex, clip } = action;
     let base64: string;
     try {
-      base64 = await this.onPage(() =>
-        this.attempt(async () => {
-          if (this.loadedGen !== gen) await this.loadGenDocument(gen);
-          return chrome.shoot(clip);
-        }),
-      );
+      base64 = await this.onPage(async () => {
+        if (this.loadedGen !== gen) await this.loadGenDocument(gen);
+        return chrome.shoot(clip);
+      });
     } catch (e) {
-      if (e instanceof ContentError && !isShuttingDown()) {
-        this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
+      if (e instanceof ContentError) {
+        if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
         return;
       }
-      throw e;
+      if (!isShuttingDown()) {
+        const reason = e instanceof Error ? e.message : String(e);
+        await this.deps.onFatal(`mdpx: Chrome failed: ${reason}\n`);
+      }
+      return;
     }
     if (isShuttingDown()) return;
     term.write(transmit(imageId(gen, tileIndex), base64));
-    const before = scheduler.viewState().displayGen;
     this.execute(scheduler.dispatch({ type: "tileReady", gen, tileIndex }));
-    if (scheduler.viewState().displayGen === gen && before !== gen) {
-      void this.settleLateImages(gen);
-    }
-  }
-
-  // Late images leave stale tiles; re-render once stragglers finish within budget.
-  private async settleLateImages(gen: number): Promise<void> {
-    const { chrome, scheduler, isShuttingDown } = this.deps;
-    try {
-      if (isShuttingDown() || this.loadedGen !== gen) return;
-      if (!(await chrome.imagesPending())) return;
-      await chrome.waitForLateImages();
-      if (isShuttingDown() || this.loadedGen !== gen) return;
-      if (scheduler.viewState().displayGen !== gen) return;
-      if (await chrome.imagesPending()) return;
-      this.execute(scheduler.dispatch({ type: "trigger" }));
-    } catch {}
   }
 }

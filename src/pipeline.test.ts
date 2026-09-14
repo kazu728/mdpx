@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ContentError } from "./chrome.ts";
 import { resolveAssets } from "./html.ts";
-import { Pipeline } from "./pipeline.ts";
+import { Pipeline, type ScrollInfo } from "./pipeline.ts";
 import { Scheduler } from "./scheduler.ts";
-import { alignedTileHeightPx } from "./viewport.ts";
+import { ScrollTracker } from "./sync/tracker.ts";
+import { alignedTileHeightPx, CSS_SCALE } from "./viewport.ts";
 import type { Geometry } from "./geometry.ts";
 
 const GEO: Geometry = {
@@ -43,21 +44,26 @@ const baseChrome = () => ({
   load: async () => 1000,
   collectAnchors: async () => [],
   shoot: async () => "",
-  restart: async () => {},
-  imagesPending: async () => false,
-  waitForLateImages: async () => {},
 });
-async function makePipeline(chrome: unknown, opts?: { cols?: number; write?: (s: string) => void; shuttingDown?: boolean }) {
+async function makePipeline(chrome: unknown, opts?: { cols?: number; write?: (s: string) => void; shuttingDown?: boolean; tracker?: ScrollTracker; onScroll?: (info: ScrollInfo) => void; md?: string }) {
   const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-"));
   const mdPath = join(dir, "a.md");
-  await writeFile(mdPath, "# a\n");
+  await writeFile(mdPath, opts?.md ?? "# a\n");
   const scheduler = new Scheduler(opts?.cols ? { ...GEO, cols: opts.cols } : GEO);
   const htmlPath = join(dir, "view.html");
   const shuttingDown = opts?.shuttingDown ?? false;
+  const tracker = opts?.tracker;
   const pipeline = new Pipeline({
     chrome: chrome as never,
     scheduler,
     term: { write: opts?.write ?? (() => {}) },
+    ...(tracker
+      ? {
+          onFrameMapped: (gen, meta) => tracker.setFrame(gen, meta),
+          onFrameReleased: (gen) => tracker.releaseFrame(gen),
+        }
+      : {}),
+    ...(opts?.onScroll ? { onScroll: opts.onScroll } : {}),
     mdPath,
     mdDir: dir,
     fileName: "a.md",
@@ -158,40 +164,73 @@ describe("generation binding", () => {
 
 describe("generation-owned files", () => {
   test("switching releases old HTML and map at promotion", async () => {
-    const { scheduler, pipeline, htmlPath } = await makePipeline(baseChrome());
+    const tracker = new ScrollTracker();
+    const { scheduler, pipeline, htmlPath } = await makePipeline(baseChrome(), { tracker });
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
     await waitFor(() => scheduler.viewState().displayGen === 1);
     expect(await exists(`${htmlPath}.gen-1.html`)).toBe(true);
+    expect(tracker.hasFrame(1)).toBe(true);
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
     await waitFor(() => scheduler.viewState().displayGen === 2);
     for (let i = 0; i < 100; i++) await settle();
     expect(await exists(`${htmlPath}.gen-1.html`)).toBe(false);
     expect(await exists(`${htmlPath}.gen-2.html`)).toBe(true);
-    const maps = (pipeline as unknown as { lineMaps: Map<number, unknown> }).lineMaps;
-    expect(maps.has(1)).toBe(false);
-    expect(maps.has(2)).toBe(true);
+    expect(tracker.hasFrame(1)).toBe(false);
+    expect(tracker.hasFrame(2)).toBe(true);
+  });
+});
+
+describe("frame observers", () => {
+  test("mapped frames and scroll commits reach observers", async () => {
+    const tracker = new ScrollTracker();
+    const seen: ScrollInfo[] = [];
+    const { scheduler, pipeline } = await makePipeline(
+      {
+        ...baseChrome(),
+        collectAnchors: async () => [{ sourceLine: 3, topCssPx: 500 }],
+      },
+      { tracker, onScroll: (info) => seen.push(info), md: "# a\n\nline three\n" },
+    );
+    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
+    await waitFor(() => scheduler.viewState().displayGen === 1);
+    expect(tracker.hasFrame(1)).toBe(true);
+    pipeline.execute([{ type: "scrollCommitted", jumpToEnd: false }]);
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.displayGen).toBe(1);
+    expect(tracker.displayedSourceLine({ ...seen[0]!, scrollPx: 500 * CSS_SCALE })).toBe(3);
+  });
+
+  test("core without observers skips anchor collection and notifies nobody", async () => {
+    let anchorsCollected = 0;
+    const { scheduler, pipeline } = await makePipeline(
+      {
+        ...baseChrome(),
+        collectAnchors: async () => {
+          anchorsCollected += 1;
+          return [];
+        },
+      },
+    );
+    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
+    await waitFor(() => scheduler.viewState().displayGen === 1);
+    expect(anchorsCollected).toBe(0);
+    pipeline.execute([{ type: "scrollCommitted", jumpToEnd: false }]);
   });
 });
 
 describe("late images", () => {
-  test("image finishing after display triggers one re-render", async () => {
+  test("no re-render is triggered after display; stragglers wait for the next save", async () => {
     const loads: string[] = [];
-    let pending = true;
     const { scheduler, pipeline } = await makePipeline({
       ...baseChrome(),
       load: (p: string) => {
         loads.push(p);
         return Promise.resolve(1000);
       },
-      imagesPending: async () => pending,
-      waitForLateImages: async () => {
-        pending = false;
-      },
     });
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitFor(() => scheduler.viewState().displayGen === 2);
-    expect(scheduler.viewState().displayGen).toBe(2);
-    expect(loads.some((p) => p.includes("gen-2"))).toBe(true);
+    await waitFor(() => scheduler.viewState().displayGen === 1);
+    expect(scheduler.viewState().displayGen).toBe(1);
     const after = loads.length;
     for (let i = 0; i < 100; i++) await settle();
     expect(loads.length).toBe(after);
