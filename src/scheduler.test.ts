@@ -349,6 +349,18 @@ describe("resident tile budget", () => {
     for (const t of visibleTiles(vs.scrollPx, 50, 10, vs.tiles).map((p) => p.tileIndex)) expect(vs.resident.has(t)).toBe(true);
   });
 
+  test("commit shrinks queue to steady budget without reshoot", () => {
+    const s = displayedWith({ ...GEO, maxResident: 3, maxTotalResident: 4 }, 5000);
+    let acts = s.dispatch({ type: "key", delta: { kind: "bottom" } });
+    for (let i = 0; i < 20; i++) {
+      const sh = shoots(acts);
+      if (!sh.length) break;
+      acts = s.dispatch({ type: "tileReady", gen: 1, tileIndex: sh[0]! });
+    }
+    expect([...shown(s).resident].sort((a, b) => a - b)).toEqual([7, 8, 9]);
+    expect(shoots(s.dispatch({ type: "key", delta: { kind: "bottom" } }))).toEqual([]);
+  });
+
   test("prefetch orders delete before shoot", () => {
     const s = new Scheduler({ ...GEO, maxResident: 2 });
     s.dispatch({ type: "trigger" });

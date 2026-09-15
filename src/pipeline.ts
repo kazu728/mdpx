@@ -114,6 +114,19 @@ export class Pipeline {
     unlink(this.htmlFor(gen)).catch(() => {});
   }
 
+  /** Content failures keep the current frame; Chrome faults are fatal. */
+  private async handleChromeError(e: unknown, gen: number): Promise<void> {
+    const { scheduler, isShuttingDown } = this.deps;
+    if (e instanceof ContentError) {
+      if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
+      return;
+    }
+    if (!isShuttingDown()) {
+      const reason = e instanceof Error ? e.message : String(e);
+      await this.deps.onFatal(`mdpx: Chrome failed: ${reason}\n`);
+    }
+  }
+
   private async runRender(gen: number): Promise<void> {
     const { scheduler, mdPath, mdDir, assets, isShuttingDown, onFrameMapped } = this.deps;
     let md: string;
@@ -148,14 +161,7 @@ export class Pipeline {
         documentHeightCssPx = await this.onPage(() => this.loadGenDocument(gen));
       }
     } catch (e) {
-      if (e instanceof ContentError) {
-        if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
-        return;
-      }
-      if (!isShuttingDown()) {
-        const reason = e instanceof Error ? e.message : String(e);
-        await this.deps.onFatal(`mdpx: Chrome failed: ${reason}\n`);
-      }
+      await this.handleChromeError(e, gen);
       return;
     }
     if (!isShuttingDown()) {
@@ -179,14 +185,7 @@ export class Pipeline {
         return chrome.shoot(clip);
       });
     } catch (e) {
-      if (e instanceof ContentError) {
-        if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
-        return;
-      }
-      if (!isShuttingDown()) {
-        const reason = e instanceof Error ? e.message : String(e);
-        await this.deps.onFatal(`mdpx: Chrome failed: ${reason}\n`);
-      }
+      await this.handleChromeError(e, gen);
       return;
     }
     if (isShuttingDown()) return;

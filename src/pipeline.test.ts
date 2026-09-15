@@ -169,14 +169,20 @@ describe("generation-owned files", () => {
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
     await waitFor(() => scheduler.viewState().displayGen === 1);
     expect(await exists(`${htmlPath}.gen-1.html`)).toBe(true);
-    expect(tracker.hasFrame(1)).toBe(true);
+    expect(
+      tracker.displayedSourceLine({ displayGen: 1, scrollPx: 0, jumpToEnd: false }),
+    ).not.toBeNull();
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
     await waitFor(() => scheduler.viewState().displayGen === 2);
     for (let i = 0; i < 100; i++) await settle();
     expect(await exists(`${htmlPath}.gen-1.html`)).toBe(false);
     expect(await exists(`${htmlPath}.gen-2.html`)).toBe(true);
-    expect(tracker.hasFrame(1)).toBe(false);
-    expect(tracker.hasFrame(2)).toBe(true);
+    expect(
+      tracker.displayedSourceLine({ displayGen: 1, scrollPx: 0, jumpToEnd: false }),
+    ).toBeNull();
+    expect(
+      tracker.displayedSourceLine({ displayGen: 2, scrollPx: 0, jumpToEnd: false }),
+    ).not.toBeNull();
   });
 });
 
@@ -193,7 +199,9 @@ describe("frame observers", () => {
     );
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
     await waitFor(() => scheduler.viewState().displayGen === 1);
-    expect(tracker.hasFrame(1)).toBe(true);
+    expect(
+      tracker.displayedSourceLine({ displayGen: 1, scrollPx: 0, jumpToEnd: false }),
+    ).not.toBeNull();
     pipeline.execute([{ type: "scrollCommitted", jumpToEnd: false }]);
     expect(seen.length).toBe(1);
     expect(seen[0]!.displayGen).toBe(1);

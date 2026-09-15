@@ -36,7 +36,6 @@ export class Chrome {
     // No --allow-file-access-from-files: body scripts could read local files over XHR.
     this.browser = await puppeteer.launch({
       executablePath: this.executablePath,
-      headless: true,
       // pipe:true avoids an unauthenticated CDP port on 127.0.0.1 for the whole session.
       pipe: true,
       // Shutdown is funnelled through main; puppeteer handlers would exit(130) or orphan us.
@@ -103,9 +102,7 @@ export class Chrome {
         width: clip.widthCssPx,
         height: clip.heightCssPx,
       },
-      captureBeyondViewport: true,
       optimizeForSpeed: true,
-      type: "png",
       encoding: "base64",
     });
     return data as string;

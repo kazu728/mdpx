@@ -86,11 +86,11 @@ function statusBar(view: ViewState, filename: string, pendingVisible: boolean): 
       : geometry.renderScale < CSS_SCALE
         ? "low-res"
         : "";
-  const left = [`${sanitizeTerminalBlock(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");
+  const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");
   const right = "q:quit";
   const cols = geometry.cols;
   const { text, displayWidth: leftW } = truncateToDisplayWidth(left, cols);
-  const rightW = displayWidth(right);
+  const rightW = stringWidth(right);
   const line =
     leftW + 1 + rightW <= cols
       ? text + " ".repeat(cols - leftW - rightW) + right
@@ -102,11 +102,11 @@ export function sanitizeTerminalBlock(s: string): string {
   return s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "?");
 }
 
-const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-
-export function displayWidth(text: string): number {
-  return stringWidth(text);
+export function sanitizeTerminalLine(s: string): string {
+  return s.replace(/[\x00-\x1f\x7f]/g, "?");
 }
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export function truncateToDisplayWidth(
   text: string,

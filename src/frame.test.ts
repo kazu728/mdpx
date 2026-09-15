@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderFrame, sanitizeTerminalBlock, truncateToDisplayWidth } from "./frame.ts";
+import { renderFrame, sanitizeTerminalBlock, sanitizeTerminalLine, truncateToDisplayWidth } from "./frame.ts";
 import { alignedTileHeightPx, computeTiles } from "./viewport.ts";
 import type { ViewState } from "./scheduler.ts";
 
@@ -132,6 +132,14 @@ describe("sanitizeTerminalBlock", () => {
       "Error: ?[31mx?[0m\n  at f\t(a.ts)?",
     );
     expect(sanitizeTerminalBlock("café❤️.md")).toBe("café❤️.md");
+  });
+});
+
+describe("sanitizeTerminalLine", () => {
+  test("neutralizes newlines/tabs for single-line display", () => {
+    expect(sanitizeTerminalLine("a\nb\tc.md")).toBe("a?b?c.md");
+    expect(statusLine("a\nb\tc.md")).not.toContain("\n");
+    expect(statusLine("a\nb\tc.md")).not.toContain("\t");
   });
 });
 

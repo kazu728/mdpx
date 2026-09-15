@@ -13,7 +13,6 @@ describe("ScrollTracker", () => {
   test("resolves the mapped line for a scroll commit", () => {
     const tracker = new ScrollTracker();
     tracker.setFrame(1, META);
-    expect(tracker.hasFrame(1)).toBe(true);
     expect(
       tracker.displayedSourceLine({ displayGen: 1, scrollPx: 500 * CSS_SCALE, jumpToEnd: false }),
     ).toBe(3);
@@ -42,7 +41,6 @@ describe("ScrollTracker", () => {
     const tracker = new ScrollTracker();
     tracker.setFrame(1, META);
     tracker.releaseFrame(1);
-    expect(tracker.hasFrame(1)).toBe(false);
     expect(
       tracker.displayedSourceLine({ displayGen: 1, scrollPx: 0, jumpToEnd: false }),
     ).toBeNull();

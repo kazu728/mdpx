@@ -18,10 +18,6 @@ export class ScrollTracker {
     this.maps.delete(gen);
   }
 
-  hasFrame(gen: number): boolean {
-    return this.maps.has(gen);
-  }
-
   displayedSourceLine(info: ScrollInfo): number | null {
     if (info.displayGen === null) return null;
     const map = this.maps.get(info.displayGen);

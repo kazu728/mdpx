@@ -38,7 +38,6 @@ function tileCount(storageBytes: number, tileBytes: number): number {
   return Math.floor(storageBytes / Math.max(1, tileBytes));
 }
 
-/** Decoded-tile count with no bookkeeping margin. */
 export function totalTileCapacity(tileBytes: number, limits: GraphicsLimits): number {
   return tileCount(limits.storageBytes, tileBytes);
 }
