@@ -96,33 +96,9 @@ describe("status bar", () => {
 });
 
 describe("source rect when downscaled", () => {
-  test("source rect scales and capacity wins over low-res", () => {
-    const { escape } = renderFrame(reducedView(), "a.md", []);
-    expect(escape).toContain("h=250");
-    expect(escape).toContain("low-res");
+  test("source rect scales", () => {
+    expect(renderFrame(reducedView(), "a.md", []).escape).toContain("h=250");
     expect(renderFrame(makeView(), "a.md", []).escape).toContain("h=300");
-    const v = reducedView();
-    for (const exceeds of [
-      { exceedsFrameLimit: true, exceedsStorage: false },
-      { exceedsFrameLimit: true, exceedsStorage: true },
-      { exceedsFrameLimit: false, exceedsStorage: true },
-    ]) {
-      const { escape: e } = renderFrame({ ...v, geometry: { ...v.geometry, ...exceeds } }, "a.md", []);
-      expect(e).toContain(exceeds.exceedsFrameLimit ? "too wide" : "too many");
-      expect(e).not.toContain("low-res");
-    }
-  });
-});
-
-describe("failure status", () => {
-  test("failure vs in-flight activity", () => {
-    const v = makeView();
-    const failed: ViewState = { ...v, displayGen: null, failure: true };
-    expect(renderFrame(failed, "a.md", []).escape).toContain("render failed");
-    expect(renderFrame({ ...v, failure: true }, "a.md", []).escape).toContain("update failed");
-    expect(
-      renderFrame({ ...v, failure: true, phase: "rendering" }, "a.md", []).escape,
-    ).toContain("updating");
   });
 });
 

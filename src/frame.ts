@@ -1,6 +1,6 @@
 import stringWidth from "string-width";
 import { deletePlacement, imageId, place } from "./kitty.ts";
-import { CSS_SCALE, contentRows, maxScrollPx, toImagePx, visibleTiles } from "./viewport.ts";
+import { contentRows, maxScrollPx, toImagePx, visibleTiles } from "./viewport.ts";
 import type { ViewState } from "./scheduler.ts";
 
 const ESC = "\x1b";
@@ -22,14 +22,10 @@ export function renderFrame(
   out += HOME + ERASE_BELOW;
 
   const placed: number[] = [];
-  let pendingVisible = false;
   if (view.displayGen !== null) {
     const vis = visibleTiles(view.scrollPx, contentRows(geometry.rows), geometry.cellHpx, view.tiles);
     for (const p of vis) {
-      if (!view.resident.has(p.tileIndex)) {
-        pendingVisible = true;
-        continue;
-      }
+      if (!view.resident.has(p.tileIndex)) continue;
       const id = imageId(view.displayGen, p.tileIndex);
       out += cursorTo(p.destinationRow + 1, 1);
       out += place({
@@ -46,13 +42,13 @@ export function renderFrame(
   }
 
   out += cursorTo(geometry.rows, 1);
-  out += statusBar(view, filename, pendingVisible);
+  out += statusBar(view, filename);
   out += SYNC_END;
   return { escape: out, placements: placed };
 }
 
-function statusBar(view: ViewState, filename: string, pendingVisible: boolean): string {
-  const { geometry, scrollPx, phase, pendingScrollPx } = view;
+function statusBar(view: ViewState, filename: string): string {
+  const { geometry, scrollPx } = view;
   const shown = view.displayGen !== null ? view : null;
   const max = shown
     ? maxScrollPx(
@@ -63,30 +59,7 @@ function statusBar(view: ViewState, filename: string, pendingVisible: boolean): 
       )
     : 0;
   const pct = !shown ? "--" : max > 0 ? String(Math.round((scrollPx / max) * 100)) : "100";
-  const state = pendingVisible
-    ? "rendering…"
-    : pendingScrollPx !== null
-      ? "scrolling…"
-      : phase === "rendering"
-      ? shown
-        ? "updating"
-        : "rendering…"
-      : view.failure
-        ? shown
-          ? "update failed"
-          : "render failed"
-        : shown && shown.truncated && scrollPx >= max
-          ? "truncated"
-          : "";
-  // Capacity outlives transient states so it survives at a truncated tail.
-  const capacity = geometry.exceedsFrameLimit
-    ? "too wide"
-    : geometry.exceedsStorage
-      ? "too many"
-      : geometry.renderScale < CSS_SCALE
-        ? "low-res"
-        : "";
-  const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");
+  const left = `${sanitizeTerminalLine(filename)}  ${pct}%`;
   const right = "q:quit";
   const cols = geometry.cols;
   const { text, displayWidth: leftW } = truncateToDisplayWidth(left, cols);

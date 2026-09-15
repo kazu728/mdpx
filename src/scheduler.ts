@@ -603,8 +603,6 @@ export class Scheduler {
     return true;
   }
 
-  // Same-generation failure keeps the display: drop the pending scroll,
-  // shrink to the steady budget, then redraw and maybe rerun.
   private failDisplayedGen(g: GenState, actions: Action[]): void {
     if (this.pending) this.scrollFailed = true;
     this.pending = null;

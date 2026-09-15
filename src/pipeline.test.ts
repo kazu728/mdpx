@@ -89,9 +89,10 @@ describe("redraw dedup", () => {
     pipeline.execute([{ type: "redraw" }]);
     expect(writes.length).toBe(1);
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    expect(writes.length).toBe(2);
+    // A trigger with no visible change renders an identical frame, so it stays deduped.
+    expect(writes.length).toBe(1);
     for (let i = 0; i < 50; i++) await settle();
-    expect(writes.length).toBe(2);
+    expect(writes.length).toBe(1);
   });
 });
 
