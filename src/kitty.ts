@@ -12,7 +12,7 @@ export function imageId(gen: number, tileIndex: number): number {
 
 export const TILE_PLACEMENT_ID = 1;
 
-/** Transfer a PNG as base64 chunks; q=1 suppresses the success reply. */
+/** q=1 suppresses the success reply. */
 export function transmit(id: number, pngBase64: string): string {
   const chunks: string[] = [];
   for (let i = 0; i < pngBase64.length; i += MAX_PAYLOAD_CHUNK_SIZE) {

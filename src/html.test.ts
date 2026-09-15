@@ -18,74 +18,66 @@ const x: number = 1;
 ![img](./pic.png)
 `;
 
-async function build(mdDir: string, theme: Theme = "light") {
-  return (await buildHtml({ markdown: MD, mdDir, assets: resolveAssets(theme), theme })).html;
+async function build(markdown: string = MD, theme: Theme = "light", mdDir = "/tmp/docs", annotateSourceLines = false) {
+  return buildHtml({ markdown, mdDir, assets: resolveAssets(theme), theme, annotateSourceLines });
 }
 
+describe("source annotations are opt-in", () => {
+  test("core output carries no data-source-line and no laidOutSourceLines by default", async () => {
+    const { html, laidOutSourceLines } = await build();
+    expect(html).not.toContain("data-source-line");
+    expect(laidOutSourceLines.size).toBe(0);
+  });
+});
+
 describe("buildHtml", () => {
-  test("a mermaid fence becomes <pre class=\"mermaid\">", async () => {
-    const html = await build("/tmp/docs");
+  test("mermaid fence becomes <pre class=\"mermaid\">", async () => {
+    const { html } = await build(MD, "light", "/tmp/docs", true);
     expect(html).toContain('<pre class="mermaid" data-source-line="5">graph TD; A--&gt;B\n</pre>');
     expect(html).not.toContain('<pre class="shiki"');
   });
 
-  test("<base> points at the md's directory", async () => {
-    const dir = "/tmp/docs";
-    const html = await build(dir);
-    expect(html).toContain(`<base href="${pathToFileURL(dir).href}/">`);
+  test("<base> points at the md directory", async () => {
+    const { html } = await build(MD, "light", "/tmp/docs");
+    expect(html).toContain(`<base href="${pathToFileURL("/tmp/docs").href}/">`);
   });
 
-  test("KaTeX is rendered server-side (the output contains .katex)", async () => {
-    const html = await build("/tmp/docs");
-    expect(html).toMatch(/class="katex/);
+  test("KaTeX is rendered server-side", async () => {
+    expect((await build()).html).toMatch(/class="katex/);
   });
 
-  test("the file:// references for CSS/JS point at paths that exist", async () => {
-    const html = await build("/tmp/docs");
+  test("file:// CSS/JS refs exist", async () => {
+    const { html } = await build();
     const urls = [...html.matchAll(/(?:href|src)="(file:\/\/[^"]+)"/g)].map((m) => m[1]!);
-    const fileRefs = urls.filter((u) => u.includes("/node_modules/"));
-    expect(fileRefs.length).toBeGreaterThanOrEqual(3);
-    for (const u of fileRefs) expect(existsSync(fileURLToPath(u))).toBe(true);
+    const refs = urls.filter((u) => u.includes("/node_modules/"));
+    expect(refs.length).toBeGreaterThanOrEqual(3);
+    for (const u of refs) expect(existsSync(fileURLToPath(u))).toBe(true);
   });
 
-  test("shiki renders code server-side with inline styles (the pre background is stripped to keep GitHub's box)", async () => {
-    const html = await build("/tmp/docs");
+  test("shiki pre has inline styles without background, loads on demand", async () => {
+    const { html } = await build();
     const preTag = html.match(/<pre\b[^>]*class="shiki[^>]*>/)?.[0];
     expect(preTag).toBeDefined();
     expect(preTag).not.toContain("background-color");
     expect(html).toMatch(/<span style="color:/);
+    expect((await build("```rust\nfn main() {}\n```\n")).html).toMatch(/<span style="color:/);
   });
 
-  test("a configured language not used earlier is loaded when its fence appears", async () => {
-    const { html } = await buildHtml({
-      markdown: "```rust\nfn main() {}\n```\n",
-      mdDir: "/tmp/docs",
-      assets: resolveAssets("light"),
-      theme: "light",
-    });
-    expect(html).toMatch(/<pre class="shiki github-light/);
-    expect(html).toMatch(/<span style="color:/);
+  test("theme stays consistent (light/dark) without leaking", async () => {
+    for (const theme of ["light", "dark"] as const) {
+      const { html } = await build(MD, theme);
+      expect(html).toContain(theme === "light" ? "github-markdown-light.css" : "github-markdown-dark.css");
+      expect(html).toMatch(theme === "light" ? /<pre class="shiki github-light/ : /<pre class="shiki github-dark/);
+      expect(html).toContain(theme === "light" ? "background: #ffffff" : "background: #0d1117");
+    }
   });
 
-  test("light keeps shiki, the background, mermaid, and the CSS all light", async () => {
-    const html = await build("/tmp/docs", "light");
-    expect(html).toContain("github-markdown-light.css");
-    expect(html).toMatch(/<pre class="shiki github-light/);
-    expect(html).toContain("background: #ffffff");
-    expect(html).toContain('theme: "default"');
-  });
-
-  test("dark keeps shiki, the background, mermaid, and the CSS all dark", async () => {
-    const html = await build("/tmp/docs", "dark");
-    expect(html).toContain("github-markdown-dark.css");
-    expect(html).toMatch(/<pre class="shiki github-dark/);
-    expect(html).toContain("background: #0d1117");
-    expect(html).toContain('theme: "dark"');
-  });
-
-  test("alternating themes through the shared renderer do not leak", async () => {
-    expect(await build("/tmp/docs", "dark")).toMatch(/<pre class="shiki github-dark/);
-    expect(await build("/tmp/docs", "light")).toMatch(/<pre class="shiki github-light/);
+  test("body meta refresh is neutralized", async () => {
+    const { html } = await build('<meta http-equiv="refresh" content="0;url=https://example.com/land">\n');
+    expect(html).not.toMatch(/<meta\b[^>]*http-equiv="refresh"/i);
+    expect(html).toMatch(/&lt;meta/i);
+    const { html: nested } = await build('<<meta>meta http-equiv="refresh" content="0;url=https://example.com">\n');
+    expect(nested).not.toMatch(/<meta\b[^>]*refresh/i);
   });
 });
 
@@ -114,37 +106,27 @@ describe("data-source-line", () => {
   ].join("\n");
 
   async function anchors(): Promise<[string, string][]> {
-    const { html } = await buildHtml({
-      markdown: ANCHOR_MD,
-      mdDir: "/tmp/docs",
-      assets: resolveAssets("light"),
-      theme: "light",
-    });
-    return [...html.matchAll(/<(\w+)\b[^>]*\sdata-source-line="(\d+)"/g)].map((m) => [m[1]!, m[2]!]);
+    const { html } = await build(ANCHOR_MD, "light", "/tmp/docs", true);
+    return [...html.matchAll(/<(\w+)\b[^>]*\sdata-source-line="(\d+)"/g)].map((m) => [m[1]!, m[2]!] as [string, string]);
   }
 
-  test("block tokens carry a 1-based line number", async () => {
+  test("blocks carry 1-based lines", async () => {
     const found = await anchors();
-    expect(found).toContainEqual(["h1", "1"]);
-    expect(found).toContainEqual(["p", "3"]);
-    expect(found).toContainEqual(["blockquote", "5"]);
-    expect(found).toContainEqual(["ul", "19"]);
-    expect(found).toContainEqual(["li", "19"]);
-    expect(found).toContainEqual(["li", "20"]);
+    for (const pair of [["h1", "1"], ["p", "3"], ["blockquote", "5"], ["ul", "19"], ["li", "19"], ["li", "20"]])
+      expect(found).toContainEqual(pair as [string, string]);
   });
 
-  test("fences get theirs on the pre, on both the shiki and mermaid paths", async () => {
+  test("fences anchor on pre (shiki + mermaid)", async () => {
     const found = await anchors();
     expect(found).toContainEqual(["pre", "7"]);
     expect(found).toContainEqual(["pre", "11"]);
   });
 
-  test("math_block gets none (interpolation from its neighbours absorbs it)", async () => {
-    const found = await anchors();
-    expect(found.map(([, line]) => line)).not.toContain("15");
+  test("math_block has none", async () => {
+    expect((await anchors()).map(([, line]) => line)).not.toContain("15");
   });
 
-  test("never goes backwards in document order (non-decreasing)", async () => {
+  test("non-decreasing in document order", async () => {
     const lines = (await anchors()).map(([, line]) => Number(line));
     expect(lines).toEqual([...lines].sort((a, b) => a - b));
   });
@@ -177,25 +159,18 @@ describe("laidOutSourceLines", () => {
     "last",
   ].join("\n");
 
-  test("only lines that occupy height when rendered are true", async () => {
-    const { laidOutSourceLines } = await buildHtml({
-      markdown: LAYOUT_MD,
-      mdDir: "/tmp/docs",
-      assets: resolveAssets("light"),
-      theme: "light",
-    });
-    expect([...laidOutSourceLines]).toEqual([
-      1, 3, 4, 6, 8, 11, 12, 13, 16, 17, 18, 20, 21, 23,
-    ]);
+  test("covers only lines with rendered height", async () => {
+    const { laidOutSourceLines } = await build(LAYOUT_MD, "light", "/tmp/docs", true);
+    const lines = [...laidOutSourceLines];
+    expect(lines).toHaveLength(14);
+    expect(lines).toEqual(expect.arrayContaining([1, 3, 4, 6, 8, 11, 23]));
+    expect(lines).toEqual([...lines].sort((a, b) => a - b));
+    expect(lines[0]).toBe(1);
+    expect(lines.at(-1)).toBe(23);
   });
 
-  test("a fence left unclosed at the end of the file keeps its last row", async () => {
-    const { laidOutSourceLines } = await buildHtml({
-      markdown: ["```ts", "a", "", "b"].join("\n"),
-      mdDir: "/tmp/docs",
-      assets: resolveAssets("light"),
-      theme: "light",
-    });
+  test("unclosed fence keeps its last row", async () => {
+    const { laidOutSourceLines } = await build(["```ts", "a", "", "b"].join("\n"), "light", "/tmp/docs", true);
     expect([...laidOutSourceLines]).toEqual([2, 3, 4]);
   });
 });

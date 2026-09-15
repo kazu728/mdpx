@@ -1,17 +1,9 @@
-export interface Anchor {
-  sourceLine: number;
-  topCssPx: number;
-}
+import type { Anchor } from "../sourcemap.ts";
 
 export interface LineMap {
   anchors: Anchor[];
   sourceLineCount: number;
   laidOutSourceLines: ReadonlySet<number>;
-}
-
-export function countSourceLines(markdown: string): number {
-  const n = markdown.split("\n").length;
-  return Math.max(1, markdown.endsWith("\n") ? n - 1 : n);
 }
 
 export function buildLineMap(
@@ -35,9 +27,7 @@ export function buildLineMap(
     }
     monotonicAnchors.push({ sourceLine, topCssPx: anchor.topCssPx });
   }
-  // The tail anchor. Mapping the bottom of the document to the line *after* the last one makes the
-  // final interval converge on sourceLineCount (using sourceLineCount itself would make the last
-  // line hit at a single point only).
+  // Tail anchor maps the document bottom to sourceLineCount+1 so the last line is reachable.
   const last = monotonicAnchors[monotonicAnchors.length - 1]!;
   if (
     sourceLineCount + 1 > last.sourceLine &&
@@ -63,10 +53,7 @@ function snapToLaidOutSourceLine(laidOutSourceLines: ReadonlySet<number>, source
   return sourceLine;
 }
 
-/**
- * A jump to the end bypasses interpolation and narrowing because nvim's own `G` also lands on a
- * trailing blank line.
- */
+// jumpToEnd lands on the last line like nvim's `G` on a trailing blank.
 export function sourceLineAt(
   map: LineMap,
   viewportTopCssPx: number,

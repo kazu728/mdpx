@@ -6,8 +6,8 @@ const ESC = "\x1b";
 function capture(fn: () => void): string {
   const orig = process.stdout.write;
   let out = "";
-  process.stdout.write = ((chunk: string | Uint8Array) => {
-    out += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("latin1");
+  process.stdout.write = ((c: string | Uint8Array) => {
+    out += typeof c === "string" ? c : Buffer.from(c).toString("latin1");
     return true;
   }) as typeof process.stdout.write;
   try {
@@ -19,23 +19,12 @@ function capture(fn: () => void): string {
 }
 
 describe("Term.enterAltScreen", () => {
-  test("the initial output still carries CSI 2J", () => {
-    const term = new Term();
-    const out = capture(() => term.enterAltScreen());
-    expect(out).toContain(`${ESC}[2J`);
-  });
-
-  test("requests alternate scroll so the wheel arrives as cursor keys", () => {
-    const term = new Term();
-    const out = capture(() => term.enterAltScreen());
-    expect(out).toContain(`${ESC}[?1007h`);
-  });
-
-  test("releases alternate scroll on restore", () => {
+  test("alt screen + alternate scroll, released on restore", () => {
+    expect(capture(() => new Term().enterAltScreen())).toContain(`${ESC}[2J`);
+    expect(capture(() => new Term().enterAltScreen())).toContain(`${ESC}[?1007h`);
     const term = new Term();
     capture(() => term.enterAltScreen());
-    const out = capture(() => term.restore());
-    expect(out).toContain(`${ESC}[?1007l`);
+    expect(capture(() => term.restore())).toContain(`${ESC}[?1007l`);
   });
 });
 
@@ -44,7 +33,7 @@ function inject(term: Term, seq: string): void {
 }
 
 describe("Term.queryKittyGraphics", () => {
-  test("sends the graphics query as a=q plus a Primary DA (sync marker)", async () => {
+  test("sends a=q plus Primary DA", async () => {
     const term = new Term();
     let p!: Promise<boolean>;
     const out = capture(() => {
@@ -57,7 +46,7 @@ describe("Term.queryKittyGraphics", () => {
     await p;
   });
 
-  test("a _G reply arriving first means supported (true)", async () => {
+  test("_G first means supported", async () => {
     const term = new Term();
     let p!: Promise<boolean>;
     capture(() => {
@@ -67,7 +56,7 @@ describe("Term.queryKittyGraphics", () => {
     expect(await p).toBe(true);
   });
 
-  test("only a DA and no _G means unsupported (false)", async () => {
+  test("DA only or timeout means unsupported", async () => {
     const term = new Term();
     let p!: Promise<boolean>;
     capture(() => {
@@ -75,15 +64,12 @@ describe("Term.queryKittyGraphics", () => {
     });
     inject(term, `${ESC}[?62;c`);
     expect(await p).toBe(false);
-  });
-
-  test("no reply times out as unsupported (false)", async () => {
-    const term = new Term();
-    let p!: Promise<boolean>;
+    const t2 = new Term();
+    let p2!: Promise<boolean>;
     capture(() => {
-      p = term.queryKittyGraphics(20);
+      p2 = t2.queryKittyGraphics(20);
     });
-    expect(await p).toBe(false);
+    expect(await p2).toBe(false);
   });
 });
 
@@ -115,13 +101,13 @@ describe("Term key input", () => {
     ]);
   });
 
-  test("arrows are picked up as both CSI (ESC[A/B) and SS3 (ESC O A/B)", () => {
+  test("arrows via CSI and SS3", () => {
     const r = keyRecorder();
     r.feed(`${ESC}[A${ESC}[B${ESC}OA${ESC}OB`);
     expect(r.keys).toEqual([lines(-1), lines(1), lines(-1), lines(1)]);
   });
 
-  test("an arrow split across chunks is reassembled", () => {
+  test("split arrow reassembles", () => {
     const r = keyRecorder();
     r.feed(`${ESC}`);
     r.feed("[");
@@ -129,52 +115,49 @@ describe("Term key input", () => {
     expect(r.keys).toEqual([lines(1)]);
   });
 
-  test("a lone ESC consumes one byte only and does not swallow the next key", () => {
+  test("lone ESC takes one byte only", () => {
     const r = keyRecorder();
     r.feed(`${ESC}j`);
     expect(r.keys).toEqual([lines(1)]);
   });
 
-  test("a Ctrl-C inside an unfinished CSI is not eaten and can still quit", () => {
+  test("ctrl-C inside CSI still quits", () => {
     const r = keyRecorder();
     r.feed(`${ESC}[3\x03`);
     expect(r.keys).toEqual([{ type: "quit" }]);
   });
 
-  test("16t and DA replies are never emitted as keys", () => {
+  test("16t and DA never emit keys", () => {
     const r = keyRecorder();
     r.feed(`${ESC}[6;31;14t${ESC}[?62;c`);
     expect(r.keys).toEqual([]);
   });
 
-  test("the payload of a kitty graphics reply (APC) does not misfire as keys", () => {
+  test("kitty APC payload does not misfire", () => {
     const r = keyRecorder();
     r.feed(`${ESC}_Gi=31;quit-glyphs-jkgG${ESC}\\q`);
     expect(r.keys).toEqual([{ type: "quit" }]);
   });
 });
 
-describe("Term parser resynchronization (unterminated sequences)", () => {
-  test("an APC whose terminator never comes is dropped past the size limit, letting later keys through", () => {
+describe("Term resync (unterminated sequences)", () => {
+  test("stuck APC drops (size limit or quiet timeout)", async () => {
     const r = keyRecorder();
     r.feed(`${ESC}_Gstuck`);
     expect(r.keys).toEqual([]);
     r.feed("x".repeat(300));
     r.feed("q");
     expect(r.keys).toEqual([{ type: "quit" }]);
-  });
-
-  test("an APC whose terminator never comes is dropped on time once input goes quiet", async () => {
-    const r = keyRecorder();
-    r.feed(`${ESC}_Gstuck`);
-    r.feed("q");
-    expect(r.keys).toEqual([]);
+    const r2 = keyRecorder();
+    r2.feed(`${ESC}_Gstuck`);
+    r2.feed("q");
+    expect(r2.keys).toEqual([]);
     await Bun.sleep(300);
-    r.feed("q");
-    expect(r.keys).toEqual([{ type: "quit" }]);
+    r2.feed("q");
+    expect(r2.keys).toEqual([{ type: "quit" }]);
   });
 
-  test("an ST arriving later is skipped as usual (a legitimately split reply is not broken)", () => {
+  test("late ST is skipped (split reply unbroken)", () => {
     const r = keyRecorder();
     r.feed(`${ESC}_Gi=31;OK`);
     r.feed(`${ESC}\\j`);

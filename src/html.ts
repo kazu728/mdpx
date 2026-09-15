@@ -10,11 +10,10 @@ import {
   type Highlighter,
   type ShikiTransformer,
 } from "shiki";
-import { countSourceLines } from "./linemap.ts";
+import { countSourceLines } from "./sourcemap.ts";
 
 const require = createRequire(import.meta.url);
 
-// The plugin is CJS assigning exports.default, which Node's ESM import leaves wrapped and md.use rejects.
 const katex: typeof import("@vscode/markdown-it-katex").default = require(
   "@vscode/markdown-it-katex",
 ).default;
@@ -41,10 +40,7 @@ const SHIKI_THEME: Record<Theme, string> = { light: "github-light", dark: "githu
 const PAGE_BG: Record<Theme, string> = { light: "#ffffff", dark: "#0d1117" };
 const MERMAID_THEME: Record<Theme, string> = { light: "default", dark: "dark" };
 
-// shiki writes background-color straight onto the <pre>, cancelling github-markdown-css's code block
-// background (its themed box, rounded corners, and padding). Strip just the background colour to
-// keep GitHub's box. The order of declarations is an internal shiki detail, so this drops every
-// background-color regardless of position rather than assuming one.
+// Keep github-markdown-css by stripping shiki's <pre> background.
 const dropShikiBackground: ShikiTransformer = {
   pre(node) {
     const style = node.properties.style;
@@ -69,11 +65,10 @@ const LANGS = [
   "toml", "tsx", "typescript", "xml", "yaml",
 ] satisfies BundledLanguage[];
 
-const configuredLanguages = new Set<string>(LANGS);
 const languageByName = new Map<string, BundledLanguage>();
 for (const info of bundledLanguagesInfo) {
   const names = [info.id, ...(info.aliases ?? [])];
-  if (names.some((name) => configuredLanguages.has(name))) {
+  if (names.some((name) => (LANGS as readonly string[]).includes(name))) {
     for (const name of names) languageByName.set(name, info.id as BundledLanguage);
   }
 }
@@ -92,9 +87,9 @@ function getHighlighter(): Promise<Highlighter> {
   return highlighterPromise;
 }
 
-/** Remove body meta tags so a meta refresh cannot navigate outside this document's CSP. */
+/** Escaping (not deleting) keeps `<<meta>meta ...>` from becoming a tag. */
 function stripMetaTags(html: string): string {
-  return html.replace(/<meta\b[^>]*>/gi, "");
+  return html.replace(/<(\/?)(meta)\b/gi, (_m, slash: string, word: string) => `&lt;${slash}${word}`);
 }
 
 interface RenderEnv {
@@ -106,19 +101,20 @@ function fenceLanguage(token: Token): string {
   return token.info.trim().split(/\s+/g)[0]!;
 }
 
-let rendererCache: MarkdownIt | null = null;
-function getRenderer(highlighter: Highlighter): MarkdownIt {
-  if (rendererCache) return rendererCache;
+const rendererCache = new Map<boolean, MarkdownIt>();
+function getRenderer(highlighter: Highlighter, annotateSourceLines: boolean): MarkdownIt {
+  const cached = rendererCache.get(annotateSourceLines);
+  if (cached) return cached;
 
   const md = new MarkdownIt({ html: true, linkify: true });
   md.use(taskLists);
   md.use(katex);
 
-  // Attach source-line anchors to block tokens; fences are handled by the custom renderer below.
   const renderToken = md.renderer.renderToken.bind(md.renderer);
   md.renderer.renderToken = (tokens, idx, options) => {
     const token = tokens[idx]!;
-    if (token.nesting === 1 && token.map) token.attrSet(SOURCE_LINE, String(token.map[0]! + 1));
+    if (annotateSourceLines && token.nesting === 1 && token.map)
+      token.attrSet(SOURCE_LINE, String(token.map[0]! + 1));
     return renderToken(tokens, idx, options);
   };
 
@@ -129,13 +125,16 @@ function getRenderer(highlighter: Highlighter): MarkdownIt {
     const line = String(token.map![0] + 1);
     if (lang === "mermaid") {
       env.hasMermaid = true;
-      return `<pre class="mermaid" ${SOURCE_LINE}="${line}">${escape(token.content)}</pre>\n`;
+      const attr = annotateSourceLines ? ` ${SOURCE_LINE}="${line}"` : "";
+      return `<pre class="mermaid"${attr}>${escape(token.content)}</pre>\n`;
     }
     const toHtml = (l: string) =>
       highlighter.codeToHtml(token.content, {
         lang: l,
         theme: SHIKI_THEME[env.theme],
-        transformers: [dropShikiBackground, sourceLineAttr(line)],
+        transformers: annotateSourceLines
+          ? [dropShikiBackground, sourceLineAttr(line)]
+          : [dropShikiBackground],
       });
     try {
       return toHtml(lang || "text") + "\n";
@@ -144,11 +143,11 @@ function getRenderer(highlighter: Highlighter): MarkdownIt {
     }
   };
 
-  rendererCache = md;
+  rendererCache.set(annotateSourceLines, md);
   return md;
 }
 
-/** Keep only source lines with rendered height, using the innermost mapped token for each line. */
+/** Only source lines with rendered height, via the innermost mapped token. */
 function findLaidOutSourceLines(tokens: readonly Token[], sourceLineCount: number): Set<number> {
   const sourceLines = new Set<number>();
   const mark = (from: number, to: number) => {
@@ -172,7 +171,6 @@ function findLaidOutSourceLines(tokens: readonly Token[], sourceLineCount: numbe
     if (!token.map || isContainer[i]) continue;
     const start = token.map[0] + 1;
     if (token.type === "fence") {
-      // The token map includes the fence delimiters; count rendered content instead.
       const rows = token.content.split("\n");
       mark(start + 1, start + (rows[rows.length - 1] === "" ? rows.length - 1 : rows.length));
     } else {
@@ -182,19 +180,15 @@ function findLaidOutSourceLines(tokens: readonly Token[], sourceLineCount: numbe
   return sourceLines;
 }
 
-// Body scripts lack the nonce and remain inert. Keep file: out of script-src so <base> cannot enable
-// external body scripts; mermaid is loaded from file:// with the nonce. connect-src blocks network
-// requests, and stripMetaTags closes top-level navigation.
 function contentSecurityPolicy(nonce: string): string {
   return [
     "default-src 'none'",
-    // Mermaid does not require eval; allowing it would widen the damage from a compromised script.
     `script-src 'nonce-${nonce}'`,
     "style-src 'unsafe-inline' file:",
     "img-src file: data: https: http:",
     "font-src file:",
     "connect-src 'none'",
-    "base-uri file:", // allow our own file:// base while blocking relative-URL hijacking via <base href="http://…"> in the body
+    "base-uri file:",
   ].join("; ");
 }
 
@@ -203,6 +197,8 @@ export interface BuildHtmlInput {
   mdDir: string;
   assets: Assets;
   theme: Theme;
+  /** Emit data-source-line attrs and laidOutSourceLines for sourcemap consumers. */
+  annotateSourceLines?: boolean;
 }
 
 export interface BuildHtmlResult {
@@ -212,7 +208,8 @@ export interface BuildHtmlResult {
 
 export async function buildHtml(input: BuildHtmlInput): Promise<BuildHtmlResult> {
   const highlighter = await getHighlighter();
-  const md = getRenderer(highlighter);
+  const annotateSourceLines = input.annotateSourceLines ?? false;
+  const md = getRenderer(highlighter, annotateSourceLines);
 
   const env: RenderEnv = { theme: input.theme };
   const tokens = md.parse(input.markdown, env);
@@ -265,6 +262,8 @@ ${mermaid}
 `;
   return {
     html,
-    laidOutSourceLines: findLaidOutSourceLines(tokens, countSourceLines(input.markdown)),
+    laidOutSourceLines: annotateSourceLines
+      ? findLaidOutSourceLines(tokens, countSourceLines(input.markdown))
+      : new Set<number>(),
   };
 }

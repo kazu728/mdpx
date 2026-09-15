@@ -1,27 +1,28 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import { Chrome, ContentError } from "./chrome.ts";
 import { renderFrame } from "./frame.ts";
 import { buildHtml, type Assets, type Theme } from "./html.ts";
 import { deleteImage, imageId, transmit } from "./kitty.ts";
-import {
-  buildLineMap,
-  countSourceLines,
-  sourceLineAt,
-  type Anchor,
-  type LineMap,
-} from "./linemap.ts";
 import { Scheduler, type Action } from "./scheduler.ts";
+import { countSourceLines, type Anchor, type FrameMeta } from "./sourcemap.ts";
 import { Term } from "./term.ts";
 import { CSS_SCALE } from "./viewport.ts";
 
-const MAX_CONSECUTIVE_CHROME_FAILURES = 2;
-
 type ShootAction = Extract<Action, { type: "shoot" }>;
 
+export interface ScrollInfo {
+  displayGen: number | null;
+  scrollPx: number;
+  jumpToEnd: boolean;
+}
+
 interface PipelineDeps {
-  chrome: Pick<Chrome, "load" | "collectAnchors" | "shoot" | "restart">;
+  chrome: Pick<Chrome, "load" | "collectAnchors" | "shoot">;
   scheduler: Scheduler;
   term: Pick<Term, "write">;
+  onScroll?: (info: ScrollInfo) => void;
+  onFrameMapped?: (gen: number, meta: FrameMeta) => void;
+  onFrameReleased?: (gen: number) => void;
   mdPath: string;
   mdDir: string;
   fileName: string;
@@ -32,28 +33,39 @@ interface PipelineDeps {
 }
 
 export class Pipeline {
-  // Keep line maps per generation; lookups use only the displayed generation's map.
-  private readonly lineMaps = new Map<number, LineMap>();
-  private consecutiveFailures = 0;
   private lastPlacements: number[] = [];
+  private lastEscape = "";
   private theme: Theme = "light";
   private page: Promise<unknown> = Promise.resolve();
+  private loadedGen: number | null = null;
 
   constructor(private readonly deps: PipelineDeps) {}
 
   execute(actions: Action[]): void {
-    const { scheduler, term, fileName } = this.deps;
+    const { scheduler, term, fileName, onScroll } = this.deps;
     for (const a of actions) {
       switch (a.type) {
         case "redraw": {
           const frame = renderFrame(scheduler.viewState(), fileName, this.lastPlacements);
-          term.write(frame.escape);
+          if (frame.escape !== this.lastEscape) {
+            term.write(frame.escape);
+            this.lastEscape = frame.escape;
+          }
           this.lastPlacements = frame.placements;
           break;
         }
         case "deleteGen":
           term.write(a.imageIds.map(deleteImage).join(""));
           break;
+        case "releaseGen":
+          this.releaseGen(a.gen);
+          break;
+        case "scrollCommitted": {
+          if (!onScroll) break;
+          const v = scheduler.viewState();
+          onScroll({ displayGen: v.displayGen, scrollPx: v.scrollPx, jumpToEnd: a.jumpToEnd });
+          break;
+        }
         case "render":
           void this.runRender(a.gen);
           break;
@@ -69,102 +81,95 @@ export class Pipeline {
     this.execute(this.deps.scheduler.dispatch({ type: "trigger" }));
   }
 
-  displayedSourceLine(jumpToEnd: boolean): number | null {
-    const v = this.deps.scheduler.viewState();
-    if (v.displayGen === null) return null;
-    const map = this.lineMaps.get(v.displayGen);
-    if (!map) return null;
-    return sourceLineAt(map, v.scrollPx / CSS_SCALE, jumpToEnd);
-  }
-
-  /** A capture interrupted by a navigation never settles, and wedges every later capture. */
   private onPage<T>(work: () => Promise<T>): Promise<T> {
     const turn = this.page.then(work);
     this.page = turn.catch(() => {});
     return turn;
   }
 
-  private async attempt<T>(fn: (restarted: boolean) => Promise<T>): Promise<T> {
-    const { chrome, onFatal } = this.deps;
-    let restarted = false;
-    for (;;) {
-      try {
-        const r = await fn(restarted);
-        this.consecutiveFailures = 0;
-        return r;
-      } catch (e) {
-        if (e instanceof ContentError) throw e; // a restart fails the same way on the same content; keep the classes apart
-        this.consecutiveFailures += 1;
-        if (this.consecutiveFailures >= MAX_CONSECUTIVE_CHROME_FAILURES) {
-          return onFatal("mdpx: Chrome failed repeatedly\n");
-        }
-        try {
-          await chrome.restart();
-        } catch (restartError) {
-          const reason = restartError instanceof Error ? restartError.message : restartError;
-          return onFatal(`mdpx: could not restart Chrome: ${reason}\n`);
-        }
-        restarted = true;
-      }
+  private htmlFor(gen: number): string {
+    return `${this.deps.htmlPath}.gen-${gen}.html`;
+  }
+
+  private async loadGenDocument(gen: number): Promise<number> {
+    const { chrome, scheduler } = this.deps;
+    const g = scheduler.viewState().geometry;
+    this.loadedGen = null;
+    const h = await chrome.load(this.htmlFor(gen), g.viewportWidthCssPx, g.renderScale);
+    this.loadedGen = gen;
+    return h;
+  }
+
+  /** Load and collect anchors together so they match the same page. */
+  private async loadWithAnchors(gen: number): Promise<{ documentHeightCssPx: number; anchors: Anchor[] }> {
+    const documentHeightCssPx = await this.loadGenDocument(gen);
+    const anchors = await this.deps.chrome.collectAnchors();
+    return { documentHeightCssPx, anchors };
+  }
+
+  /** A generation ends in the scheduler; its HTML and map end here. */
+  private releaseGen(gen: number): void {
+    this.deps.onFrameReleased?.(gen);
+    if (this.loadedGen === gen) this.loadedGen = null;
+    unlink(this.htmlFor(gen)).catch(() => {});
+  }
+
+  /** Content failures keep the current frame; Chrome faults are fatal. */
+  private async handleChromeError(e: unknown, gen: number): Promise<void> {
+    const { scheduler, isShuttingDown } = this.deps;
+    if (e instanceof ContentError) {
+      if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
+      return;
+    }
+    if (!isShuttingDown()) {
+      const reason = e instanceof Error ? e.message : String(e);
+      await this.deps.onFatal(`mdpx: Chrome failed: ${reason}\n`);
     }
   }
 
-  private loadCurrentGeometry(): Promise<number> {
-    const { chrome, scheduler, htmlPath } = this.deps;
-    const g = scheduler.viewState().geometry;
-    return chrome.load(htmlPath, g.viewportWidthCssPx, g.renderScale);
-  }
-
-  /** Load and collect anchors together so they stay matched to the page. */
-  private async loadWithAnchors(): Promise<{ documentHeightCssPx: number; anchors: Anchor[] }> {
-    const documentHeightCssPx = await this.loadCurrentGeometry();
-    return { documentHeightCssPx, anchors: await this.deps.chrome.collectAnchors() };
-  }
-
-  private rememberLineMap(gen: number, map: LineMap): void {
-    const shown = this.deps.scheduler.viewState().displayGen;
-    this.lineMaps.set(gen, map);
-    for (const k of this.lineMaps.keys()) if (k !== gen && k !== shown) this.lineMaps.delete(k);
-  }
-
   private async runRender(gen: number): Promise<void> {
-    const { scheduler, mdPath, mdDir, assets, htmlPath, isShuttingDown } = this.deps;
+    const { scheduler, mdPath, mdDir, assets, isShuttingDown, onFrameMapped } = this.deps;
     let md: string;
     let laidOutSourceLines: ReadonlySet<number>;
     try {
       md = await readFile(mdPath, "utf8");
-      const built = await buildHtml({ markdown: md, mdDir, assets: assets[this.theme], theme: this.theme });
-      await writeFile(htmlPath, built.html);
+      const built = await buildHtml({
+        markdown: md,
+        mdDir,
+        assets: assets[this.theme],
+        theme: this.theme,
+        annotateSourceLines: onFrameMapped !== undefined,
+      });
+      await writeFile(this.htmlFor(gen), built.html);
       laidOutSourceLines = built.laidOutSourceLines;
     } catch {
       if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
       return;
     }
-    let loaded: { documentHeightCssPx: number; anchors: Anchor[] };
+    let documentHeightCssPx: number;
     try {
-      loaded = await this.onPage(() => this.attempt(() => this.loadWithAnchors()));
-    } catch (e) {
-      if (e instanceof ContentError && !isShuttingDown()) {
-        this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
-        return;
+      if (onFrameMapped) {
+        const loaded = await this.onPage(() => this.loadWithAnchors(gen));
+        documentHeightCssPx = loaded.documentHeightCssPx;
+        onFrameMapped(gen, {
+          anchors: loaded.anchors,
+          sourceLineCount: countSourceLines(md),
+          documentHeightCssPx: loaded.documentHeightCssPx,
+          laidOutSourceLines,
+        });
+      } else {
+        documentHeightCssPx = await this.onPage(() => this.loadGenDocument(gen));
       }
-      throw e;
+    } catch (e) {
+      await this.handleChromeError(e, gen);
+      return;
     }
-    this.rememberLineMap(
-      gen,
-      buildLineMap(
-        loaded.anchors,
-        countSourceLines(md),
-        loaded.documentHeightCssPx,
-        laidOutSourceLines,
-      ),
-    );
     if (!isShuttingDown()) {
       this.execute(
         scheduler.dispatch({
           type: "renderDone",
           gen,
-          documentHeightPx: loaded.documentHeightCssPx * CSS_SCALE,
+          documentHeightPx: documentHeightCssPx * CSS_SCALE,
         }),
       );
     }
@@ -175,18 +180,13 @@ export class Pipeline {
     const { gen, tileIndex, clip } = action;
     let base64: string;
     try {
-      base64 = await this.onPage(() =>
-        this.attempt(async (restarted) => {
-          if (restarted) await this.loadCurrentGeometry();
-          return chrome.shoot(clip);
-        }),
-      );
+      base64 = await this.onPage(async () => {
+        if (this.loadedGen !== gen) await this.loadGenDocument(gen);
+        return chrome.shoot(clip);
+      });
     } catch (e) {
-      if (e instanceof ContentError && !isShuttingDown()) {
-        this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
-        return;
-      }
-      throw e;
+      await this.handleChromeError(e, gen);
+      return;
     }
     if (isShuttingDown()) return;
     term.write(transmit(imageId(gen, tileIndex), base64));
