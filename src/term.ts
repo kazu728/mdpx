@@ -44,7 +44,7 @@ const CSI_INTRODUCER = 0x5b;
 const SS3_INTRODUCER = 0x4f;
 
 function validCellDimensionPx(n: number): boolean {
-  return Number.isFinite(n) && n > 0 && n <= MAX_CELL_PX;
+  return Number.isInteger(n) && n > 0 && n <= MAX_CELL_PX;
 }
 
 /**

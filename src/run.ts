@@ -4,10 +4,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { resolveAssets, type Assets, type Theme } from "./html.ts";
 import { Chrome, resolveExecutable } from "./chrome.ts";
-import { Pipeline, type ScrollInfo } from "./pipeline.ts";
+import { Pipeline } from "./pipeline.ts";
 import { Scheduler } from "./scheduler.ts";
 import { sanitizeTerminalBlock } from "./frame.ts";
-import type { FrameMeta } from "./sourcemap.ts";
 import { Term } from "./term.ts";
 import { resolveGeometry } from "./geometry.ts";
 
@@ -15,14 +14,6 @@ const CELL_QUERY_MS = 200;
 const GRAPHICS_QUERY_TIMEOUT_MS = 200;
 const WATCH_DEBOUNCE_MS = 100;
 const CHROME_CLOSE_TIMEOUT_MS = 1500;
-
-export interface RunOptions {
-  mdPath: string;
-  onShutdown?: () => void;
-  onScroll?: (info: ScrollInfo) => void;
-  onFrameMapped?: (gen: number, meta: FrameMeta) => void;
-  onFrameReleased?: (gen: number) => void;
-}
 
 function warn(msg: string): void {
   process.stderr.write(sanitizeTerminalBlock(`mdpx: ${msg}`) + "\n");
@@ -49,8 +40,7 @@ export function resolveCliMdPath(argv: string[], bin: string): string {
   process.exit(1);
 }
 
-export async function runApp(opts: RunOptions): Promise<void> {
-  const mdPath = opts.mdPath;
+export async function runApp(mdPath: string): Promise<void> {
   const mdDir = dirname(mdPath);
   const fileName = basename(mdPath);
   const watchTarget = fileName.normalize("NFC").toLowerCase();
@@ -74,7 +64,6 @@ export async function runApp(opts: RunOptions): Promise<void> {
     try {
       if (debounce) clearTimeout(debounce);
       watcher?.close();
-      opts.onShutdown?.();
       term.restore();
       if (message) process.stderr.write(sanitizeTerminalBlock(message));
       await Promise.race([chrome.close(), new Promise((r) => setTimeout(r, CHROME_CLOSE_TIMEOUT_MS))]);
@@ -126,9 +115,6 @@ export async function runApp(opts: RunOptions): Promise<void> {
     chrome,
     scheduler,
     term,
-    onScroll: opts.onScroll,
-    onFrameMapped: opts.onFrameMapped,
-    onFrameReleased: opts.onFrameReleased,
     mdPath,
     mdDir,
     fileName,

@@ -28,7 +28,7 @@ export function transmit(id: number, pngBase64: string): string {
   return out;
 }
 
-export interface PlaceParams {
+interface PlaceParams {
   id: number;
   sourceXImagePx: number;
   sourceYImagePx: number;

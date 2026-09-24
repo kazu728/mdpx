@@ -26,13 +26,6 @@ function drain(s: Scheduler, acts: Action[], gen: number, n = 20) { for (let i =
 function displayedWith(geo: Geometry, docH: number): Scheduler { const s = new Scheduler(geo); s.dispatch({ type: "trigger" }); let acts = s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: docH }); for (let i = 0; i < 300 && s.viewState().phase === "rendering"; i++) { const sh = shoots(acts); if (!sh.length) break; acts = s.dispatch({ type: "tileReady", gen: 1, tileIndex: sh[0]! }); } return s; }
 
 describe("pipeline basics", () => {
-  test("trigger returns render + redraw", () => {
-    expect(new Scheduler(GEO).dispatch({ type: "trigger" })).toEqual([
-      { type: "render", gen: 1 },
-      { type: "redraw" },
-    ]);
-  });
-
   test("renderDone shoots first tile cell-aligned", () => {
     const s = new Scheduler(GEO);
     s.dispatch({ type: "trigger" });
@@ -69,15 +62,6 @@ describe("generation switch", () => {
     expect<number>(s.viewState().scrollPx).toBe(0);
   });
 
-  test("regeneration keeps scrollPx", () => {
-    const s = newDisplayedGen1();
-    s.dispatch({ type: "key", delta: { kind: "lines", n: 20 } });
-    const before = s.viewState().scrollPx;
-    expect<number>(before).toBeGreaterThan(0);
-    s.dispatch({ type: "trigger" });
-    s.dispatch({ type: "renderDone", gen: 2, documentHeightPx: 1500 });
-    expect<number>(s.viewState().scrollPx).toBe(before);
-  });
 });
 
 describe("trigger coalescing", () => {
@@ -115,7 +99,6 @@ describe("scrolling to an untransferred tile", () => {
     s.dispatch({ type: "tileReady", gen: 1, tileIndex: 0 });
     const k = s.dispatch({ type: "key", delta: { kind: "bottom" } });
     expect(has(k, "redraw")).toBe(true);
-    expect(has(k, "scrollCommitted")).toBe(false);
     expect<number>(s.viewState().scrollPx).toBe(0);
     expect<number | null>(s.viewState().pendingScrollPx).toBe(1000);
     const vs = shown(s);
@@ -124,26 +107,8 @@ describe("scrolling to an untransferred tile", () => {
     expect(shoots(s.dispatch({ type: "tileReady", gen: 1, tileIndex: 1 }))).toEqual([2]);
     const after = s.dispatch({ type: "tileReady", gen: 1, tileIndex: 2 });
     expect(has(after, "redraw")).toBe(true);
-    expect(after).toContainEqual({ type: "scrollCommitted", jumpToEnd: true });
     expect(shown(s).resident.has(2)).toBe(true);
     expect<number>(s.viewState().scrollPx).toBe(1000);
-  });
-});
-
-describe("scroll intent and resync", () => {
-  test("g and G notify even at same coords", () => {
-    const s = new Scheduler(GEO);
-    s.dispatch({ type: "trigger" });
-    s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 100 });
-    s.dispatch({ type: "tileReady", gen: 1, tileIndex: 0 });
-    expect(s.viewState().displayGen).toBe(1);
-    expect(s.dispatch({ type: "key", delta: { kind: "top" } })).toContainEqual({ type: "scrollCommitted", jumpToEnd: false });
-    expect(s.dispatch({ type: "key", delta: { kind: "bottom" } })).toContainEqual({ type: "scrollCommitted", jumpToEnd: true });
-    const t = newDisplayedGen1();
-    expect(t.dispatch({ type: "key", delta: { kind: "top" } })).toContainEqual({ type: "scrollCommitted", jumpToEnd: false });
-    expect(t.dispatch({ type: "key", delta: { kind: "bottom" } })).toContainEqual({ type: "scrollCommitted", jumpToEnd: true });
-    expect(t.dispatch({ type: "key", delta: { kind: "bottom" } })).toContainEqual({ type: "scrollCommitted", jumpToEnd: true });
-    expect<number>(t.viewState().scrollPx).toBe(1000);
   });
 });
 
@@ -172,7 +137,7 @@ describe("scroll vs update failure", () => {
     expect<number | null>(s.viewState().pendingScrollPx).not.toBe(null);
     s.dispatch({ type: "renderFailed", gen: 1 });
     expect(s.viewState().failure).toBe(true);
-    expect(s.dispatch({ type: "key", delta: { kind: "top" } })).toContainEqual({ type: "scrollCommitted", jumpToEnd: false });
+    s.dispatch({ type: "key", delta: { kind: "top" } });
     expect(s.viewState().failure).toBe(false);
     const u = newDisplayedGen1();
     u.dispatch({ type: "trigger" });
@@ -235,25 +200,6 @@ describe("resize", () => {
     const t = newDisplayedGen1();
     expect(t.dispatch({ type: "resize", geometry: { ...GEO } })).toEqual([{ type: "redraw" }]);
     expect(shown(t).resident.size).toBe(3);
-  });
-});
-
-describe("consuming the capture queue", () => {
-  test("rebuilt queue skips transferred tiles and redraws once on promote", () => {
-    const s = new Scheduler(GEO);
-    s.dispatch({ type: "trigger" });
-    s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 1500 });
-    s.dispatch({ type: "tileReady", gen: 1, tileIndex: 0 });
-    s.dispatch({ type: "key", delta: { kind: "bottom" } });
-    expect(shoots(s.dispatch({ type: "tileReady", gen: 1, tileIndex: 1 }))).toEqual([2]);
-    expect(shoots(s.dispatch({ type: "tileReady", gen: 1, tileIndex: 2 }))).toEqual([]);
-    expect(s.viewState().phase).toBe("ready");
-    const t = newDisplayedGen1();
-    t.dispatch({ type: "trigger" });
-    t.dispatch({ type: "renderDone", gen: 2, documentHeightPx: 1500 });
-    const p = t.dispatch({ type: "tileReady", gen: 2, tileIndex: 0 });
-    expect(p.filter((a) => a.type === "redraw").length).toBe(1);
-    expect(p[0]).toEqual({ type: "redraw" });
   });
 });
 

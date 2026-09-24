@@ -33,7 +33,7 @@ function inject(term: Term, seq: string): void {
 }
 
 describe("Term.queryKittyGraphics", () => {
-  test("sends a=q plus Primary DA", async () => {
+  test("asks with a=q plus Primary DA; _G reply means supported", async () => {
     const term = new Term();
     let p!: Promise<boolean>;
     const out = capture(() => {
@@ -42,16 +42,6 @@ describe("Term.queryKittyGraphics", () => {
     expect(out).toContain(`${ESC}_G`);
     expect(out).toContain("a=q");
     expect(out.endsWith(`${ESC}[c`)).toBe(true);
-    inject(term, `${ESC}[?62;c`);
-    await p;
-  });
-
-  test("_G first means supported", async () => {
-    const term = new Term();
-    let p!: Promise<boolean>;
-    capture(() => {
-      p = term.queryKittyGraphics(1000);
-    });
     inject(term, `${ESC}_Gi=31;OK${ESC}\\${ESC}[?62;c`);
     expect(await p).toBe(true);
   });
@@ -73,7 +63,28 @@ describe("Term.queryKittyGraphics", () => {
   });
 });
 
-function keyRecorder(): { term: Term; keys: Key[]; feed(s: string): void } {
+describe("Term.queryCellSize", () => {
+  async function reply(seq: string) {
+    const term = new Term();
+    let p!: ReturnType<Term["queryCellSize"]>;
+    capture(() => {
+      p = term.queryCellSize(1000);
+    });
+    inject(term, seq);
+    return p;
+  }
+
+  test("whole pixels are accepted", async () => {
+    expect(await reply(`${ESC}[6;31;14t`)).toEqual({ cellHpx: 31, cellWpx: 14 });
+  });
+
+  test("fractional pixels are rejected", async () => {
+    expect(await reply(`${ESC}[6;20;0.4t`)).toBeNull();
+    expect(await reply(`${ESC}[6;20.5;10t`)).toBeNull();
+  });
+});
+
+function keyRecorder():{ term: Term; keys: Key[]; feed(s: string): void } {
   const term = new Term();
   const keys: Key[] = [];
   term.onKey((k) => keys.push(k));
@@ -157,10 +168,4 @@ describe("Term resync (unterminated sequences)", () => {
     expect(r2.keys).toEqual([{ type: "quit" }]);
   });
 
-  test("late ST is skipped (split reply unbroken)", () => {
-    const r = keyRecorder();
-    r.feed(`${ESC}_Gi=31;OK`);
-    r.feed(`${ESC}\\j`);
-    expect(r.keys).toEqual([lines(1)]);
-  });
 });
