@@ -45,7 +45,7 @@ export interface Tile {
   heightPx: number;
 }
 
-export interface TileLayout {
+interface TileLayout {
   tiles: Tile[];
   truncated: boolean;
   contentHeightPx: number;
@@ -111,7 +111,7 @@ export function clampScroll(
   );
 }
 
-export interface Placement {
+interface Placement {
   tileIndex: number;
   sourceTopPx: number;
   sourceHeightPx: number;

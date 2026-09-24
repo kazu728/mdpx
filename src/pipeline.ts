@@ -4,25 +4,15 @@ import { renderFrame } from "./frame.ts";
 import { buildHtml, type Assets, type Theme } from "./html.ts";
 import { deleteImage, imageId, transmit } from "./kitty.ts";
 import { Scheduler, type Action } from "./scheduler.ts";
-import { countSourceLines, type Anchor, type FrameMeta } from "./sourcemap.ts";
 import { Term } from "./term.ts";
 import { CSS_SCALE } from "./viewport.ts";
 
 type ShootAction = Extract<Action, { type: "shoot" }>;
 
-export interface ScrollInfo {
-  displayGen: number | null;
-  scrollPx: number;
-  jumpToEnd: boolean;
-}
-
 interface PipelineDeps {
-  chrome: Pick<Chrome, "load" | "collectAnchors" | "shoot">;
+  chrome: Pick<Chrome, "load" | "shoot">;
   scheduler: Scheduler;
   term: Pick<Term, "write">;
-  onScroll?: (info: ScrollInfo) => void;
-  onFrameMapped?: (gen: number, meta: FrameMeta) => void;
-  onFrameReleased?: (gen: number) => void;
   mdPath: string;
   mdDir: string;
   fileName: string;
@@ -42,7 +32,7 @@ export class Pipeline {
   constructor(private readonly deps: PipelineDeps) {}
 
   execute(actions: Action[]): void {
-    const { scheduler, term, fileName, onScroll } = this.deps;
+    const { scheduler, term, fileName } = this.deps;
     for (const a of actions) {
       switch (a.type) {
         case "redraw": {
@@ -60,12 +50,6 @@ export class Pipeline {
         case "releaseGen":
           this.releaseGen(a.gen);
           break;
-        case "scrollCommitted": {
-          if (!onScroll) break;
-          const v = scheduler.viewState();
-          onScroll({ displayGen: v.displayGen, scrollPx: v.scrollPx, jumpToEnd: a.jumpToEnd });
-          break;
-        }
         case "render":
           void this.runRender(a.gen);
           break;
@@ -91,6 +75,7 @@ export class Pipeline {
     return `${this.deps.htmlPath}.gen-${gen}.html`;
   }
 
+  /** Load and record which generation is currently displayed. */
   private async loadGenDocument(gen: number): Promise<number> {
     const { chrome, scheduler } = this.deps;
     const g = scheduler.viewState().geometry;
@@ -100,16 +85,8 @@ export class Pipeline {
     return h;
   }
 
-  /** Load and collect anchors together so they match the same page. */
-  private async loadWithAnchors(gen: number): Promise<{ documentHeightCssPx: number; anchors: Anchor[] }> {
-    const documentHeightCssPx = await this.loadGenDocument(gen);
-    const anchors = await this.deps.chrome.collectAnchors();
-    return { documentHeightCssPx, anchors };
-  }
-
-  /** A generation ends in the scheduler; its HTML and map end here. */
+  /** A generation ends in the scheduler; its HTML ends here. */
   private releaseGen(gen: number): void {
-    this.deps.onFrameReleased?.(gen);
     if (this.loadedGen === gen) this.loadedGen = null;
     unlink(this.htmlFor(gen)).catch(() => {});
   }
@@ -128,38 +105,24 @@ export class Pipeline {
   }
 
   private async runRender(gen: number): Promise<void> {
-    const { scheduler, mdPath, mdDir, assets, isShuttingDown, onFrameMapped } = this.deps;
+    const { scheduler, mdPath, mdDir, assets, isShuttingDown } = this.deps;
     let md: string;
-    let laidOutSourceLines: ReadonlySet<number>;
     try {
       md = await readFile(mdPath, "utf8");
-      const built = await buildHtml({
+      const { html } = await buildHtml({
         markdown: md,
         mdDir,
         assets: assets[this.theme],
         theme: this.theme,
-        annotateSourceLines: onFrameMapped !== undefined,
       });
-      await writeFile(this.htmlFor(gen), built.html);
-      laidOutSourceLines = built.laidOutSourceLines;
+      await writeFile(this.htmlFor(gen), html);
     } catch {
       if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
       return;
     }
     let documentHeightCssPx: number;
     try {
-      if (onFrameMapped) {
-        const loaded = await this.onPage(() => this.loadWithAnchors(gen));
-        documentHeightCssPx = loaded.documentHeightCssPx;
-        onFrameMapped(gen, {
-          anchors: loaded.anchors,
-          sourceLineCount: countSourceLines(md),
-          documentHeightCssPx: loaded.documentHeightCssPx,
-          laidOutSourceLines,
-        });
-      } else {
-        documentHeightCssPx = await this.onPage(() => this.loadGenDocument(gen));
-      }
+      documentHeightCssPx = await this.onPage(() => this.loadGenDocument(gen));
     } catch (e) {
       await this.handleChromeError(e, gen);
       return;

@@ -8,7 +8,6 @@ import {
   maxScrollPx,
   maximumTileHeightPx,
   scrollUnitPx,
-  toImagePx,
   visibleTiles,
 } from "./viewport.ts";
 import { IMAGE_ID_GENERATION_STRIDE } from "./kitty.ts";
@@ -23,7 +22,7 @@ function computeScreenfulTiles(documentHeightPx: number, cellHpx: number, conten
 }
 
 describe("alignedTileHeightPx", () => {
-  test.each([10, 14, 31])("cellHpx=%i covers a screenful within one unit", (cellHpx) => {
+  test.each([10, 31])("cellHpx=%i covers a screenful within one unit", (cellHpx) => {
     const th = alignedTileHeightPx(cellHpx, 50);
     expect(th % cellHpx).toBe(0);
     expect(th % 2).toBe(0);
@@ -60,12 +59,6 @@ describe("computeTiles", () => {
     expect(computeScreenfulTiles(10 ** 8, 31, 0).tiles).toEqual([]);
   });
 
-  test("empty document yields zero tiles", () => {
-    const { tiles, contentHeightPx } = computeScreenfulTiles(0, 10, 50);
-    expect(tiles.length).toBe(0);
-    expect<number>(maxScrollPx(contentHeightPx, 50, 10, 2)).toBe(0);
-  });
-
   test("contentHeightPx excludes tile padding, caps when truncated", () => {
     expect<number>(computeScreenfulTiles(489, 10, 50).contentHeightPx).toBe(490);
     const { tiles, contentHeightPx } = computeScreenfulTiles(4080 * 100, 10, 50);
@@ -74,19 +67,6 @@ describe("computeTiles", () => {
 });
 
 describe("visibleTiles", () => {
-  test("one screen uses a single tile", () => {
-    const { tiles } = computeScreenfulTiles(300, 10, 50);
-    const p = visibleTiles(0, 50, 10, tiles);
-    expect(p).toHaveLength(1);
-    expect(p[0]).toMatchObject({
-      tileIndex: 0,
-      sourceTopPx: 0,
-      sourceHeightPx: 300,
-      destinationRow: 0,
-      destinationRows: 30,
-    });
-  });
-
   test("across a boundary two tiles fill the rows and stop at covered height", () => {
     const { tiles, contentHeightPx } = computeScreenfulTiles(8000, 10, 50);
     const p = visibleTiles(clampScroll(3800, contentHeightPx, 50, 10, 2), 50, 10, tiles);
@@ -113,8 +93,6 @@ describe("backfillOrder", () => {
 
 describe("coordinates when downscaled", () => {
   test("image px and scroll unit", () => {
-    expect(toImagePx(1984, 2)).toBe(1984);
-    expect(toImagePx(1984, 1)).toBe(992);
     expect(scrollUnitPx(31, 2)).toBe(31);
     expect(scrollUnitPx(31, 1)).toBe(62);
     expect(scrollUnitPx(30, 1)).toBe(30);

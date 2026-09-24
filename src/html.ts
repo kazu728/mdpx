@@ -10,7 +10,6 @@ import {
   type Highlighter,
   type ShikiTransformer,
 } from "shiki";
-import { countSourceLines } from "./sourcemap.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -49,14 +48,6 @@ const dropShikiBackground: ShikiTransformer = {
     }
   },
 };
-
-const SOURCE_LINE = "data-source-line";
-
-const sourceLineAttr = (line: string): ShikiTransformer => ({
-  pre(node) {
-    node.properties[SOURCE_LINE] = line;
-  },
-});
 
 const LANGS = [
   "bash", "c", "cpp", "css", "diff", "dockerfile", "go", "graphql", "html",
@@ -101,40 +92,27 @@ function fenceLanguage(token: Token): string {
   return token.info.trim().split(/\s+/g)[0]!;
 }
 
-const rendererCache = new Map<boolean, MarkdownIt>();
-function getRenderer(highlighter: Highlighter, annotateSourceLines: boolean): MarkdownIt {
-  const cached = rendererCache.get(annotateSourceLines);
-  if (cached) return cached;
+let renderer: MarkdownIt | null = null;
+function getRenderer(highlighter: Highlighter): MarkdownIt {
+  if (renderer) return renderer;
 
   const md = new MarkdownIt({ html: true, linkify: true });
   md.use(taskLists);
   md.use(katex);
 
-  const renderToken = md.renderer.renderToken.bind(md.renderer);
-  md.renderer.renderToken = (tokens, idx, options) => {
-    const token = tokens[idx]!;
-    if (annotateSourceLines && token.nesting === 1 && token.map)
-      token.attrSet(SOURCE_LINE, String(token.map[0]! + 1));
-    return renderToken(tokens, idx, options);
-  };
-
   const escape = md.utils.escapeHtml;
   md.renderer.rules.fence = (tokens, idx, _options, env: RenderEnv) => {
     const token = tokens[idx]!;
     const lang = fenceLanguage(token);
-    const line = String(token.map![0] + 1);
     if (lang === "mermaid") {
       env.hasMermaid = true;
-      const attr = annotateSourceLines ? ` ${SOURCE_LINE}="${line}"` : "";
-      return `<pre class="mermaid"${attr}>${escape(token.content)}</pre>\n`;
+      return `<pre class="mermaid">${escape(token.content)}</pre>\n`;
     }
     const toHtml = (l: string) =>
       highlighter.codeToHtml(token.content, {
         lang: l,
         theme: SHIKI_THEME[env.theme],
-        transformers: annotateSourceLines
-          ? [dropShikiBackground, sourceLineAttr(line)]
-          : [dropShikiBackground],
+        transformers: [dropShikiBackground],
       });
     try {
       return toHtml(lang || "text") + "\n";
@@ -143,41 +121,8 @@ function getRenderer(highlighter: Highlighter, annotateSourceLines: boolean): Ma
     }
   };
 
-  rendererCache.set(annotateSourceLines, md);
+  renderer = md;
   return md;
-}
-
-/** Only source lines with rendered height, via the innermost mapped token. */
-function findLaidOutSourceLines(tokens: readonly Token[], sourceLineCount: number): Set<number> {
-  const sourceLines = new Set<number>();
-  const mark = (from: number, to: number) => {
-    for (let line = Math.max(1, from); line <= Math.min(sourceLineCount, to); line++) {
-      sourceLines.add(line);
-    }
-  };
-  const isContainer = new Array<boolean>(tokens.length).fill(false);
-  const open: number[] = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i]!;
-    if (token.nesting === -1) {
-      open.pop();
-      continue;
-    }
-    if (token.map) for (const j of open) isContainer[j] = true;
-    if (token.nesting === 1) open.push(i);
-  }
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i]!;
-    if (!token.map || isContainer[i]) continue;
-    const start = token.map[0] + 1;
-    if (token.type === "fence") {
-      const rows = token.content.split("\n");
-      mark(start + 1, start + (rows[rows.length - 1] === "" ? rows.length - 1 : rows.length));
-    } else {
-      mark(start, token.map[1]);
-    }
-  }
-  return sourceLines;
 }
 
 function contentSecurityPolicy(nonce: string): string {
@@ -192,24 +137,20 @@ function contentSecurityPolicy(nonce: string): string {
   ].join("; ");
 }
 
-export interface BuildHtmlInput {
+interface BuildHtmlInput {
   markdown: string;
   mdDir: string;
   assets: Assets;
   theme: Theme;
-  /** Emit data-source-line attrs and laidOutSourceLines for sourcemap consumers. */
-  annotateSourceLines?: boolean;
 }
 
-export interface BuildHtmlResult {
+interface BuildHtmlResult {
   html: string;
-  laidOutSourceLines: ReadonlySet<number>;
 }
 
 export async function buildHtml(input: BuildHtmlInput): Promise<BuildHtmlResult> {
   const highlighter = await getHighlighter();
-  const annotateSourceLines = input.annotateSourceLines ?? false;
-  const md = getRenderer(highlighter, annotateSourceLines);
+  const md = getRenderer(highlighter);
 
   const env: RenderEnv = { theme: input.theme };
   const tokens = md.parse(input.markdown, env);
@@ -260,10 +201,5 @@ ${mermaid}
 </body>
 </html>
 `;
-  return {
-    html,
-    laidOutSourceLines: annotateSourceLines
-      ? findLaidOutSourceLines(tokens, countSourceLines(input.markdown))
-      : new Set<number>(),
-  };
+  return { html };
 }

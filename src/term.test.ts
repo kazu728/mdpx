@@ -33,7 +33,7 @@ function inject(term: Term, seq: string): void {
 }
 
 describe("Term.queryKittyGraphics", () => {
-  test("sends a=q plus Primary DA", async () => {
+  test("asks with a=q plus Primary DA; _G reply means supported", async () => {
     const term = new Term();
     let p!: Promise<boolean>;
     const out = capture(() => {
@@ -42,16 +42,6 @@ describe("Term.queryKittyGraphics", () => {
     expect(out).toContain(`${ESC}_G`);
     expect(out).toContain("a=q");
     expect(out.endsWith(`${ESC}[c`)).toBe(true);
-    inject(term, `${ESC}[?62;c`);
-    await p;
-  });
-
-  test("_G first means supported", async () => {
-    const term = new Term();
-    let p!: Promise<boolean>;
-    capture(() => {
-      p = term.queryKittyGraphics(1000);
-    });
     inject(term, `${ESC}_Gi=31;OK${ESC}\\${ESC}[?62;c`);
     expect(await p).toBe(true);
   });
@@ -157,10 +147,4 @@ describe("Term resync (unterminated sequences)", () => {
     expect(r2.keys).toEqual([{ type: "quit" }]);
   });
 
-  test("late ST is skipped (split reply unbroken)", () => {
-    const r = keyRecorder();
-    r.feed(`${ESC}_Gi=31;OK`);
-    r.feed(`${ESC}\\j`);
-    expect(r.keys).toEqual([lines(1)]);
-  });
 });

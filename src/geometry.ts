@@ -7,6 +7,7 @@ import {
   scrollUnitPx,
   toImagePx,
 } from "./viewport.ts";
+import { MAX_PAYLOAD_CHUNK_SIZE } from "./kitty.ts";
 
 export interface GraphicsLimits {
   frameBytes: number | null;
@@ -26,24 +27,22 @@ export function detectGraphicsLimits(env: NodeJS.ProcessEnv = process.env): Grap
   return v !== undefined && v !== "" && v !== "0" ? HERDR_RELAY : DIRECT;
 }
 
-const KITTY_CHUNK_BYTES = 3072;
-
+// kitty transfer overhead: base64 expansion, one control header per chunk, plus slack.
 function transferSize(dataLenBytes: number): number {
-  return (
-    Math.ceil(dataLenBytes / 3) * 4 + Math.ceil(dataLenBytes / KITTY_CHUNK_BYTES) * 16 + 1024
-  );
+  const base64Len = Math.ceil(dataLenBytes / 3) * 4;
+  return base64Len + Math.ceil(base64Len / MAX_PAYLOAD_CHUNK_SIZE) * 16 + 1024;
 }
 
 function tileCount(storageBytes: number, tileBytes: number): number {
   return Math.floor(storageBytes / Math.max(1, tileBytes));
 }
 
-export function totalTileCapacity(tileBytes: number, limits: GraphicsLimits): number {
+function totalTileCapacity(tileBytes: number, limits: GraphicsLimits): number {
   return tileCount(limits.storageBytes, tileBytes);
 }
 
 /** Working set stays below terminal eviction and never below the visible floor. */
-export function maxResidentTiles(
+function maxResidentTiles(
   tileBytes: number,
   limits: GraphicsLimits,
   minTiles: number,

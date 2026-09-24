@@ -1,6 +1,5 @@
 import { pathToFileURL } from "node:url";
 import puppeteer, { TimeoutError, type Browser, type Page } from "puppeteer-core";
-import type { Anchor } from "./sourcemap.ts";
 import type { Clip } from "./geometry.ts";
 
 /** Content-caused failure (not a Chrome fault); the caller keeps the current frame. */
@@ -82,15 +81,6 @@ export class Chrome {
       Promise.all(Array.from(document.images).map((img) => img.decode().catch(() => {}))).then(
         () => {},
       ),
-    );
-  }
-
-  collectAnchors(): Promise<Anchor[]> {
-    return this.page!.evaluate(() =>
-      Array.from(document.querySelectorAll("[data-source-line]"), (el) => ({
-        sourceLine: Number(el.getAttribute("data-source-line")),
-        topCssPx: el.getBoundingClientRect().top + window.scrollY,
-      })),
     );
   }
 

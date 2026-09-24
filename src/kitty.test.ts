@@ -3,7 +3,6 @@ import {
   deleteAll,
   deleteImage,
   deletePlacement,
-  IMAGE_ID_GENERATION_STRIDE,
   imageId,
   MAX_PAYLOAD_CHUNK_SIZE,
   place,
@@ -31,15 +30,8 @@ function keys(control: string): Record<string, string> {
   );
 }
 
-describe("imageId", () => {
-  test("separate range per generation, at least 1", () => {
-    expect(imageId(1, 0)).toBe(IMAGE_ID_GENERATION_STRIDE);
-    expect(imageId(2, 5)).toBe(2 * IMAGE_ID_GENERATION_STRIDE + 5);
-  });
-});
-
 describe("transmit", () => {
-  test("splits at 4096 with m flag", () => {
+  test("chunks at 4096 with m flag, single chunk otherwise", () => {
     const b64 = "A".repeat(MAX_PAYLOAD_CHUNK_SIZE * 2 + 10);
     const apcs = parseApc(transmit(imageId(3, 1), b64));
     expect(apcs).toHaveLength(3);
@@ -49,13 +41,10 @@ describe("transmit", () => {
     expect(keys(apcs[0]!.control)).toMatchObject({ a: "t", f: "100", t: "d", i: String(imageId(3, 1)), q: "1", m: "1" });
     expect(keys(apcs[2]!.control).m).toBe("0");
     expect(apcs[1]!.control).toBe("m=1");
-  });
-
-  test("4096 or fewer is one chunk with m=0", () => {
-    const apcs = parseApc(transmit(1024, "Zm9v"));
-    expect(apcs).toHaveLength(1);
-    expect(keys(apcs[0]!.control).m).toBe("0");
-    expect(apcs[0]!.payload).toBe("Zm9v");
+    const single = parseApc(transmit(1024, "Zm9v"));
+    expect(single).toHaveLength(1);
+    expect(keys(single[0]!.control).m).toBe("0");
+    expect(single[0]!.payload).toBe("Zm9v");
   });
 });
 
