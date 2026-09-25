@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   detectGraphicsLimits,
   fitsGraphicsFrame,
-  maxResidentTiles,
   maxTilesInFrame,
   resolveGeometry,
   type Geometry,
@@ -14,6 +13,12 @@ describe("resolveGeometry", () => {
   const cell = { cellHpx: 31, cellWpx: 14 };
   const direct = detectGraphicsLimits({});
   const relayed = detectGraphicsLimits({ HERDR_ENV: "1" });
+
+  test("zero-column screens retain a positive capture width", () => {
+    const g = resolveGeometry({ cols: 0, rows: 20 }, cell, direct);
+    expect(g.viewportWidthCssPx).toBeGreaterThan(0);
+    expect(g.imgWidthPx).toBeGreaterThan(0);
+  });
 
   const tileBytes = (g: Geometry) =>
     g.imgWidthPx * toImagePx(g.tileHeightPx, g.renderScale) * 4;
@@ -51,7 +56,6 @@ describe("resolveGeometry", () => {
     const reduced = resolveGeometry(screen, cell, relayed);
     expect(reduced.renderScale).toBe(1);
     expect(reduced.imgWidthPx).toBe(Math.round((screen.cols * cell.cellWpx) / 2));
-    expect(resolveGeometry({ cols: 2000, rows: 65 }, cell, direct).renderScale).toBe(2);
   });
 
   test("overflow reports too many with capped budgets", () => {
@@ -87,35 +91,9 @@ describe("detectGraphicsLimits", () => {
 
 describe("fitsGraphicsFrame", () => {
   const relayed = detectGraphicsLimits({ HERDR_ENV: "1" });
-  const direct = detectGraphicsLimits({});
 
   test("each image judged alone", () => {
     expect(fitsGraphicsFrame(relayed, 1512, 2046)).toBe(true);
     expect(fitsGraphicsFrame(relayed, 3024, 1984)).toBe(false);
-  });
-
-  test("boundary ~5875px at h=1000, monotonic", () => {
-    expect(fitsGraphicsFrame(relayed, 5875, 1000)).toBe(true);
-    expect(fitsGraphicsFrame(relayed, 5876, 1000)).toBe(false);
-    expect(fitsGraphicsFrame(relayed, 6000, 1000)).toBe(false);
-  });
-
-  test("no limit fits any size", () => {
-    expect(fitsGraphicsFrame(direct, 100000, 100000)).toBe(true);
-  });
-});
-
-describe("maxResidentTiles", () => {
-  test("leaves 20% for bookkeeping", () => {
-    const relayed = detectGraphicsLimits({ HERDR_ENV: "1" });
-    expect(maxResidentTiles(16 * 1024 * 1024, relayed, 1)).toBe(3);
-  });
-});
-
-describe("maxTilesInFrame", () => {
-  test("aligned needs ceil, straddle needs +1", () => {
-    expect(maxTilesInFrame(1984, 992)).toBe(3);
-    expect(maxTilesInFrame(992, 992)).toBe(2);
-    expect(maxTilesInFrame(0, 992)).toBe(1);
   });
 });

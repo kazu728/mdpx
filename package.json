@@ -21,8 +21,7 @@
   },
   "type": "module",
   "bin": {
-    "mdpx": "dist/main.js",
-    "mdpx-nvim-sync": "dist/nvim-sync.js"
+    "mdpx": "dist/main.js"
   },
   "files": [
     "dist"
@@ -31,7 +30,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/main.js dist/nvim-sync.js",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/main.js",
     "test": "bun test src/",
     "test:integration": "for f in integration/*.test.ts; do [ -e \"$f\" ] || continue; bun test \"$f\" || exit 1; done",
     "test:node": "node integration/node-runtime.mjs",

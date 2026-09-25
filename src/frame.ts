@@ -22,14 +22,9 @@ export function renderFrame(
   out += HOME + ERASE_BELOW;
 
   const placed: number[] = [];
-  let pendingVisible = false;
   if (view.displayGen !== null) {
     const vis = visibleTiles(view.scrollPx, contentRows(geometry.rows), geometry.cellHpx, view.tiles);
     for (const p of vis) {
-      if (!view.resident.has(p.tileIndex)) {
-        pendingVisible = true;
-        continue;
-      }
       const id = imageId(view.displayGen, p.tileIndex);
       out += cursorTo(p.destinationRow + 1, 1);
       out += place({
@@ -46,12 +41,12 @@ export function renderFrame(
   }
 
   out += cursorTo(geometry.rows, 1);
-  out += statusBar(view, filename, pendingVisible);
+  out += statusBar(view, filename);
   out += SYNC_END;
   return { escape: out, placements: placed };
 }
 
-function statusBar(view: ViewState, filename: string, pendingVisible: boolean): string {
+function statusBar(view: ViewState, filename: string): string {
   const { geometry, scrollPx, phase, pendingScrollPx } = view;
   const shown = view.displayGen !== null ? view : null;
   const max = shown
@@ -63,11 +58,9 @@ function statusBar(view: ViewState, filename: string, pendingVisible: boolean): 
       )
     : 0;
   const pct = !shown ? "--" : max > 0 ? String(Math.round((scrollPx / max) * 100)) : "100";
-  const state = pendingVisible
-    ? "rendering…"
-    : pendingScrollPx !== null
-      ? "scrolling…"
-      : phase === "rendering"
+  const state = pendingScrollPx !== null
+    ? "scrolling…"
+    : phase === "rendering"
       ? shown
         ? "updating"
         : "rendering…"

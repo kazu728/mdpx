@@ -92,6 +92,8 @@ describe("status bar", () => {
     const line = statusLine(`x${ESC}[31mred.md`);
     expect(line).not.toContain(`${ESC}[31m`);
     expect(line.startsWith("x?[31mred.md")).toBe(true);
+    expect(statusLine("a\nb\tc.md")).not.toContain("\n");
+    expect(statusLine("a\nb\tc.md")).not.toContain("\t");
   });
 });
 
@@ -138,8 +140,6 @@ describe("sanitizeTerminalBlock", () => {
 describe("sanitizeTerminalLine", () => {
   test("neutralizes newlines/tabs for single-line display", () => {
     expect(sanitizeTerminalLine("a\nb\tc.md")).toBe("a?b?c.md");
-    expect(statusLine("a\nb\tc.md")).not.toContain("\n");
-    expect(statusLine("a\nb\tc.md")).not.toContain("\t");
   });
 });
 
@@ -154,12 +154,9 @@ describe("truncateToDisplayWidth", () => {
     }
   });
 
-  test("VS16 emoji is one grapheme", () => {
+  test("never splits a grapheme or a full-width char", () => {
     expect(truncateToDisplayWidth("❤️", 2)).toEqual({ text: "❤️", displayWidth: 2 });
     expect(truncateToDisplayWidth("❤️", 1)).toEqual({ text: "", displayWidth: 0 });
-  });
-
-  test("no split on full-width boundary", () => {
     expect(truncateToDisplayWidth("０１２", 5)).toEqual({ text: "０１", displayWidth: 4 });
     expect(truncateToDisplayWidth("abc", 2)).toEqual({ text: "ab", displayWidth: 2 });
   });
