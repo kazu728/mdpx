@@ -87,8 +87,8 @@ export class Pipeline {
 
   /** A generation ends in the scheduler; its HTML ends here. */
   private releaseGen(gen: number): void {
-    if (this.loadedGen === gen) this.loadedGen = null;
-    unlink(this.htmlFor(gen)).catch(() => {});
+    // A queued or in-flight load may still need this generation's file.
+    void this.onPage(() => unlink(this.htmlFor(gen)).catch(() => {}));
   }
 
   /** Content failures keep the current frame; Chrome faults are fatal. */

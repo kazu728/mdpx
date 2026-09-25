@@ -152,6 +152,46 @@ describe("generation binding", () => {
 });
 
 describe("generation-owned files", () => {
+  test("resize keeps HTML alive until an in-flight reload finishes", async () => {
+    const reloading = deferred<void>();
+    const resume = deferred<void>();
+    let loads = 0;
+    let shoots = 0;
+    const { scheduler, pipeline, htmlPath } = await makePipeline({
+      ...baseChrome(),
+      load: async (path: string) => {
+        loads += 1;
+        if (path.includes("gen-2")) throw new ContentError("load timed out");
+        if (path.includes("gen-1") && loads > 1) {
+          reloading.resolve();
+          await resume.promise;
+        }
+        await stat(path);
+        return 100000;
+      },
+      shoot: async () => {
+        shoots += 1;
+        return "";
+      },
+    });
+    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
+    await waitFor(() => shoots === GEO.maxResident);
+    expect(shoots).toBe(GEO.maxResident);
+    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
+    await waitFor(() => scheduler.viewState().failure);
+    expect(scheduler.viewState().failure).toBe(true);
+    pipeline.execute(scheduler.dispatch({ type: "key", delta: { kind: "bottom" } }));
+    await reloading.promise;
+    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
+    pipeline.execute(scheduler.dispatch({ type: "resize", geometry: { ...GEO, rows: 30 } }));
+    await sleep(20);
+    expect(await exists(`${htmlPath}.gen-1.html`)).toBe(true);
+    resume.resolve();
+    await waitFor(() => scheduler.viewState().displayGen !== null);
+    expect(scheduler.viewState().displayGen).toBeGreaterThan(2);
+    expect(await exists(`${htmlPath}.gen-1.html`)).toBe(false);
+  });
+
   test("switching releases old HTML at promotion", async () => {
     const { scheduler, pipeline, htmlPath } = await makePipeline(baseChrome());
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
