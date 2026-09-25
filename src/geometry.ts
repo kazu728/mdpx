@@ -267,7 +267,8 @@ export function resolveGeometry(
   cell: CellSize,
   limits: GraphicsLimits = detectGraphicsLimits(),
 ): Geometry {
-  const { cols, rows } = screen;
+  const { rows } = screen;
+  const cols = Math.max(1, screen.cols);
   const screenWidthPx = cols * cell.cellWpx;
   const viewportWidthCssPx = Math.round(screenWidthPx / CSS_SCALE);
   const contentRowCount = contentRows(rows);

@@ -14,6 +14,12 @@ describe("resolveGeometry", () => {
   const direct = detectGraphicsLimits({});
   const relayed = detectGraphicsLimits({ HERDR_ENV: "1" });
 
+  test("zero-column screens retain a positive capture width", () => {
+    const g = resolveGeometry({ cols: 0, rows: 20 }, cell, direct);
+    expect(g.viewportWidthCssPx).toBeGreaterThan(0);
+    expect(g.imgWidthPx).toBeGreaterThan(0);
+  });
+
   const tileBytes = (g: Geometry) =>
     g.imgWidthPx * toImagePx(g.tileHeightPx, g.renderScale) * 4;
   function expectFits(g: Geometry, limits: GraphicsLimits, viewportH: number, gens: number) {
