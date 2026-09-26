@@ -1,6 +1,6 @@
 {
   "name": "mdpx-cli",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Markdown preview in your terminal, with math, Mermaid diagrams, and GitHub styling",
   "keywords": [
     "markdown",
