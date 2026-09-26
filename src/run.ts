@@ -105,7 +105,7 @@ export async function runApp(mdPath: string): Promise<void> {
       1,
       chromeExecutable
         ? `mdpx: cannot launch Chrome (${chromeExecutable}): ${e instanceof Error ? e.stack : e}\n`
-        : "mdpx: no Chromium found. Install Google Chrome, or point PUPPETEER_EXECUTABLE_PATH at a Chromium binary\n",
+        : "mdpx: no Chrome or Chromium found. Install Google Chrome or a non-Snap Chromium, or point PUPPETEER_EXECUTABLE_PATH at one\n",
     );
   }
   const htmlPath = join(dir, "view.html");

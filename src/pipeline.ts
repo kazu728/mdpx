@@ -75,7 +75,6 @@ export class Pipeline {
     return `${this.deps.htmlPath}.gen-${gen}.html`;
   }
 
-  /** Load and record which generation is currently displayed. */
   private async loadGenDocument(gen: number): Promise<number> {
     const { chrome, scheduler } = this.deps;
     const g = scheduler.viewState().geometry;
@@ -85,13 +84,11 @@ export class Pipeline {
     return h;
   }
 
-  /** A generation ends in the scheduler; its HTML ends here. */
   private releaseGen(gen: number): void {
     // A queued or in-flight load may still need this generation's file.
     void this.onPage(() => unlink(this.htmlFor(gen)).catch(() => {}));
   }
 
-  /** Content failures keep the current frame; Chrome faults are fatal. */
   private async handleChromeError(e: unknown, gen: number): Promise<void> {
     const { scheduler, isShuttingDown } = this.deps;
     if (e instanceof ContentError) {

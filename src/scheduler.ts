@@ -590,8 +590,6 @@ export class Scheduler {
     return true;
   }
 
-  // Same-generation failure keeps the display: drop the pending scroll,
-  // shrink to the steady budget, then redraw and maybe rerun.
   private failDisplayedGen(g: GenState, actions: Action[]): void {
     if (this.pending) this.scrollFailed = true;
     this.pending = null;
@@ -602,9 +600,7 @@ export class Scheduler {
     if (this.rerun) actions.push(...this.startPipeline());
   }
 
-  // Shortage settles instead of sticking in rendering: drop the undisplayable
-  // generation so a later update/resize can retry. Same-generation stalls keep
-  // the display and only evict unneeded fetches.
+  // Leave rendering on shortage so a later update/resize can retry.
   private settleStalled(g: GenState, actions: Action[]): void {
     if (g === this.displayGen) {
       this.failDisplayedGen(g, actions);

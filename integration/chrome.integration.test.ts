@@ -10,7 +10,7 @@ const exe = await resolveExecutable();
 if (!exe) {
   process.stderr.write(
     "skipping the integration tests because no Chromium was found" +
-      " (install Google Chrome, or set PUPPETEER_EXECUTABLE_PATH)\n",
+      " (install Google Chrome or Chromium, or set PUPPETEER_EXECUTABLE_PATH)\n",
   );
 }
 

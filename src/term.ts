@@ -133,7 +133,6 @@ export class Term {
 
   /**
    * 1x1 query (a=q) reports support without storing; Primary DA is the sync marker.
-   * _G before DA means supported, DA only means not, timeout means not.
    */
   queryKittyGraphics(timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
@@ -194,7 +193,6 @@ export class Term {
         kind === PM_INTRODUCER ||
         kind === SOS_INTRODUCER
       ) {
-        // String sequences are read whole; only ESC _ G (kitty reply) is observed.
         const end = stringTerminatorEnd(buf, i + 2);
         if (end === -1) break;
         if (kind === APC_INTRODUCER && buf[i + 2] === KITTY_GRAPHICS_MARKER) {
