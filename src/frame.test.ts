@@ -1,55 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { renderFrame, sanitizeTerminalBlock, sanitizeTerminalLine, truncateToDisplayWidth } from "./frame.ts";
-import { alignedTileHeightPx, computeTiles } from "./viewport.ts";
+import { renderFrame, truncateToDisplayWidth } from "./frame.ts";
+import { computeTiles, contentRows } from "./viewport.ts";
+import type { Geometry } from "./geometry.ts";
 import type { ViewState } from "./scheduler.ts";
+import { GEO } from "./test-geometry.ts";
 
 const ESC = "\x1b";
-const TILE_HEIGHT = alignedTileHeightPx(10, 50);
+const FULL: Geometry = { ...GEO, cols: 80, imgWidthPx: 800, viewportWidthCssPx: 400 };
+const REDUCED: Geometry = { ...FULL, imgWidthPx: 400, renderScale: 1 };
 
-function makeView(): ViewState {
-  const { tiles, contentHeightPx } = computeTiles(300, 10, 50, TILE_HEIGHT);
+function makeView(geometry: Geometry = FULL, documentHeightPx = 300): ViewState {
+  const { tiles, contentHeightPx } = computeTiles(
+    documentHeightPx,
+    geometry.cellHpx,
+    contentRows(geometry.rows),
+    geometry.tileHeightPx,
+  );
   return {
-    geometry: {
-      rows: 51,
-      cols: 80,
-      cellHpx: 10,
-      imgWidthPx: 800,
-      viewportWidthCssPx: 400,
-      renderScale: 2,
-      tileHeightPx: TILE_HEIGHT,
-      exceedsFrameLimit: false,
-      exceedsStorage: false,
-      maxResident: 64,
-      maxTotalResident: 128,
-    },
-    scrollPx: 0,
-    displayGen: 1,
-    tiles,
-    resident: new Set([0]),
-    truncated: false,
-    contentHeightPx,
-    phase: "ready",
-    failure: false,
-    pendingScrollPx: null,
-  };
-}
-
-function reducedView(): ViewState {
-  const { tiles, contentHeightPx } = computeTiles(3000, 10, 50, TILE_HEIGHT);
-  return {
-    geometry: {
-      rows: 51,
-      cols: 80,
-      cellHpx: 10,
-      imgWidthPx: 400,
-      viewportWidthCssPx: 400,
-      renderScale: 1,
-      tileHeightPx: TILE_HEIGHT,
-      exceedsFrameLimit: false,
-      exceedsStorage: false,
-      maxResident: 64,
-      maxTotalResident: 128,
-    },
+    geometry,
     scrollPx: 0,
     displayGen: 1,
     tiles,
@@ -99,11 +67,11 @@ describe("status bar", () => {
 
 describe("source rect when downscaled", () => {
   test("source rect scales and capacity wins over low-res", () => {
-    const { escape } = renderFrame(reducedView(), "a.md", []);
+    const { escape } = renderFrame(makeView(REDUCED, 3000), "a.md", []);
     expect(escape).toContain("h=250");
     expect(escape).toContain("low-res");
     expect(renderFrame(makeView(), "a.md", []).escape).toContain("h=300");
-    const v = reducedView();
+    const v = makeView(REDUCED, 3000);
     for (const exceeds of [
       { exceedsFrameLimit: true, exceedsStorage: false },
       { exceedsFrameLimit: true, exceedsStorage: true },
@@ -125,21 +93,6 @@ describe("failure status", () => {
     expect(
       renderFrame({ ...v, failure: true, phase: "rendering" }, "a.md", []).escape,
     ).toContain("updating");
-  });
-});
-
-describe("sanitizeTerminalBlock", () => {
-  test("keeps newlines/tabs, neutralizes other controls", () => {
-    expect(sanitizeTerminalBlock(`Error: ${ESC}[31mx${ESC}[0m\n  at f\t(a.ts)\r`)).toBe(
-      "Error: ?[31mx?[0m\n  at f\t(a.ts)?",
-    );
-    expect(sanitizeTerminalBlock("café❤️.md")).toBe("café❤️.md");
-  });
-});
-
-describe("sanitizeTerminalLine", () => {
-  test("neutralizes newlines/tabs for single-line display", () => {
-    expect(sanitizeTerminalLine("a\nb\tc.md")).toBe("a?b?c.md");
   });
 });
 

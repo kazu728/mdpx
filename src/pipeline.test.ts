@@ -6,22 +6,7 @@ import { ContentError } from "./chrome.ts";
 import { resolveAssets } from "./html.ts";
 import { Pipeline } from "./pipeline.ts";
 import { Scheduler } from "./scheduler.ts";
-import { alignedTileHeightPx } from "./viewport.ts";
-import type { Geometry } from "./geometry.ts";
-
-const GEO: Geometry = {
-  rows: 51,
-  cols: 10,
-  cellHpx: 10,
-  imgWidthPx: 200,
-  viewportWidthCssPx: 100,
-  renderScale: 2,
-  tileHeightPx: alignedTileHeightPx(10, 50),
-  exceedsFrameLimit: false,
-  exceedsStorage: false,
-  maxResident: 64,
-  maxTotalResident: 128,
-};
+import { GEO } from "./test-geometry.ts";
 
 const settle = () => new Promise((r) => setImmediate(r));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -49,7 +34,6 @@ async function makePipeline(chrome: unknown, opts?: { cols?: number; write?: (s:
   const mdPath = join(dir, "a.md");
   await writeFile(mdPath, opts?.md ?? "# a\n");
   const scheduler = new Scheduler(opts?.cols ? { ...GEO, cols: opts.cols } : GEO);
-  const htmlPath = join(dir, "view.html");
   const shuttingDown = opts?.shuttingDown ?? false;
   const pipeline = new Pipeline({
     chrome: chrome as never,
@@ -58,14 +42,14 @@ async function makePipeline(chrome: unknown, opts?: { cols?: number; write?: (s:
     mdPath,
     mdDir: dir,
     fileName: "a.md",
-    htmlPath,
+    htmlDir: dir,
     assets: { light: resolveAssets("light"), dark: resolveAssets("dark") },
     isShuttingDown: () => shuttingDown,
     onFatal: async () => {
       throw new Error("unexpected fatal");
     },
   });
-  return { dir, scheduler, pipeline, htmlPath };
+  return { dir, scheduler, pipeline };
 }
 
 describe("redraw dedup", () => {
@@ -157,7 +141,7 @@ describe("generation-owned files", () => {
     const resume = deferred<void>();
     let loads = 0;
     let shoots = 0;
-    const { scheduler, pipeline, htmlPath } = await makePipeline({
+    const { dir, scheduler, pipeline } = await makePipeline({
       ...baseChrome(),
       load: async (path: string) => {
         loads += 1;
@@ -185,23 +169,23 @@ describe("generation-owned files", () => {
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
     pipeline.execute(scheduler.dispatch({ type: "resize", geometry: { ...GEO, rows: 30 } }));
     await sleep(20);
-    expect(await exists(`${htmlPath}.gen-1.html`)).toBe(true);
+    expect(await exists(join(dir, "gen-1.html"))).toBe(true);
     resume.resolve();
     await waitFor(() => scheduler.viewState().displayGen !== null);
     expect(scheduler.viewState().displayGen).toBeGreaterThan(2);
-    expect(await exists(`${htmlPath}.gen-1.html`)).toBe(false);
+    expect(await exists(join(dir, "gen-1.html"))).toBe(false);
   });
 
   test("switching releases old HTML at promotion", async () => {
-    const { scheduler, pipeline, htmlPath } = await makePipeline(baseChrome());
+    const { dir, scheduler, pipeline } = await makePipeline(baseChrome());
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
     await waitFor(() => scheduler.viewState().displayGen === 1);
-    expect(await exists(`${htmlPath}.gen-1.html`)).toBe(true);
+    expect(await exists(join(dir, "gen-1.html"))).toBe(true);
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
     await waitFor(() => scheduler.viewState().displayGen === 2);
     for (let i = 0; i < 100; i++) await settle();
-    expect(await exists(`${htmlPath}.gen-1.html`)).toBe(false);
-    expect(await exists(`${htmlPath}.gen-2.html`)).toBe(true);
+    expect(await exists(join(dir, "gen-1.html"))).toBe(false);
+    expect(await exists(join(dir, "gen-2.html"))).toBe(true);
   });
 });
 

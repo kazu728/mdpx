@@ -144,11 +144,7 @@ interface BuildHtmlInput {
   theme: Theme;
 }
 
-interface BuildHtmlResult {
-  html: string;
-}
-
-export async function buildHtml(input: BuildHtmlInput): Promise<BuildHtmlResult> {
+export async function buildHtml(input: BuildHtmlInput): Promise<string> {
   const highlighter = await getHighlighter();
   const md = getRenderer(highlighter);
 
@@ -181,7 +177,7 @@ export async function buildHtml(input: BuildHtmlInput): Promise<BuildHtmlResult>
 </script>`
     : `<script nonce="${nonce}">window.__mermaidDone = true;</script>`;
 
-  const html = `<!doctype html>
+  return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -201,5 +197,4 @@ ${mermaid}
 </body>
 </html>
 `;
-  return { html };
 }

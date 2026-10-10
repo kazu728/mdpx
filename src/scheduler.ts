@@ -67,26 +67,8 @@ interface GenState {
   truncated: boolean;
 }
 
-const GEOMETRY_KEYS = [
-  "rows",
-  "cols",
-  "cellHpx",
-  "imgWidthPx",
-  "viewportWidthCssPx",
-  "renderScale",
-  "tileHeightPx",
-  "exceedsFrameLimit",
-  "exceedsStorage",
-  "maxResident",
-  "maxTotalResident",
-] as const;
-
 function sameGeometry(a: Geometry, b: Geometry): boolean {
-  return GEOMETRY_KEYS.every((k) => a[k] === b[k]);
-}
-
-interface PendingRequest {
-  scrollPx: number;
+  return (Object.keys(a) as (keyof Geometry)[]).every((k) => a[k] === b[k]);
 }
 
 export class Scheduler {
@@ -100,7 +82,7 @@ export class Scheduler {
   private rerun = false;
   private refetchingDisplayedGeneration = false;
   private failedGen: number | null = null;
-  private pending: PendingRequest | null = null;
+  private pendingScrollPx: number | null = null;
   private scrollFailed = false;
 
   constructor(geometry: Geometry) {
@@ -134,7 +116,7 @@ export class Scheduler {
       scrollPx: this.scrollPx,
       phase: this.pipeGen && !this.refetchingDisplayedGeneration ? "rendering" : "ready",
       failure: this.failedGen !== null || this.scrollFailed,
-      pendingScrollPx: this.pending?.scrollPx ?? null,
+      pendingScrollPx: this.pendingScrollPx,
     };
     const g = this.displayGen;
     if (!g) return { ...base, displayGen: null };
@@ -159,7 +141,7 @@ export class Scheduler {
   private onResize(geometry: Geometry): Action[] {
     if (sameGeometry(this.geometry, geometry)) return [{ type: "redraw" }];
     this.geometry = geometry;
-    this.pending = null;
+    this.pendingScrollPx = null;
     const old = this.displayGen;
     this.displayGen = null;
     const actions: Action[] = [];
@@ -196,7 +178,7 @@ export class Scheduler {
     if (!shown) return [];
     const { cellHpx, renderScale } = this.geometry;
     const contentHeightPx = shown.contentHeightPx;
-    let px: number = this.pending?.scrollPx ?? this.scrollPx;
+    let px: number = this.pendingScrollPx ?? this.scrollPx;
     let direction: ScrollDirection = 0;
     const unit = scrollUnitPx(cellHpx, renderScale);
     switch (delta.kind) {
@@ -220,10 +202,10 @@ export class Scheduler {
         break;
     }
     const req = clampScroll(px, contentHeightPx, this.contentRows, cellHpx, renderScale);
-    this.pending = { scrollPx: req };
+    this.pendingScrollPx = req;
     if (this.allVisibleResident(shown, req)) {
       this.scrollPx = req;
-      this.pending = null;
+      this.pendingScrollPx = null;
       this.scrollFailed = false;
       const pg = this.pipeGen;
       if (pg && pg.tiles.length > 0 && pg !== shown) {
@@ -271,9 +253,9 @@ export class Scheduler {
   }
 
   private clampPendingToGen(g: GenState): number | null {
-    if (!this.pending) return null;
+    if (this.pendingScrollPx === null) return null;
     return clampScroll(
-      this.pending.scrollPx,
+      this.pendingScrollPx,
       g.contentHeightPx,
       this.contentRows,
       this.geometry.cellHpx,
@@ -303,9 +285,9 @@ export class Scheduler {
 
   private takeCommitted(g: GenState): boolean {
     const pend = this.clampPendingToGen(g);
-    if (pend === null || !this.pending || !this.allVisibleResident(g, pend)) return false;
+    if (pend === null || this.pendingScrollPx === null || !this.allVisibleResident(g, pend)) return false;
     this.scrollPx = pend;
-    this.pending = null;
+    this.pendingScrollPx = null;
     this.scrollFailed = false;
     return true;
   }
@@ -326,7 +308,7 @@ export class Scheduler {
       const out = new Set<number>();
       for (const t of this.visibleSet(g, this.scrollPx)) out.add(t);
       const pend = this.clampPendingToGen(g);
-      if (pend !== null && this.pending) {
+      if (pend !== null && this.pendingScrollPx !== null) {
         for (const t of this.visibleSet(g, pend)) out.add(t);
       }
       return out;
@@ -362,9 +344,9 @@ export class Scheduler {
     g.truncated = truncated;
     g.contentHeightPx = contentHeightPx;
     const { cellHpx, renderScale } = this.geometry;
-    const base = this.pending?.scrollPx ?? this.scrollPx;
+    const base = this.pendingScrollPx ?? this.scrollPx;
     const promoScroll = clampScroll(base, contentHeightPx, this.contentRows, cellHpx, renderScale);
-    const limit = this.pending ? this.geometry.maxTotalResident : this.geometry.maxResident;
+    const limit = this.pendingScrollPx !== null ? this.geometry.maxTotalResident : this.geometry.maxResident;
     this.shootQueue = this.queueAround(g, promoScroll, 0, limit);
     return this.drive();
   }
@@ -405,7 +387,7 @@ export class Scheduler {
           if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
           return actions;
         }
-        const limit = this.pending ? this.geometry.maxTotalResident : this.geometry.maxResident;
+        const limit = this.pendingScrollPx !== null ? this.geometry.maxTotalResident : this.geometry.maxResident;
         const freed = this.evictToSize(shown, limit);
         const actions: Action[] = [{ type: "redraw" }];
         if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
@@ -416,7 +398,7 @@ export class Scheduler {
     this.shootInFlight = false;
     g.resident.add(tileIndex);
     if (this.rerun) return this.abortStalePipeline();
-    const usesTemporary = this.pending !== null && g === this.pipeGen;
+    const usesTemporary = this.pendingScrollPx !== null && g === this.pipeGen;
     const freed = this.evictToSize(g, usesTemporary ? this.geometry.maxTotalResident : this.geometry.maxResident);
     const actions = this.drive();
     const withRedraw = actions[0]?.type === "redraw" ? actions : [{ type: "redraw" } as Action, ...actions];
@@ -425,7 +407,7 @@ export class Scheduler {
 
   private scrollFor(g: GenState): number {
     if (g === this.displayGen) return this.scrollPx;
-    const base = this.pending?.scrollPx ?? this.scrollPx;
+    const base = this.pendingScrollPx ?? this.scrollPx;
     return clampScroll(
       base,
       g.contentHeightPx,
@@ -466,14 +448,14 @@ export class Scheduler {
     const actions: Action[] = [];
 
     if (this.displayGen !== g) {
-      const base = this.pending?.scrollPx ?? this.scrollPx;
+      const base = this.pendingScrollPx ?? this.scrollPx;
       const promoScroll = clampScroll(base, g.contentHeightPx, this.contentRows, cellHpx, renderScale);
       if (this.allVisibleResident(g, promoScroll)) {
         const old = this.displayGen;
-        const hadPending = this.pending !== null;
+        const hadPending = this.pendingScrollPx !== null;
         this.scrollPx = promoScroll;
         this.displayGen = g;
-        this.pending = null;
+        this.pendingScrollPx = null;
         if (hadPending) this.scrollFailed = false;
         if (this.failedGen !== null && g.gen >= this.failedGen) this.failedGen = null;
         actions.push({ type: "redraw" });
@@ -484,7 +466,7 @@ export class Scheduler {
         if (shrunk.length) actions.push({ type: "deleteGen", imageIds: shrunk });
         this.shrinkQueueToSteady(g);
       }
-    } else if (this.pending) {
+    } else if (this.pendingScrollPx !== null) {
       if (this.takeCommitted(g)) {
         actions.push({ type: "redraw" });
         const shrunk = this.evictToSize(g, this.geometry.maxResident);
@@ -501,7 +483,7 @@ export class Scheduler {
           const freedOld = this.evictToSize(old, this.geometry.maxTotalResident - g.resident.size - 1);
           if (freedOld.length) actions.push({ type: "deleteGen", imageIds: freedOld });
         }
-        const temporary = this.pending !== null && g === this.pipeGen;
+        const temporary = this.pendingScrollPx !== null && g === this.pipeGen;
         // Reserve decoded storage before the transfer lands; a pending scroll may burst
         // to the total budget until the post-commit shrink restores the steady cap.
         const newBudget = temporary
@@ -540,7 +522,7 @@ export class Scheduler {
           actions.push(this.shootAction(g, next));
         }
       } else if (this.displayGen === g) {
-        if (this.pending) {
+        if (this.pendingScrollPx !== null) {
           this.settleStalled(g, actions);
         } else {
           this.pipeGen = null;
@@ -579,7 +561,7 @@ export class Scheduler {
   private resumePendingDisplay(actions: Action[]): boolean {
     const shown = this.displayGen;
     const pend = shown ? this.clampPendingToGen(shown) : null;
-    if (!shown || pend === null || !this.pending) return false;
+    if (!shown || pend === null || this.pendingScrollPx === null) return false;
     if (this.takeCommitted(shown)) {
       actions.push({ type: "redraw" });
       actions.push(...this.startPrefetchIfNeeded(0));
@@ -591,8 +573,8 @@ export class Scheduler {
   }
 
   private failDisplayedGen(g: GenState, actions: Action[]): void {
-    if (this.pending) this.scrollFailed = true;
-    this.pending = null;
+    if (this.pendingScrollPx !== null) this.scrollFailed = true;
+    this.pendingScrollPx = null;
     this.clearPipeline(g);
     actions.push({ type: "redraw" });
     const freed = this.evictToSize(g, this.geometry.maxResident);

@@ -37,10 +37,6 @@ function tileCount(storageBytes: number, tileBytes: number): number {
   return Math.floor(storageBytes / Math.max(1, tileBytes));
 }
 
-function totalTileCapacity(tileBytes: number, limits: GraphicsLimits): number {
-  return tileCount(limits.storageBytes, tileBytes);
-}
-
 /** Working set stays below terminal eviction and never below the visible floor. */
 function maxResidentTiles(
   tileBytes: number,
@@ -119,7 +115,7 @@ function cappedBudgets(
   minTiles: number,
   limits: GraphicsLimits,
 ): { maxResident: number; maxTotalResident: number } {
-  const maxTotalResident = totalTileCapacity(tileBytes, limits);
+  const maxTotalResident = tileCount(limits.storageBytes, tileBytes);
   return {
     maxResident: Math.min(maxResidentTiles(tileBytes, limits, minTiles), maxTotalResident),
     maxTotalResident,

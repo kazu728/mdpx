@@ -1,4 +1,5 @@
 import { readFile, unlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Chrome, ContentError } from "./chrome.ts";
 import { renderFrame } from "./frame.ts";
 import { buildHtml, type Assets, type Theme } from "./html.ts";
@@ -16,7 +17,7 @@ interface PipelineDeps {
   mdPath: string;
   mdDir: string;
   fileName: string;
-  htmlPath: string;
+  htmlDir: string;
   assets: Record<Theme, Assets>;
   isShuttingDown: () => boolean;
   onFatal: (message: string) => Promise<never>;
@@ -72,7 +73,7 @@ export class Pipeline {
   }
 
   private htmlFor(gen: number): string {
-    return `${this.deps.htmlPath}.gen-${gen}.html`;
+    return join(this.deps.htmlDir, `gen-${gen}.html`);
   }
 
   private async loadGenDocument(gen: number): Promise<number> {
@@ -97,7 +98,7 @@ export class Pipeline {
     }
     if (!isShuttingDown()) {
       const reason = e instanceof Error ? e.message : String(e);
-      await this.deps.onFatal(`mdpx: Chrome failed: ${reason}\n`);
+      await this.deps.onFatal(`Chrome failed: ${reason}`);
     }
   }
 
@@ -106,7 +107,7 @@ export class Pipeline {
     let md: string;
     try {
       md = await readFile(mdPath, "utf8");
-      const { html } = await buildHtml({
+      const html = await buildHtml({
         markdown: md,
         mdDir,
         assets: assets[this.theme],

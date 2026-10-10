@@ -1,5 +1,6 @@
 import stringWidth from "string-width";
 import { deletePlacement, imageId, place } from "./kitty.ts";
+import { sanitizeTerminalLine } from "./term.ts";
 import { CSS_SCALE, contentRows, maxScrollPx, toImagePx, visibleTiles } from "./viewport.ts";
 import type { ViewState } from "./scheduler.ts";
 
@@ -89,14 +90,6 @@ function statusBar(view: ViewState, filename: string): string {
       ? text + " ".repeat(cols - leftW - rightW) + right
       : text + " ".repeat(cols - leftW);
   return `${ESC}[7m${line}${ESC}[0m`;
-}
-
-export function sanitizeTerminalBlock(s: string): string {
-  return s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "?");
-}
-
-export function sanitizeTerminalLine(s: string): string {
-  return s.replace(/[\x00-\x1f\x7f]/g, "?");
 }
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });

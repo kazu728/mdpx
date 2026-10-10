@@ -66,6 +66,14 @@ function isFinalByte(b: number): boolean {
   return b >= 0x40 && b <= 0x7e;
 }
 
+export function sanitizeTerminalBlock(s: string): string {
+  return s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "?");
+}
+
+export function sanitizeTerminalLine(s: string): string {
+  return s.replace(/[\x00-\x1f\x7f]/g, "?");
+}
+
 export class Term {
   private raw = false;
   private alt = false;
@@ -79,16 +87,12 @@ export class Term {
   private readonly onData = (chunk: Buffer) => this.feed(chunk);
   private readonly onResize = () => this.resizeHandler?.();
 
-  private get out(): NodeJS.WriteStream {
-    return process.stdout;
-  }
-
   size(): ScreenSize {
-    return { cols: this.out.columns, rows: this.out.rows };
+    return { cols: process.stdout.columns, rows: process.stdout.rows };
   }
 
   write(data: string): void {
-    this.out.write(data);
+    process.stdout.write(data);
   }
 
   enableInput(): void {
@@ -96,7 +100,7 @@ export class Term {
     this.raw = true;
     process.stdin.resume();
     process.stdin.on("data", this.onData);
-    this.out.on("resize", this.onResize);
+    process.stdout.on("resize", this.onResize);
   }
 
   onKey(cb: (k: Key) => void): void {
@@ -290,7 +294,7 @@ export class Term {
     if (this.resyncTimer) clearTimeout(this.resyncTimer);
     this.resyncTimer = null;
     process.stdin.off("data", this.onData);
-    this.out.off("resize", this.onResize);
+    process.stdout.off("resize", this.onResize);
     if (this.raw) process.stdin.setRawMode(false);
     this.raw = false;
     process.stdin.pause();

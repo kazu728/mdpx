@@ -65,10 +65,9 @@ export class Chrome {
   private browser: Browser | null = null;
   page: Page | null = null;
 
-  constructor(private readonly executablePath: string | null) {}
+  constructor(private readonly executablePath: string) {}
 
   async launch(): Promise<void> {
-    if (!this.executablePath) throw new Error("no Chromium found");
     // No --allow-file-access-from-files: body scripts could read local files over XHR.
     this.browser = await puppeteer.launch({
       executablePath: this.executablePath,

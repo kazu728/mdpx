@@ -30,5 +30,5 @@ jobs:
             echo "release tag $TAG does not match package.json $version"
             exit 1
           }
-      - run: bun test src/
+      - run: bun run test
       - run: npm publish

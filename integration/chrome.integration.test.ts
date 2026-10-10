@@ -38,15 +38,15 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
     dir = await mkdtemp(join(tmpdir(), "mdpx-it-"));
     htmlPath = join(dir, "view.html");
     const md = await readFile(FIXTURE, "utf8");
-    const built = await buildHtml({
+    const html = await buildHtml({
       markdown: md,
       mdDir: dirname(FIXTURE),
       assets: resolveAssets("light"),
       theme: "light",
     });
-    await writeFile(htmlPath, built.html);
+    await writeFile(htmlPath, html);
 
-    chrome = new Chrome(exe);
+    chrome = new Chrome(exe!);
     await chrome.launch();
     const documentHeightCssPx = await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
     expect(documentHeightCssPx).toBeGreaterThan(0);

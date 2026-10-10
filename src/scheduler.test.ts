@@ -3,21 +3,8 @@ import { Scheduler, type Action, type GenView } from "./scheduler.ts";
 import type { Geometry } from "./geometry.ts";
 import { detectGraphicsLimits, resolveGeometry } from "./geometry.ts";
 import { IMAGE_ID_GENERATION_STRIDE, imageId } from "./kitty.ts";
+import { GEO } from "./test-geometry.ts";
 import { alignedTileHeightPx, visibleTiles } from "./viewport.ts";
-
-const GEO: Geometry = {
-  rows: 51,
-  cols: 10,
-  cellHpx: 10,
-  imgWidthPx: 200,
-  viewportWidthCssPx: 100,
-  renderScale: 2,
-  tileHeightPx: alignedTileHeightPx(10, 50),
-  exceedsFrameLimit: false,
-  exceedsStorage: false,
-  maxResident: 64,
-  maxTotalResident: 128,
-};
 const shoots = (as: Action[]) => as.filter((a) => a.type === "shoot").map((a) => (a as { tileIndex: number }).tileIndex);
 const has = (as: Action[], t: Action["type"]) => as.some((a) => a.type === t);
 const shown = (s: Scheduler) => { const v = s.viewState(); if (v.displayGen === null) throw new Error("none"); return v as GenView; };

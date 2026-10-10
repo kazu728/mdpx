@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Term, type Key } from "./term.ts";
+import { sanitizeTerminalBlock, sanitizeTerminalLine, Term, type Key } from "./term.ts";
 
 const ESC = "\x1b";
 
@@ -168,4 +168,19 @@ describe("Term resync (unterminated sequences)", () => {
     expect(r2.keys).toEqual([{ type: "quit" }]);
   });
 
+});
+
+describe("sanitizeTerminalBlock", () => {
+  test("keeps newlines/tabs, neutralizes other controls", () => {
+    expect(sanitizeTerminalBlock(`Error: ${ESC}[31mx${ESC}[0m\n  at f\t(a.ts)\r`)).toBe(
+      "Error: ?[31mx?[0m\n  at f\t(a.ts)?",
+    );
+    expect(sanitizeTerminalBlock("café❤️.md")).toBe("café❤️.md");
+  });
+});
+
+describe("sanitizeTerminalLine", () => {
+  test("neutralizes newlines/tabs for single-line display", () => {
+    expect(sanitizeTerminalLine("a\nb\tc.md")).toBe("a?b?c.md");
+  });
 });

@@ -6,8 +6,7 @@ import { resolveAssets, type Assets, type Theme } from "./html.ts";
 import { Chrome, resolveExecutable } from "./chrome.ts";
 import { Pipeline } from "./pipeline.ts";
 import { Scheduler } from "./scheduler.ts";
-import { sanitizeTerminalBlock } from "./frame.ts";
-import { Term } from "./term.ts";
+import { sanitizeTerminalBlock, Term } from "./term.ts";
 import { resolveGeometry } from "./geometry.ts";
 
 const CELL_QUERY_MS = 200;
@@ -16,11 +15,15 @@ const WATCH_DEBOUNCE_MS = 100;
 const CHROME_CLOSE_TIMEOUT_MS = 1500;
 
 function warn(msg: string): void {
-  process.stderr.write(sanitizeTerminalBlock(`mdpx: ${msg}`) + "\n");
+  process.stderr.write(sanitizeTerminalBlock(`mdpx: ${msg}\n`));
 }
 
-function usageExit(bin: string): never {
-  warn(`usage: ${bin} <file.md>`);
+function errorText(e: unknown): string {
+  return e instanceof Error ? (e.stack ?? e.message) : String(e);
+}
+
+function usageExit(): never {
+  warn("usage: mdpx <file.md>");
   process.exit(1);
 }
 
@@ -29,9 +32,14 @@ function unsupportedTerminalExit(): never {
   process.exit(1);
 }
 
-export function resolveCliMdPath(argv: string[], bin: string): string {
+export function errorExit(e: unknown): never {
+  warn(errorText(e));
+  process.exit(1);
+}
+
+export function resolveCliMdPath(argv: string[]): string {
   const arg = argv[0];
-  if (!arg) usageExit(bin);
+  if (!arg) usageExit();
   try {
     const resolved = resolve(arg);
     if (statSync(resolved).isFile()) return realpathSync(resolved);
@@ -48,6 +56,12 @@ export async function runApp(mdPath: string): Promise<void> {
   if (!process.stdout.isTTY || !process.stdin.isTTY) unsupportedTerminalExit();
 
   const chromeExecutable = await resolveExecutable();
+  if (!chromeExecutable) {
+    warn(
+      "no Chrome or Chromium found. Install Google Chrome or a non-Snap Chromium, or point PUPPETEER_EXECUTABLE_PATH at one",
+    );
+    process.exit(1);
+  }
 
   const term = new Term();
   term.enableInput();
@@ -65,7 +79,7 @@ export async function runApp(mdPath: string): Promise<void> {
       if (debounce) clearTimeout(debounce);
       watcher?.close();
       term.restore();
-      if (message) process.stderr.write(sanitizeTerminalBlock(message));
+      if (message) warn(message);
       await Promise.race([chrome.close(), new Promise((r) => setTimeout(r, CHROME_CLOSE_TIMEOUT_MS))]);
       if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
     } catch {}
@@ -76,17 +90,11 @@ export async function runApp(mdPath: string): Promise<void> {
     if (k.type === "quit") void shutdown(0);
   });
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => void shutdown(0));
-  process.on("uncaughtException", (e) => void shutdown(1, `mdpx: ${e?.stack ?? e}\n`));
-  process.on("unhandledRejection", (e) => {
-    void shutdown(1, `mdpx: ${e instanceof Error ? e.stack : e}\n`);
-  });
+  process.on("uncaughtException", (e) => void shutdown(1, errorText(e)));
+  process.on("unhandledRejection", (e) => void shutdown(1, errorText(e)));
 
   const cell = await term.queryCellSize(CELL_QUERY_MS);
-  if (!cell) {
-    term.restore();
-    unsupportedTerminalExit();
-  }
-  if (!(await term.queryKittyGraphics(GRAPHICS_QUERY_TIMEOUT_MS))) {
+  if (!cell || !(await term.queryKittyGraphics(GRAPHICS_QUERY_TIMEOUT_MS))) {
     term.restore();
     unsupportedTerminalExit();
   }
@@ -96,19 +104,13 @@ export async function runApp(mdPath: string): Promise<void> {
     assets = { light: resolveAssets("light"), dark: resolveAssets("dark") };
     dir = await mkdtemp(join(tmpdir(), "mdpx-"));
   } catch (e) {
-    return shutdown(1, `mdpx: ${e instanceof Error ? e.stack : e}\n`);
+    return shutdown(1, errorText(e));
   }
   try {
     await chrome.launch();
   } catch (e) {
-    return shutdown(
-      1,
-      chromeExecutable
-        ? `mdpx: cannot launch Chrome (${chromeExecutable}): ${e instanceof Error ? e.stack : e}\n`
-        : "mdpx: no Chrome or Chromium found. Install Google Chrome or a non-Snap Chromium, or point PUPPETEER_EXECUTABLE_PATH at one\n",
-    );
+    return shutdown(1, `cannot launch Chrome (${chromeExecutable}): ${errorText(e)}`);
   }
-  const htmlPath = join(dir, "view.html");
 
   const scheduler = new Scheduler(resolveGeometry(term.size(), cell));
   const pipeline = new Pipeline({
@@ -118,7 +120,7 @@ export async function runApp(mdPath: string): Promise<void> {
     mdPath,
     mdDir,
     fileName,
-    htmlPath,
+    htmlDir: dir,
     assets,
     isShuttingDown: () => shuttingDown,
     onFatal: (message) => shutdown(1, message),
@@ -152,13 +154,13 @@ export async function runApp(mdPath: string): Promise<void> {
       }, WATCH_DEBOUNCE_MS);
     });
   } catch (e) {
-    return shutdown(1, `mdpx: cannot watch the directory: ${e instanceof Error ? e.message : e}\n`);
+    return shutdown(1, `cannot watch the directory: ${e instanceof Error ? e.message : e}`);
   }
 
   term.enterAltScreen();
   try {
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
   } catch (e) {
-    return shutdown(1, `mdpx: ${e instanceof Error ? e.stack : e}\n`);
+    return shutdown(1, errorText(e));
   }
 }
