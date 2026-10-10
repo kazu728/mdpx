@@ -3,7 +3,6 @@ import {
   CSS_SCALE,
   contentRows,
   maximumTileHeightPx,
-  REDUCED_SCALE,
   scrollUnitPx,
   toImagePx,
 } from "./viewport.ts";
@@ -72,10 +71,7 @@ export interface ScreenSize {
   rows: number;
 }
 
-export interface Geometry extends ScreenSize {
-  cellHpx: number;
-  imgWidthPx: number;
-  viewportWidthCssPx: number;
+interface CapturePlan {
   renderScale: number;
   tileHeightPx: number;
   exceedsFrameLimit: boolean;
@@ -85,13 +81,10 @@ export interface Geometry extends ScreenSize {
   maxTotalResident: number;
 }
 
-interface CapturePlan {
-  renderScale: number;
-  tileHeightPx: number;
-  exceedsFrameLimit: boolean;
-  exceedsStorage: boolean;
-  maxResident: number;
-  maxTotalResident: number;
+export interface Geometry extends ScreenSize, CapturePlan {
+  cellHpx: number;
+  imgWidthPx: number;
+  viewportWidthCssPx: number;
 }
 
 function tileHeightCandidates(cellHpx: number): number[] {
@@ -218,6 +211,8 @@ function smallestPlanAtScale(
     ...cappedBudgets(tileBytes, tilesInFrame + 1, limits),
   };
 }
+
+const REDUCED_SCALE = 1;
 
 function resolveCapturePlan(
   screenWidthPx: number,

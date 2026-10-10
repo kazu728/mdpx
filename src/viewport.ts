@@ -10,8 +10,6 @@ export function contentRows(rows: number): number {
 /** CSS layout ratio; not the screenshot deviceScaleFactor. */
 export const CSS_SCALE = 2;
 
-export const REDUCED_SCALE = 1;
-
 export function toImagePx(screenPx: number, renderScale: number): number {
   return Math.round((screenPx * renderScale) / CSS_SCALE);
 }
