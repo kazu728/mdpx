@@ -2,7 +2,13 @@ import { accessSync, closeSync, constants, openSync, readSync, realpathSync, sta
 import { basename, delimiter, isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import puppeteer, { TimeoutError, type Browser, type Page } from "puppeteer-core";
-import type { Clip } from "./geometry.ts";
+
+export interface Clip {
+  xCssPx: number;
+  yCssPx: number;
+  widthCssPx: number;
+  heightCssPx: number;
+}
 
 /** Content-caused failure (not a Chrome fault); the caller keeps the current frame. */
 export class ContentError extends Error {}

@@ -138,7 +138,13 @@ export class Pipeline {
 
   private async runShoot(action: ShootAction): Promise<void> {
     const { chrome, scheduler, term, isShuttingDown } = this.deps;
-    const { gen, tileIndex, clip } = action;
+    const { gen, tileIndex, tile } = action;
+    const clip = {
+      xCssPx: 0,
+      yCssPx: tile.topPx / CSS_SCALE,
+      widthCssPx: scheduler.viewState().geometry.viewportWidthCssPx,
+      heightCssPx: tile.heightPx / CSS_SCALE,
+    };
     let base64: string;
     try {
       base64 = await this.onPage(async () => {

@@ -85,13 +85,6 @@ export interface Geometry extends ScreenSize {
   maxTotalResident: number;
 }
 
-export interface Clip {
-  xCssPx: number;
-  yCssPx: number;
-  widthCssPx: number;
-  heightCssPx: number;
-}
-
 interface CapturePlan {
   renderScale: number;
   tileHeightPx: number;

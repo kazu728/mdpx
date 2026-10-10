@@ -17,7 +17,7 @@ describe("pipeline basics", () => {
     const s = new Scheduler(GEO);
     s.dispatch({ type: "trigger" });
     expect(s.dispatch({ type: "renderDone", gen: 1, documentHeightPx: 1500 })).toEqual([
-      { type: "shoot", gen: 1, tileIndex: 0, clip: { xCssPx: 0, yCssPx: 0, widthCssPx: 100, heightCssPx: 250 } },
+      { type: "shoot", gen: 1, tileIndex: 0, tile: { topPx: 0, heightPx: 500 } },
     ]);
   });
 

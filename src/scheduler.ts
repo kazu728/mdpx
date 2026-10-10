@@ -3,7 +3,6 @@ import {
   clampScroll,
   computeTiles,
   contentRows,
-  CSS_SCALE,
   maxScrollPx,
   scrollUnitPx,
   visibleTiles,
@@ -11,7 +10,7 @@ import {
   type Tile,
 } from "./viewport.ts";
 import { imageId } from "./kitty.ts";
-import type { Clip, Geometry } from "./geometry.ts";
+import type { Geometry } from "./geometry.ts";
 
 export type ScrollDelta =
   | { kind: "lines"; n: number }
@@ -29,7 +28,7 @@ type SchedulerEvent =
 
 export type Action =
   | { type: "render"; gen: number }
-  | { type: "shoot"; gen: number; tileIndex: number; clip: Clip }
+  | { type: "shoot"; gen: number; tileIndex: number; tile: Tile }
   | { type: "redraw" }
   | { type: "deleteGen"; imageIds: number[] }
   | { type: "releaseGen"; gen: number };
@@ -586,19 +585,7 @@ export class Scheduler {
   }
 
   private shootAction(g: GenState, tileIndex: number): Action {
-    const tile = g.tiles[tileIndex]!;
-    const { viewportWidthCssPx } = this.geometry;
-    return {
-      type: "shoot",
-      gen: g.gen,
-      tileIndex,
-      clip: {
-        xCssPx: 0,
-        yCssPx: tile.topPx / CSS_SCALE,
-        widthCssPx: viewportWidthCssPx,
-        heightCssPx: tile.heightPx / CSS_SCALE,
-      },
-    };
+    return { type: "shoot", gen: g.gen, tileIndex, tile: g.tiles[tileIndex]! };
   }
 
   private allVisibleResident(g: GenState, scroll: number): boolean {

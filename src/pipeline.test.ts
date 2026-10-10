@@ -88,13 +88,29 @@ describe("one page at a time", () => {
     pipeline.execute([{ type: "render", gen: 1 }]);
     await loadCalled.promise;
     pipeline.execute([
-      { type: "shoot", gen: 1, tileIndex: 0, clip: { xCssPx: 0, yCssPx: 0, widthCssPx: 100, heightCssPx: 250 } },
+      { type: "shoot", gen: 1, tileIndex: 0, tile: { topPx: 0, heightPx: 500 } },
     ]);
     await settle();
     expect(calls).toEqual(["load"]);
     loadResult.resolve(1000);
     await settle();
     expect(calls).toEqual(["load", "shoot"]);
+  });
+});
+
+describe("capture clip", () => {
+  test("device-px tile becomes a CSS-px clip at the viewport width", async () => {
+    const clips: unknown[] = [];
+    const { pipeline } = await makePipeline({
+      ...baseChrome(),
+      shoot: async (clip: unknown) => {
+        clips.push(clip);
+        return "";
+      },
+    });
+    pipeline.execute([{ type: "shoot", gen: 1, tileIndex: 1, tile: { topPx: 500, heightPx: 500 } }]);
+    await waitFor(() => clips.length === 1);
+    expect(clips).toEqual([{ xCssPx: 0, yCssPx: 250, widthCssPx: GEO.viewportWidthCssPx, heightCssPx: 250 }]);
   });
 });
 
@@ -127,7 +143,7 @@ describe("generation binding", () => {
     expect(loads.filter((p) => p.includes("gen-1")).length).toBe(afterGen1);
     const before = shoots;
     pipeline.execute([
-      { type: "shoot", gen: 1, tileIndex: 0, clip: { xCssPx: 0, yCssPx: 0, widthCssPx: 100, heightCssPx: 250 } },
+      { type: "shoot", gen: 1, tileIndex: 0, tile: { topPx: 0, heightPx: 500 } },
     ]);
     await waitFor(() => shoots === before + 1);
     expect(shoots).toBe(before + 1);
