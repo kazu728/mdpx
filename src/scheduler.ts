@@ -35,35 +35,22 @@ export type Action =
 
 type Phase = "rendering" | "ready";
 
-interface ViewBase {
-  geometry: Geometry;
-  scrollPx: number;
-  phase: Phase;
-  failure: boolean;
-  pendingScrollPx: number | null;
-}
-
-interface BlankView extends ViewBase {
-  displayGen: null;
-}
-
-export interface GenView extends ViewBase {
-  displayGen: number;
-  tiles: Tile[];
-  resident: ReadonlySet<number>;
-  truncated: boolean;
-  contentHeightPx: number;
-}
-
-/** No displayed generation vs. a displayed empty document. */
-export type ViewState = BlankView | GenView;
-
 interface GenState {
   gen: number;
   tiles: Tile[];
   contentHeightPx: number;
   resident: Set<number>;
   truncated: boolean;
+}
+
+export interface ViewState {
+  geometry: Geometry;
+  scrollPx: number;
+  phase: Phase;
+  failure: boolean;
+  pendingScrollPx: number | null;
+  /** No displayed generation vs. a displayed empty document. */
+  displayGen: Readonly<GenState> | null;
 }
 
 interface Capture {
@@ -121,22 +108,13 @@ export class Scheduler {
   }
 
   viewState(): ViewState {
-    const base: ViewBase = {
+    return {
       geometry: this.geometry,
       scrollPx: this.scrollPx,
       phase: this.capture?.reason === "render" ? "rendering" : "ready",
       failure: this.failedGen !== null || this.scrollFailed,
       pendingScrollPx: this.pendingScrollPx,
-    };
-    const g = this.displayGen;
-    if (!g) return { ...base, displayGen: null };
-    return {
-      ...base,
-      displayGen: g.gen,
-      tiles: g.tiles,
-      resident: g.resident,
-      truncated: g.truncated,
-      contentHeightPx: g.contentHeightPx,
+      displayGen: this.displayGen,
     };
   }
 
@@ -233,19 +211,18 @@ export class Scheduler {
       actions.push(...this.startPrefetchIfNeeded(direction));
       return actions;
     }
-    if (capture && capture.target.tiles.length > 0) {
-      capture.queue = this.queueAround(
-        capture.target,
-        this.clampPendingToGen(capture.target)!,
-        direction,
-        this.geometry.maxTotalResident,
-      );
-      return [{ type: "redraw" }];
-    }
     if (capture) {
+      if (capture.target.tiles.length > 0) {
+        capture.queue = this.queueAround(
+          capture.target,
+          this.clampPendingToGen(capture.target)!,
+          direction,
+          this.geometry.maxTotalResident,
+        );
+      }
       return [{ type: "redraw" }];
     }
-    return [{ type: "redraw" }, ...this.startRefetchForPending(direction)];
+    return [{ type: "redraw" }, ...this.beginFetch(shown, req, this.geometry.maxTotalResident, direction)];
   }
 
   private queueAround(
@@ -335,13 +312,6 @@ export class Scheduler {
     const g = this.displayGen;
     if (!g || this.capture || g.tiles.length === 0) return [];
     return this.beginFetch(g, this.scrollPx, this.geometry.maxResident, direction);
-  }
-
-  private startRefetchForPending(direction: ScrollDirection): Action[] {
-    const g = this.displayGen;
-    const pend = g ? this.clampPendingToGen(g) : null;
-    if (!g || pend === null || this.capture || g.tiles.length === 0) return [];
-    return this.beginFetch(g, pend, this.geometry.maxTotalResident, direction);
   }
 
   private onRenderDone(gen: number, documentHeightPx: number): Action[] {
@@ -516,7 +486,6 @@ export class Scheduler {
           this.settleStalled(g, actions);
         } else {
           this.capture = null;
-          if (this.rerun) actions.push(...this.startPipeline());
         }
       } else {
         this.settleStalled(g, actions);
@@ -525,19 +494,10 @@ export class Scheduler {
     return actions;
   }
 
-  private residentIds(g: GenState): number[] {
-    return Array.from(g.resident, (i) => imageId(g.gen, i));
-  }
-
   private pushReleaseGen(g: GenState, actions: Action[]): void {
-    const ids = this.residentIds(g);
+    const ids = Array.from(g.resident, (i) => imageId(g.gen, i));
     if (ids.length) actions.push({ type: "deleteGen", imageIds: ids });
     actions.push({ type: "releaseGen", gen: g.gen });
-  }
-
-  private redrawAndMaybeRerun(actions: Action[]): void {
-    actions.push({ type: "redraw" });
-    if (this.rerun) actions.push(...this.startPipeline());
   }
 
   private resumePendingDisplay(actions: Action[]): boolean {
@@ -573,7 +533,7 @@ export class Scheduler {
     this.pushReleaseGen(g, actions);
     this.capture = null;
     if (this.resumePendingDisplay(actions)) return;
-    this.redrawAndMaybeRerun(actions);
+    actions.push({ type: "redraw" });
   }
 
   private nextShoot(capture: Capture): number | null {

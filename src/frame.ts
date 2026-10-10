@@ -23,10 +23,11 @@ export function renderFrame(
   out += HOME + ERASE_BELOW;
 
   const placed: number[] = [];
-  if (view.displayGen !== null) {
-    const vis = visibleTiles(view.scrollPx, contentRows(geometry.rows), geometry.cellHpx, view.tiles);
+  const shown = view.displayGen;
+  if (shown) {
+    const vis = visibleTiles(view.scrollPx, contentRows(geometry.rows), geometry.cellHpx, shown.tiles);
     for (const p of vis) {
-      const id = imageId(view.displayGen, p.tileIndex);
+      const id = imageId(shown.gen, p.tileIndex);
       out += cursorTo(p.destinationRow + 1, 1);
       out += place({
         id,
@@ -49,7 +50,7 @@ export function renderFrame(
 
 function statusBar(view: ViewState, filename: string): string {
   const { geometry, scrollPx, phase, pendingScrollPx } = view;
-  const shown = view.displayGen !== null ? view : null;
+  const shown = view.displayGen;
   const max = shown
     ? maxScrollPx(
         shown.contentHeightPx,

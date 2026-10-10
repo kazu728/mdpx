@@ -131,14 +131,14 @@ describe("generation binding", () => {
       },
     });
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitFor(() => scheduler.viewState().displayGen === 1);
-    expect(scheduler.viewState().displayGen).toBe(1);
+    await waitFor(() => scheduler.viewState().displayGen?.gen === 1);
+    expect(scheduler.viewState().displayGen?.gen).toBe(1);
     const afterGen1 = loads.length;
     expect(afterGen1).toBeGreaterThan(0);
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
     await waitFor(() => loads.some((p) => p.includes("gen-2")));
     for (let i = 0; i < 500; i++) await settle();
-    expect(scheduler.viewState().displayGen).toBe(1);
+    expect(scheduler.viewState().displayGen?.gen).toBe(1);
     expect(loads.length).toBeGreaterThan(afterGen1);
     expect(loads.filter((p) => p.includes("gen-1")).length).toBe(afterGen1);
     const before = shoots;
@@ -188,17 +188,17 @@ describe("generation-owned files", () => {
     expect(await exists(join(dir, "gen-1.html"))).toBe(true);
     resume.resolve();
     await waitFor(() => scheduler.viewState().displayGen !== null);
-    expect(scheduler.viewState().displayGen).toBeGreaterThan(2);
+    expect(scheduler.viewState().displayGen?.gen).toBeGreaterThan(2);
     expect(await exists(join(dir, "gen-1.html"))).toBe(false);
   });
 
   test("switching releases old HTML at promotion", async () => {
     const { dir, scheduler, pipeline } = await makePipeline(baseChrome());
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitFor(() => scheduler.viewState().displayGen === 1);
+    await waitFor(() => scheduler.viewState().displayGen?.gen === 1);
     expect(await exists(join(dir, "gen-1.html"))).toBe(true);
     pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitFor(() => scheduler.viewState().displayGen === 2);
+    await waitFor(() => scheduler.viewState().displayGen?.gen === 2);
     for (let i = 0; i < 100; i++) await settle();
     expect(await exists(join(dir, "gen-1.html"))).toBe(false);
     expect(await exists(join(dir, "gen-2.html"))).toBe(true);

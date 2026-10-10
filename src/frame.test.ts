@@ -19,11 +19,7 @@ function makeView(geometry: Geometry = FULL, documentHeightPx = 300): ViewState 
   return {
     geometry,
     scrollPx: 0,
-    displayGen: 1,
-    tiles,
-    resident: new Set([0]),
-    truncated: false,
-    contentHeightPx,
+    displayGen: { gen: 1, tiles, resident: new Set([0]), truncated: false, contentHeightPx },
     phase: "ready",
     failure: false,
     pendingScrollPx: null,
