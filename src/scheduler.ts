@@ -67,6 +67,15 @@ interface GenState {
   truncated: boolean;
 }
 
+interface Capture {
+  target: GenState;
+  // "render" lasts through the backfill after promotion, so triggers coalesce and the
+  // status shows "updating"; "refetch" yields to a new trigger immediately.
+  reason: "render" | "refetch";
+  queue: number[];
+  inFlight: boolean;
+}
+
 function sameGeometry(a: Geometry, b: Geometry): boolean {
   return (Object.keys(a) as (keyof Geometry)[]).every((k) => a[k] === b[k]);
 }
@@ -76,11 +85,8 @@ export class Scheduler {
   private scrollPx = 0;
   private genCounter = 0;
   private displayGen: GenState | null = null;
-  private pipeGen: GenState | null = null;
-  private shootInFlight = false;
-  private shootQueue: number[] = [];
+  private capture: Capture | null = null;
   private rerun = false;
-  private refetchingDisplayedGeneration = false;
   private failedGen: number | null = null;
   private pendingScrollPx: number | null = null;
   private scrollFailed = false;
@@ -119,7 +125,7 @@ export class Scheduler {
     const base: ViewBase = {
       geometry: this.geometry,
       scrollPx: this.scrollPx,
-      phase: this.pipeGen && !this.refetchingDisplayedGeneration ? "rendering" : "ready",
+      phase: this.capture?.reason === "render" ? "rendering" : "ready",
       failure: this.failedGen !== null || this.scrollFailed,
       pendingScrollPx: this.pendingScrollPx,
     };
@@ -136,7 +142,7 @@ export class Scheduler {
   }
 
   private onTrigger(): Action[] {
-    if (this.pipeGen && !this.refetchingDisplayedGeneration) {
+    if (this.capture?.reason === "render") {
       this.rerun = true;
       return [];
     }
@@ -150,10 +156,10 @@ export class Scheduler {
     const old = this.displayGen;
     this.displayGen = null;
     const actions: Action[] = [];
-    if (old && old !== this.pipeGen) {
+    if (old && old !== this.capture?.target) {
       this.pushReleaseGen(old, actions);
     }
-    if (this.pipeGen) {
+    if (this.capture) {
       this.rerun = true;
       actions.push({ type: "redraw" });
       return actions;
@@ -164,17 +170,19 @@ export class Scheduler {
 
   private startPipeline(): Action[] {
     this.genCounter += 1;
-    this.pipeGen = {
-      gen: this.genCounter,
-      tiles: [],
-      contentHeightPx: 0,
-      resident: new Set(),
-      truncated: false,
+    this.capture = {
+      target: {
+        gen: this.genCounter,
+        tiles: [],
+        contentHeightPx: 0,
+        resident: new Set(),
+        truncated: false,
+      },
+      reason: "render",
+      queue: [],
+      inFlight: false,
     };
-    this.shootQueue = [];
-    this.shootInFlight = false;
     this.rerun = false;
-    this.refetchingDisplayedGeneration = false;
     return [{ type: "render", gen: this.genCounter }, { type: "redraw" }];
   }
 
@@ -208,25 +216,34 @@ export class Scheduler {
     }
     const req = clampScroll(px, contentHeightPx, this.contentRows, cellHpx, renderScale);
     this.pendingScrollPx = req;
+    const capture = this.capture;
     if (this.allVisibleResident(shown, req)) {
       this.scrollPx = req;
       this.pendingScrollPx = null;
       this.scrollFailed = false;
-      const pg = this.pipeGen;
-      if (pg && pg.tiles.length > 0 && pg !== shown) {
-        this.shootQueue = this.queueAround(pg, this.scrollFor(pg), direction, this.geometry.maxResident);
+      if (capture && capture.target.tiles.length > 0 && capture.target !== shown) {
+        capture.queue = this.queueAround(
+          capture.target,
+          this.scrollFor(capture.target),
+          direction,
+          this.geometry.maxResident,
+        );
         return [{ type: "redraw" }];
       }
       const actions: Action[] = [{ type: "redraw" }];
       actions.push(...this.startPrefetchIfNeeded(direction));
       return actions;
     }
-    const pg = this.pipeGen;
-    if (pg && pg.tiles.length > 0) {
-      this.shootQueue = this.queueAround(pg, this.clampPendingToGen(pg)!, direction, this.geometry.maxTotalResident);
+    if (capture && capture.target.tiles.length > 0) {
+      capture.queue = this.queueAround(
+        capture.target,
+        this.clampPendingToGen(capture.target)!,
+        direction,
+        this.geometry.maxTotalResident,
+      );
       return [{ type: "redraw" }];
     }
-    if (pg) {
+    if (capture) {
       return [{ type: "redraw" }];
     }
     return [{ type: "redraw" }, ...this.startRefetchForPending(direction)];
@@ -271,14 +288,13 @@ export class Scheduler {
   ): Action[] {
     const queue = this.queueAround(g, scroll, direction, limit);
     if (queue.every((tileIndex) => g.resident.has(tileIndex))) return [];
-    this.pipeGen = g;
-    this.refetchingDisplayedGeneration = true;
-    this.shootQueue = queue;
+    this.capture = { target: g, reason: "refetch", queue, inFlight: false };
     return this.drive();
   }
 
-  private shrinkQueueToSteady(g: GenState): void {
-    this.shootQueue = this.queueAround(g, this.scrollFor(g), 0, this.geometry.maxResident).filter(
+  private shrinkQueueToSteady(capture: Capture): void {
+    const g = capture.target;
+    capture.queue = this.queueAround(g, this.scrollFor(g), 0, this.geometry.maxResident).filter(
       (tileIndex) => !g.resident.has(tileIndex),
     );
   }
@@ -318,21 +334,22 @@ export class Scheduler {
 
   private startPrefetchIfNeeded(direction: ScrollDirection): Action[] {
     const g = this.displayGen;
-    if (!g || this.pipeGen || g.tiles.length === 0) return [];
+    if (!g || this.capture || g.tiles.length === 0) return [];
     return this.beginFetch(g, this.scrollPx, this.geometry.maxResident, direction);
   }
 
   private startRefetchForPending(direction: ScrollDirection): Action[] {
     const g = this.displayGen;
     const pend = g ? this.clampPendingToGen(g) : null;
-    if (!g || pend === null || this.pipeGen || g.tiles.length === 0) return [];
+    if (!g || pend === null || this.capture || g.tiles.length === 0) return [];
     return this.beginFetch(g, pend, this.geometry.maxTotalResident, direction);
   }
 
   private onRenderDone(gen: number, documentHeightPx: number): Action[] {
-    const g = this.pipeGen;
-    if (!g || g.gen !== gen) return [];
+    const capture = this.capture;
+    if (!capture || capture.target.gen !== gen) return [];
     if (this.rerun) return this.abortStalePipeline();
+    const g = capture.target;
 
     const { tiles, truncated, contentHeightPx } = computeTiles(
       documentHeightPx,
@@ -343,17 +360,17 @@ export class Scheduler {
     g.tiles = tiles;
     g.truncated = truncated;
     g.contentHeightPx = contentHeightPx;
-    this.shootQueue = this.queueAround(g, this.scrollFor(g), 0, this.residentLimit);
+    capture.queue = this.queueAround(g, this.scrollFor(g), 0, this.residentLimit);
     return this.drive();
   }
 
   private onRenderFailed(gen: number): Action[] {
-    const g = this.pipeGen;
+    const g = this.capture?.target;
     if (!g || g.gen !== gen) return [];
     const promoted = this.displayGen === g;
     const actions: Action[] = [];
     if (!promoted) {
-      this.clearPipeline(g);
+      this.capture = null;
       this.pushReleaseGen(g, actions);
       this.failedGen = g.gen;
       if (this.rerun) {
@@ -370,21 +387,22 @@ export class Scheduler {
   }
 
   private onTileReady(gen: number, tileIndex: number): Action[] {
-    const g = this.pipeGen;
-    if (!g || g.gen !== gen) {
+    const capture = this.capture;
+    if (!capture || capture.target.gen !== gen) {
       const shown = this.displayGen;
       if (shown && shown.gen === gen) {
         shown.resident.add(tileIndex);
         const committed = this.takeCommitted(shown);
         const freed = this.evictToSize(shown, this.residentLimit);
-        if (committed && this.pipeGen) this.shrinkQueueToSteady(this.pipeGen);
+        if (committed && this.capture) this.shrinkQueueToSteady(this.capture);
         const actions: Action[] = [{ type: "redraw" }];
         if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
         return actions;
       }
       return [{ type: "deleteGen", imageIds: [imageId(gen, tileIndex)] }];
     }
-    this.shootInFlight = false;
+    const g = capture.target;
+    capture.inFlight = false;
     g.resident.add(tileIndex);
     if (this.rerun) return this.abortStalePipeline();
     const freed = this.evictToSize(g, this.residentLimit);
@@ -420,7 +438,7 @@ export class Scheduler {
   }
 
   private abortStalePipeline(): Action[] {
-    const g = this.pipeGen!;
+    const g = this.capture!.target;
     const actions: Action[] = [];
     if (g !== this.displayGen) {
       this.pushReleaseGen(g, actions);
@@ -430,8 +448,9 @@ export class Scheduler {
   }
 
   private drive(): Action[] {
-    const g = this.pipeGen;
-    if (!g) return [];
+    const capture = this.capture;
+    if (!capture) return [];
+    const g = capture.target;
     const actions: Action[] = [];
 
     if (this.displayGen !== g) {
@@ -450,19 +469,19 @@ export class Scheduler {
         }
         const shrunk = this.evictToSize(g, this.geometry.maxResident);
         if (shrunk.length) actions.push({ type: "deleteGen", imageIds: shrunk });
-        this.shrinkQueueToSteady(g);
+        this.shrinkQueueToSteady(capture);
       }
     } else if (this.pendingScrollPx !== null) {
       if (this.takeCommitted(g)) {
         actions.push({ type: "redraw" });
         const shrunk = this.evictToSize(g, this.geometry.maxResident);
         if (shrunk.length) actions.push({ type: "deleteGen", imageIds: shrunk });
-        this.shrinkQueueToSteady(g);
+        this.shrinkQueueToSteady(capture);
       }
     }
 
-    if (!this.shootInFlight) {
-      const next = this.nextShoot();
+    if (!capture.inFlight) {
+      const next = this.nextShoot(capture);
       if (next !== null) {
         let old = this.displayGen !== g ? this.displayGen : null;
         if (old) {
@@ -481,7 +500,7 @@ export class Scheduler {
             this.displayGen = null;
             old = null;
             if (g.resident.size + 1 <= this.geometry.maxResident) {
-              this.shootInFlight = true;
+              capture.inFlight = true;
               actions.push(this.shootAction(g, next));
             } else {
               this.settleStalled(g, actions);
@@ -490,15 +509,14 @@ export class Scheduler {
             this.settleStalled(g, actions);
           }
         } else {
-          this.shootInFlight = true;
+          capture.inFlight = true;
           actions.push(this.shootAction(g, next));
         }
       } else if (this.displayGen === g) {
         if (this.pendingScrollPx !== null) {
           this.settleStalled(g, actions);
         } else {
-          this.pipeGen = null;
-          this.refetchingDisplayedGeneration = false;
+          this.capture = null;
           if (this.rerun) actions.push(...this.startPipeline());
         }
       } else {
@@ -510,13 +528,6 @@ export class Scheduler {
 
   private residentIds(g: GenState): number[] {
     return Array.from(g.resident, (i) => imageId(g.gen, i));
-  }
-
-  private clearPipeline(g: GenState): void {
-    if (this.pipeGen === g) this.pipeGen = null;
-    this.shootQueue = [];
-    this.shootInFlight = false;
-    this.refetchingDisplayedGeneration = false;
   }
 
   private pushReleaseGen(g: GenState, actions: Action[]): void {
@@ -547,7 +558,7 @@ export class Scheduler {
   private failDisplayedGen(g: GenState, actions: Action[]): void {
     if (this.pendingScrollPx !== null) this.scrollFailed = true;
     this.pendingScrollPx = null;
-    this.clearPipeline(g);
+    this.capture = null;
     actions.push({ type: "redraw" });
     const freed = this.evictToSize(g, this.geometry.maxResident);
     if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
@@ -561,16 +572,15 @@ export class Scheduler {
       return;
     }
     this.pushReleaseGen(g, actions);
-    this.clearPipeline(g);
+    this.capture = null;
     if (this.resumePendingDisplay(actions)) return;
     this.redrawAndMaybeRerun(actions);
   }
 
-  private nextShoot(): number | null {
-    const g = this.pipeGen!;
-    while (this.shootQueue.length) {
-      const i = this.shootQueue.shift()!;
-      if (!g.resident.has(i)) return i;
+  private nextShoot(capture: Capture): number | null {
+    while (capture.queue.length) {
+      const i = capture.queue.shift()!;
+      if (!capture.target.resident.has(i)) return i;
     }
     return null;
   }
