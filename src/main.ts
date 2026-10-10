@@ -14,6 +14,7 @@ const CELL_QUERY_MS = 200;
 const GRAPHICS_QUERY_TIMEOUT_MS = 200;
 const WATCH_DEBOUNCE_MS = 100;
 const CHROME_CLOSE_TIMEOUT_MS = 1500;
+const UNSUPPORTED_TERMINAL = "run this in a terminal that supports the kitty graphics protocol";
 
 function warn(msg: string): void {
   process.stderr.write(sanitizeTerminalBlock(`mdpx: ${msg}\n`));
@@ -23,30 +24,19 @@ function errorText(e: unknown): string {
   return e instanceof Error ? (e.stack ?? e.message) : String(e);
 }
 
-function usageExit(): never {
-  warn("usage: mdpx <file.md>");
-  process.exit(1);
-}
-
-function unsupportedTerminalExit(): never {
-  warn("run this in a terminal that supports the kitty graphics protocol");
-  process.exit(1);
-}
-
-function errorExit(e: unknown): never {
-  warn(errorText(e));
+function fail(msg: string): never {
+  warn(msg);
   process.exit(1);
 }
 
 function resolveCliMdPath(argv: string[]): string {
   const arg = argv[0];
-  if (!arg) usageExit();
+  if (!arg) fail("usage: mdpx <file.md>");
   try {
     const resolved = resolve(arg);
     if (statSync(resolved).isFile()) return realpathSync(resolved);
   } catch {}
-  warn(`file not found: ${arg}`);
-  process.exit(1);
+  fail(`file not found: ${arg}`);
 }
 
 async function runApp(mdPath: string): Promise<void> {
@@ -54,14 +44,13 @@ async function runApp(mdPath: string): Promise<void> {
   const fileName = basename(mdPath);
   const watchTarget = fileName.normalize("NFC").toLowerCase();
 
-  if (!process.stdout.isTTY || !process.stdin.isTTY) unsupportedTerminalExit();
+  if (!process.stdout.isTTY || !process.stdin.isTTY) fail(UNSUPPORTED_TERMINAL);
 
   const chromeExecutable = await resolveExecutable();
   if (!chromeExecutable) {
-    warn(
+    fail(
       "no Chrome or Chromium found. Install Google Chrome or a non-Snap Chromium, or point PUPPETEER_EXECUTABLE_PATH at one",
     );
-    process.exit(1);
   }
 
   const term = new Term();
@@ -101,7 +90,7 @@ async function runApp(mdPath: string): Promise<void> {
   const cell = await term.queryCellSize(CELL_QUERY_MS);
   if (!cell || !(await term.queryKittyGraphics(GRAPHICS_QUERY_TIMEOUT_MS))) {
     term.restore();
-    unsupportedTerminalExit();
+    fail(UNSUPPORTED_TERMINAL);
   }
 
   let assets: Record<Theme, Assets>;
@@ -164,4 +153,4 @@ async function runApp(mdPath: string): Promise<void> {
 }
 
 const mdPath = resolveCliMdPath(process.argv.slice(2));
-runApp(mdPath).catch(errorExit);
+runApp(mdPath).catch((e) => fail(errorText(e)));
