@@ -34,7 +34,7 @@
     "test": "bun test src/",
     "test:integration": "bun test integration/",
     "test:node": "node integration/node-runtime.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
