@@ -93,6 +93,11 @@ export class Scheduler {
     return contentRows(this.geometry.rows);
   }
 
+  // A pending scroll may burst to the total budget until it commits.
+  private get residentLimit(): number {
+    return this.pendingScrollPx !== null ? this.geometry.maxTotalResident : this.geometry.maxResident;
+  }
+
   dispatch(event: SchedulerEvent): Action[] {
     switch (event.type) {
       case "trigger":
@@ -209,8 +214,7 @@ export class Scheduler {
       this.scrollFailed = false;
       const pg = this.pipeGen;
       if (pg && pg.tiles.length > 0 && pg !== shown) {
-        const pgScroll = clampScroll(req, pg.contentHeightPx, this.contentRows, cellHpx, renderScale);
-        this.shootQueue = this.queueAround(pg, pgScroll, direction, this.geometry.maxResident);
+        this.shootQueue = this.queueAround(pg, this.scrollFor(pg), direction, this.geometry.maxResident);
         return [{ type: "redraw" }];
       }
       const actions: Action[] = [{ type: "redraw" }];
@@ -219,11 +223,7 @@ export class Scheduler {
     }
     const pg = this.pipeGen;
     if (pg && pg.tiles.length > 0) {
-      const pgScroll =
-        pg === shown
-          ? req
-          : clampScroll(req, pg.contentHeightPx, this.contentRows, cellHpx, renderScale);
-      this.shootQueue = this.queueAround(pg, pgScroll, direction, this.geometry.maxTotalResident);
+      this.shootQueue = this.queueAround(pg, this.clampPendingToGen(pg)!, direction, this.geometry.maxTotalResident);
       return [{ type: "redraw" }];
     }
     if (pg) {
@@ -285,7 +285,7 @@ export class Scheduler {
 
   private takeCommitted(g: GenState): boolean {
     const pend = this.clampPendingToGen(g);
-    if (pend === null || this.pendingScrollPx === null || !this.allVisibleResident(g, pend)) return false;
+    if (pend === null || !this.allVisibleResident(g, pend)) return false;
     this.scrollPx = pend;
     this.pendingScrollPx = null;
     this.scrollFailed = false;
@@ -308,7 +308,7 @@ export class Scheduler {
       const out = new Set<number>();
       for (const t of this.visibleSet(g, this.scrollPx)) out.add(t);
       const pend = this.clampPendingToGen(g);
-      if (pend !== null && this.pendingScrollPx !== null) {
+      if (pend !== null) {
         for (const t of this.visibleSet(g, pend)) out.add(t);
       }
       return out;
@@ -343,11 +343,7 @@ export class Scheduler {
     g.tiles = tiles;
     g.truncated = truncated;
     g.contentHeightPx = contentHeightPx;
-    const { cellHpx, renderScale } = this.geometry;
-    const base = this.pendingScrollPx ?? this.scrollPx;
-    const promoScroll = clampScroll(base, contentHeightPx, this.contentRows, cellHpx, renderScale);
-    const limit = this.pendingScrollPx !== null ? this.geometry.maxTotalResident : this.geometry.maxResident;
-    this.shootQueue = this.queueAround(g, promoScroll, 0, limit);
+    this.shootQueue = this.queueAround(g, this.scrollFor(g), 0, this.residentLimit);
     return this.drive();
   }
 
@@ -380,15 +376,8 @@ export class Scheduler {
       if (shown && shown.gen === gen) {
         shown.resident.add(tileIndex);
         const committed = this.takeCommitted(shown);
-        if (committed) {
-          const freed = this.evictToSize(shown, this.geometry.maxResident);
-          if (this.pipeGen) this.shrinkQueueToSteady(this.pipeGen);
-          const actions: Action[] = [{ type: "redraw" }];
-          if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
-          return actions;
-        }
-        const limit = this.pendingScrollPx !== null ? this.geometry.maxTotalResident : this.geometry.maxResident;
-        const freed = this.evictToSize(shown, limit);
+        const freed = this.evictToSize(shown, this.residentLimit);
+        if (committed && this.pipeGen) this.shrinkQueueToSteady(this.pipeGen);
         const actions: Action[] = [{ type: "redraw" }];
         if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
         return actions;
@@ -398,8 +387,7 @@ export class Scheduler {
     this.shootInFlight = false;
     g.resident.add(tileIndex);
     if (this.rerun) return this.abortStalePipeline();
-    const usesTemporary = this.pendingScrollPx !== null && g === this.pipeGen;
-    const freed = this.evictToSize(g, usesTemporary ? this.geometry.maxTotalResident : this.geometry.maxResident);
+    const freed = this.evictToSize(g, this.residentLimit);
     const actions = this.drive();
     const withRedraw = actions[0]?.type === "redraw" ? actions : [{ type: "redraw" } as Action, ...actions];
     return freed.length ? [...withRedraw, { type: "deleteGen", imageIds: freed }] : withRedraw;
@@ -444,12 +432,10 @@ export class Scheduler {
   private drive(): Action[] {
     const g = this.pipeGen;
     if (!g) return [];
-    const { cellHpx, renderScale } = this.geometry;
     const actions: Action[] = [];
 
     if (this.displayGen !== g) {
-      const base = this.pendingScrollPx ?? this.scrollPx;
-      const promoScroll = clampScroll(base, g.contentHeightPx, this.contentRows, cellHpx, renderScale);
+      const promoScroll = this.scrollFor(g);
       if (this.allVisibleResident(g, promoScroll)) {
         const old = this.displayGen;
         const hadPending = this.pendingScrollPx !== null;
@@ -483,32 +469,18 @@ export class Scheduler {
           const freedOld = this.evictToSize(old, this.geometry.maxTotalResident - g.resident.size - 1);
           if (freedOld.length) actions.push({ type: "deleteGen", imageIds: freedOld });
         }
-        const temporary = this.pendingScrollPx !== null && g === this.pipeGen;
-        // Reserve decoded storage before the transfer lands; a pending scroll may burst
-        // to the total budget until the post-commit shrink restores the steady cap.
-        const newBudget = temporary
-          ? this.geometry.maxTotalResident - (old?.resident.size ?? 0) - 1
-          : Math.min(
-              this.geometry.maxResident - 1,
-              this.geometry.maxTotalResident - (old?.resident.size ?? 0) - 1,
-            );
+        // Reserve decoded storage before the transfer lands.
+        const newBudget =
+          Math.min(this.residentLimit, this.geometry.maxTotalResident - (old?.resident.size ?? 0)) - 1;
         const freed = this.evictToSize(g, newBudget);
         if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
-        const oldSize = old?.resident.size ?? 0;
-        const newSize = g.resident.size;
-        const fitsTotal = oldSize + newSize + 1 <= this.geometry.maxTotalResident;
-        const fits = temporary
-          ? fitsTotal
-          : newSize + 1 <= this.geometry.maxResident && fitsTotal;
-        if (!fits) {
+        if (g.resident.size > newBudget) {
           if (this.geometry.exceedsStorage && old) {
             // Single-generation mode: drop the old display instead of overflowing storage.
             this.pushReleaseGen(old, actions);
             this.displayGen = null;
             old = null;
-            const retryTotal = g.resident.size + 1 <= this.geometry.maxTotalResident;
-            const retryResident = g.resident.size + 1 <= this.geometry.maxResident;
-            if (retryTotal && retryResident) {
+            if (g.resident.size + 1 <= this.geometry.maxResident) {
               this.shootInFlight = true;
               actions.push(this.shootAction(g, next));
             } else {
@@ -561,7 +533,7 @@ export class Scheduler {
   private resumePendingDisplay(actions: Action[]): boolean {
     const shown = this.displayGen;
     const pend = shown ? this.clampPendingToGen(shown) : null;
-    if (!shown || pend === null || this.pendingScrollPx === null) return false;
+    if (!shown || pend === null) return false;
     if (this.takeCommitted(shown)) {
       actions.push({ type: "redraw" });
       actions.push(...this.startPrefetchIfNeeded(0));
