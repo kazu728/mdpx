@@ -91,15 +91,14 @@ export class Pipeline {
   }
 
   private async handleChromeError(e: unknown, gen: number): Promise<void> {
-    const { scheduler, isShuttingDown } = this.deps;
+    const { scheduler, isShuttingDown, onFatal } = this.deps;
+    if (isShuttingDown()) return;
     if (e instanceof ContentError) {
-      if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
+      this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
       return;
     }
-    if (!isShuttingDown()) {
-      const reason = e instanceof Error ? e.message : String(e);
-      await this.deps.onFatal(`Chrome failed: ${reason}`);
-    }
+    const reason = e instanceof Error ? e.message : String(e);
+    await onFatal(`Chrome failed: ${reason}`);
   }
 
   private async runRender(gen: number): Promise<void> {
