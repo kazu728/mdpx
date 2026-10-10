@@ -18,16 +18,9 @@ const MAX_CELL_PX = 1000;
 
 const GFX_PROBE_ID = 31;
 
-const KEY_Q = "q".charCodeAt(0);
-const KEY_J = "j".charCodeAt(0);
-const KEY_K = "k".charCodeAt(0);
-const KEY_G = "g".charCodeAt(0);
-const KEY_SHIFT_G = "G".charCodeAt(0);
-const KEY_T = "t".charCodeAt(0);
-const KEY_SPACE = " ".charCodeAt(0);
-const KEY_CTRL_C = 0x03;
-const KEY_CTRL_D = 0x04;
-const KEY_CTRL_U = 0x15;
+const KEY_CTRL_C = "\x03";
+const KEY_CTRL_D = "\x04";
+const KEY_CTRL_U = "\x15";
 const CURSOR_UP_FINAL = 0x41;
 const CURSOR_DOWN_FINAL = 0x42;
 const OSC_INTRODUCER = 0x5d;
@@ -247,31 +240,31 @@ export class Term {
   }
 
   private handleByte(b: number): void {
-    switch (b) {
-      case KEY_Q:
+    switch (String.fromCharCode(b)) {
+      case "q":
       case KEY_CTRL_C:
         this.emit({ type: "quit" });
         break;
-      case KEY_T:
+      case "t":
         this.emit({ type: "theme" });
         break;
-      case KEY_J:
+      case "j":
         this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
         break;
-      case KEY_K:
+      case "k":
         this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } });
         break;
-      case KEY_SPACE:
+      case " ":
       case KEY_CTRL_D:
         this.emit({ type: "scroll", delta: { kind: "halfpage", dir: 1 } });
         break;
       case KEY_CTRL_U:
         this.emit({ type: "scroll", delta: { kind: "halfpage", dir: -1 } });
         break;
-      case KEY_G:
+      case "g":
         this.emit({ type: "scroll", delta: { kind: "top" } });
         break;
-      case KEY_SHIFT_G:
+      case "G":
         this.emit({ type: "scroll", delta: { kind: "bottom" } });
         break;
     }
