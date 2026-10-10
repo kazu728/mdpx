@@ -9,6 +9,10 @@
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
+      packages = forAll (pkgs: {
+        default = pkgs.callPackage ./package.nix { };
+      });
+
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
           packages = [ pkgs.bun ];
