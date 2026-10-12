@@ -6,11 +6,11 @@ import {
   maxScrollPx,
   scrollUnitPx,
   visibleTiles,
+  type Geometry,
   type ScrollDirection,
   type Tile,
-} from "./viewport.ts";
+} from "./geometry.ts";
 import { imageId } from "./kitty.ts";
-import type { Geometry } from "./geometry.ts";
 
 export type ScrollDelta =
   | { kind: "lines"; n: number }

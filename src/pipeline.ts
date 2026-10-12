@@ -1,12 +1,11 @@
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { Chrome, ContentError } from "./chrome.ts";
-import { renderFrame } from "./frame.ts";
 import { buildHtml, type Assets, type Theme } from "./html.ts";
 import { deleteImage, imageId, transmit } from "./kitty.ts";
 import { Scheduler, type Action, type SchedulerEvent } from "./scheduler.ts";
-import { Term } from "./term.ts";
-import { CSS_SCALE } from "./viewport.ts";
+import { renderFrame, Term } from "./term.ts";
+import { CSS_SCALE } from "./geometry.ts";
 
 type ShootAction = Extract<Action, { type: "shoot" }>;
 

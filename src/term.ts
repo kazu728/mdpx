@@ -1,6 +1,15 @@
-import { deleteAll } from "./kitty.ts";
-import type { CellSize, ScreenSize } from "./geometry.ts";
-import type { ScrollDelta } from "./scheduler.ts";
+import stringWidth from "string-width";
+import { deleteAll, deletePlacement, imageId, place } from "./kitty.ts";
+import {
+  CSS_SCALE,
+  contentRows,
+  maxScrollPx,
+  toImagePx,
+  visibleTiles,
+  type CellSize,
+  type ScreenSize,
+} from "./geometry.ts";
+import type { ScrollDelta, ViewState } from "./scheduler.ts";
 
 const ESC = "\x1b";
 const ALT_ENTER = `${ESC}[?1049h`;
@@ -11,6 +20,12 @@ const HIDE_CURSOR = `${ESC}[?25l`;
 const SHOW_CURSOR = `${ESC}[?25h`;
 // CSI 2J wipes stored kitty images; only safe before the first transfer. Later frames use CSI 0J.
 const CLEAR_SCREEN = `${ESC}[2J`;
+const SYNC_START = `${ESC}[?2026h`;
+const SYNC_END = `${ESC}[?2026l`;
+const HOME = `${ESC}[H`;
+const ERASE_BELOW = `${ESC}[J`;
+const cursorTo = (row: number, col: number) => `${ESC}[${row};${col}H`;
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export type Key = { type: "quit" } | { type: "theme" } | { type: "scroll"; delta: ScrollDelta };
 
@@ -61,7 +76,7 @@ export function sanitizeTerminalBlock(s: string): string {
   return s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "?");
 }
 
-export function sanitizeTerminalLine(s: string): string {
+function sanitizeTerminalLine(s: string): string {
   return s.replace(/[\x00-\x1f\x7f]/g, "?");
 }
 
@@ -192,7 +207,7 @@ export class Term {
         }
         i = end;
       } else {
-        // A lone ESC consumes one byte so ESC→j / ESC→arrow keeps its follow-up.
+        // A lone ESC consumes one byte so ESC→Space / ESC→arrow keeps its follow-up.
         i += 1;
       }
     }
@@ -243,12 +258,6 @@ export class Term {
       case "t":
         this.emit({ type: "theme" });
         break;
-      case "j":
-        this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
-        break;
-      case "k":
-        this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } });
-        break;
       case " ":
       case KEY_CTRL_D:
         this.emit({ type: "scroll", delta: { kind: "halfpage", dir: 1 } });
@@ -287,4 +296,101 @@ export class Term {
     this.raw = false;
     process.stdin.pause();
   }
+}
+
+export function renderFrame(
+  view: ViewState,
+  filename: string,
+  prevPlacements: number[],
+): { escape: string; placements: number[] } {
+  const { geometry } = view;
+
+  let out = SYNC_START;
+  for (const id of prevPlacements) out += deletePlacement(id);
+  out += HOME + ERASE_BELOW;
+
+  const placed: number[] = [];
+  const shown = view.displayGen;
+  if (shown) {
+    const vis = visibleTiles(view.scrollPx, contentRows(geometry.rows), geometry.cellHpx, shown.tiles);
+    for (const p of vis) {
+      const id = imageId(shown.gen, p.tileIndex);
+      out += cursorTo(p.destinationRow + 1, 1);
+      out += place({
+        id,
+        sourceXImagePx: 0,
+        sourceYImagePx: toImagePx(p.sourceTopPx, geometry.renderScale),
+        sourceWidthImagePx: geometry.imgWidthPx,
+        sourceHeightImagePx: toImagePx(p.sourceHeightPx, geometry.renderScale),
+        displayColumns: geometry.cols,
+        displayRows: p.destinationRows,
+      });
+      placed.push(id);
+    }
+  }
+
+  out += cursorTo(geometry.rows, 1);
+  out += statusBar(view, filename);
+  out += SYNC_END;
+  return { escape: out, placements: placed };
+}
+
+function statusBar(view: ViewState, filename: string): string {
+  const { geometry, scrollPx, phase, pendingScrollPx } = view;
+  const shown = view.displayGen;
+  const max = shown
+    ? maxScrollPx(
+        shown.contentHeightPx,
+        contentRows(geometry.rows),
+        geometry.cellHpx,
+        geometry.renderScale,
+      )
+    : 0;
+  const pct = !shown ? "--" : max > 0 ? String(Math.round((scrollPx / max) * 100)) : "100";
+  const state = pendingScrollPx !== null
+    ? "scrolling…"
+    : phase === "rendering"
+      ? shown
+        ? "updating"
+        : "rendering…"
+      : view.failure
+        ? shown
+          ? "update failed"
+          : "render failed"
+        : shown && shown.truncated && scrollPx >= max
+          ? "truncated"
+          : "";
+  // Capacity outlives transient states so it survives at a truncated tail.
+  const capacity = geometry.exceedsFrameLimit
+    ? "too wide"
+    : geometry.exceedsStorage
+      ? "too many"
+      : geometry.renderScale < CSS_SCALE
+        ? "low-res"
+        : "";
+  const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");
+  const right = "q:quit";
+  const cols = geometry.cols;
+  const { text, displayWidth: leftW } = truncateToDisplayWidth(left, cols);
+  const rightW = stringWidth(right);
+  const line =
+    leftW + 1 + rightW <= cols
+      ? text + " ".repeat(cols - leftW - rightW) + right
+      : text + " ".repeat(cols - leftW);
+  return `${ESC}[7m${line}${ESC}[0m`;
+}
+
+export function truncateToDisplayWidth(
+  text: string,
+  maxDisplayWidth: number,
+): { text: string; displayWidth: number } {
+  let truncatedText = "";
+  let displayWidth = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    const segmentWidth = stringWidth(segment);
+    if (displayWidth + segmentWidth > maxDisplayWidth) break;
+    truncatedText += segment;
+    displayWidth += segmentWidth;
+  }
+  return { text: truncatedText, displayWidth };
 }

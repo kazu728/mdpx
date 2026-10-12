@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { renderFrame } from "./frame.ts";
-import { detectGraphicsLimits, resolveGeometry, type Geometry } from "./geometry.ts";
+import { renderFrame } from "./term.ts";
+import { alignedTileHeightPx, detectGraphicsLimits, resolveGeometry, type Geometry } from "./geometry.ts";
 import { IMAGE_ID_GENERATION_STRIDE, imageId } from "./kitty.ts";
 import { Scheduler, type Action, type ScrollDelta } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
-import { alignedTileHeightPx } from "./viewport.ts";
 
 type Shoot = Extract<Action, { type: "shoot" }>;
 

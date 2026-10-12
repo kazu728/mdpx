@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildHtml, resolveAssets } from "../src/html.ts";
 import { Chrome, resolveExecutable } from "../src/chrome.ts";
-import { alignedTileHeightPx, CSS_SCALE } from "../src/viewport.ts";
+import { alignedTileHeightPx, CSS_SCALE } from "../src/geometry.ts";
 
 const exe = await resolveExecutable();
 if (!exe) {

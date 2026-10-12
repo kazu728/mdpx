@@ -1,5 +1,4 @@
-import type { Geometry } from "./geometry.ts";
-import { alignedTileHeightPx } from "./viewport.ts";
+import { alignedTileHeightPx, type Geometry } from "./geometry.ts";
 
 export const GEO: Geometry = {
   rows: 51,
