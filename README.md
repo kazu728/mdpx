@@ -26,7 +26,6 @@ mdpx <file.md>
 
 | Key | Action |
 | --- | --- |
-| `j` `k` | scroll by line |
 | Space `Ctrl-D` `Ctrl-U` | half page |
 | `g` `G` | top / bottom |
 | `t` | toggle theme |
