@@ -24,7 +24,6 @@ const PNG_IHDR_HEIGHT_OFFSET = 20;
 let dir: string;
 let htmlPath: string;
 let chrome: Chrome;
-let documentHeightCssPx: number;
 
 function pngSize(data: Uint8Array): { width: number; height: number } {
   const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
@@ -49,8 +48,6 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
 
     chrome = new Chrome(exe!);
     await chrome.launch();
-    documentHeightCssPx = await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
-    expect(documentHeightCssPx).toBeGreaterThan(0);
   }, 60000);
 
   afterAll(async () => {
@@ -59,15 +56,28 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
   });
 
   test("Mermaid becomes SVG on the client", async () => {
+    expect(await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE)).toBeGreaterThan(0);
     expect(await chrome.page!.evaluate(() => document.querySelectorAll(".mermaid svg").length)).toBe(1);
-  });
+  }, 30000);
 
   test("both render scales keep the CSS layout and cell-aligned PNG dimensions", async () => {
+    // Font loading and Mermaid can change the sample document's height between loads.
+    const layoutPath = join(dir, "layout.html");
+    await writeFile(
+      layoutPath,
+      await buildHtml({
+        markdown: `<div style="height: 1200px"></div>`,
+        mdDir: dirname(FIXTURE),
+        assets: resolveAssets(),
+        theme: "light",
+      }),
+    );
+    const documentHeightCssPx = await chrome.load(layoutPath, CSS_WIDTH, CSS_SCALE);
     const tileH = alignedTileHeightPx(CELL_HPX, CONTENT_ROWS);
     const fullPng = pngSize(Buffer.from(await chrome.shoot(0, tileH / CSS_SCALE), "base64"));
     expect(fullPng.height).toBe(tileH);
     expect(fullPng.width).toBe(CSS_WIDTH * CSS_SCALE);
-    const reduced = await chrome.load(htmlPath, CSS_WIDTH, 1);
+    const reduced = await chrome.load(layoutPath, CSS_WIDTH, 1);
     const reducedPng = pngSize(Buffer.from(await chrome.shoot(0, tileH / CSS_SCALE), "base64"));
 
     expect(reduced).toBe(documentHeightCssPx);
