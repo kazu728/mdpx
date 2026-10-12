@@ -18,7 +18,7 @@ export type ScrollDelta =
   | { kind: "top" }
   | { kind: "bottom" };
 
-type SchedulerEvent =
+export type SchedulerEvent =
   | { type: "trigger" }
   | { type: "resize"; geometry: Geometry }
   | { type: "key"; delta: ScrollDelta }
@@ -194,10 +194,7 @@ export class Scheduler {
     const req = clampScroll(px, contentHeightPx, this.contentRows, cellHpx, renderScale);
     this.pendingScrollPx = req;
     const capture = this.capture;
-    if (this.allVisibleResident(shown, req)) {
-      this.scrollPx = req;
-      this.pendingScrollPx = null;
-      this.scrollFailed = false;
+    if (this.takeCommitted(shown)) {
       if (capture && capture.target.tiles.length > 0 && capture.target !== shown) {
         capture.queue = this.queueAround(
           capture.target,
@@ -207,9 +204,7 @@ export class Scheduler {
         );
         return [{ type: "redraw" }];
       }
-      const actions: Action[] = [{ type: "redraw" }];
-      actions.push(...this.startPrefetchIfNeeded(direction));
-      return actions;
+      return [{ type: "redraw" }, ...this.startPrefetchIfNeeded(direction)];
     }
     if (capture) {
       if (capture.target.tiles.length > 0) {
@@ -231,17 +226,14 @@ export class Scheduler {
     direction: ScrollDirection,
     limit: number,
   ): number[] {
-    const visible = visibleTiles(scroll, this.contentRows, this.geometry.cellHpx, g.tiles).map(
-      (placement) => placement.tileIndex,
-    );
-    const visibleSet = new Set(visible);
+    const visible = this.visibleSet(g, scroll);
     const nearby = backfillOrder(
       scroll,
       this.contentRows,
       this.geometry.cellHpx,
       g.tiles,
       direction,
-    ).filter((tileIndex) => !visibleSet.has(tileIndex));
+    ).filter((tileIndex) => !visible.has(tileIndex));
     return [...visible, ...nearby].slice(0, Math.max(0, limit));
   }
 
@@ -336,22 +328,17 @@ export class Scheduler {
   private onRenderFailed(gen: number): Action[] {
     const g = this.capture?.target;
     if (!g || g.gen !== gen) return [];
-    const promoted = this.displayGen === g;
     const actions: Action[] = [];
-    if (!promoted) {
-      this.capture = null;
-      this.pushReleaseGen(g, actions);
+    if (this.displayGen !== g) {
       this.failedGen = g.gen;
       if (this.rerun) {
+        this.pushReleaseGen(g, actions);
         actions.push({ type: "redraw" });
         actions.push(...this.startPipeline());
         return actions;
       }
-      if (this.resumePendingDisplay(actions)) return actions;
-      actions.push({ type: "redraw" });
-      return actions;
     }
-    this.failDisplayedGen(g, actions);
+    this.settleStalled(g, actions);
     return actions;
   }
 
@@ -362,10 +349,9 @@ export class Scheduler {
       if (shown && shown.gen === gen) {
         shown.resident.add(tileIndex);
         const committed = this.takeCommitted(shown);
-        const freed = this.evictToSize(shown, this.residentLimit);
-        if (committed && this.capture) this.shrinkQueueToSteady(this.capture);
         const actions: Action[] = [{ type: "redraw" }];
-        if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
+        this.pushEvict(shown, this.residentLimit, actions);
+        if (committed && this.capture) this.shrinkQueueToSteady(this.capture);
         return actions;
       }
       return [{ type: "deleteGen", imageIds: [imageId(gen, tileIndex)] }];
@@ -376,7 +362,7 @@ export class Scheduler {
     if (this.rerun) return this.abortStalePipeline();
     const freed = this.evictToSize(g, this.residentLimit);
     const actions = this.drive();
-    const withRedraw = actions[0]?.type === "redraw" ? actions : [{ type: "redraw" } as Action, ...actions];
+    const withRedraw: Action[] = actions[0]?.type === "redraw" ? actions : [{ type: "redraw" }, ...actions];
     return freed.length ? [...withRedraw, { type: "deleteGen", imageIds: freed }] : withRedraw;
   }
 
@@ -436,60 +422,40 @@ export class Scheduler {
         if (old) {
           this.pushReleaseGen(old, actions);
         }
-        const shrunk = this.evictToSize(g, this.geometry.maxResident);
-        if (shrunk.length) actions.push({ type: "deleteGen", imageIds: shrunk });
+        this.pushEvict(g, this.geometry.maxResident, actions);
         this.shrinkQueueToSteady(capture);
       }
-    } else if (this.pendingScrollPx !== null) {
-      if (this.takeCommitted(g)) {
-        actions.push({ type: "redraw" });
-        const shrunk = this.evictToSize(g, this.geometry.maxResident);
-        if (shrunk.length) actions.push({ type: "deleteGen", imageIds: shrunk });
-        this.shrinkQueueToSteady(capture);
-      }
+    } else if (this.takeCommitted(g)) {
+      actions.push({ type: "redraw" });
+      this.pushEvict(g, this.geometry.maxResident, actions);
+      this.shrinkQueueToSteady(capture);
     }
 
-    if (!capture.inFlight) {
-      const next = this.nextShoot(capture);
-      if (next !== null) {
-        let old = this.displayGen !== g ? this.displayGen : null;
-        if (old) {
-          const freedOld = this.evictToSize(old, this.geometry.maxTotalResident - g.resident.size - 1);
-          if (freedOld.length) actions.push({ type: "deleteGen", imageIds: freedOld });
-        }
-        // Reserve decoded storage before the transfer lands.
-        const newBudget =
-          Math.min(this.residentLimit, this.geometry.maxTotalResident - (old?.resident.size ?? 0)) - 1;
-        const freed = this.evictToSize(g, newBudget);
-        if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
-        if (g.resident.size > newBudget) {
-          if (this.geometry.exceedsStorage && old) {
-            // Single-generation mode: drop the old display instead of overflowing storage.
-            this.pushReleaseGen(old, actions);
-            this.displayGen = null;
-            old = null;
-            if (g.resident.size + 1 <= this.geometry.maxResident) {
-              capture.inFlight = true;
-              actions.push(this.shootAction(g, next));
-            } else {
-              this.settleStalled(g, actions);
-            }
-          } else {
-            this.settleStalled(g, actions);
-          }
-        } else {
-          capture.inFlight = true;
-          actions.push(this.shootAction(g, next));
-        }
-      } else if (this.displayGen === g) {
-        if (this.pendingScrollPx !== null) {
-          this.settleStalled(g, actions);
-        } else {
-          this.capture = null;
-        }
-      } else {
-        this.settleStalled(g, actions);
-      }
+    if (capture.inFlight) return actions;
+    const next = this.nextShoot(capture);
+    if (next === null) {
+      if (this.displayGen === g && this.pendingScrollPx === null) this.capture = null;
+      else this.settleStalled(g, actions);
+      return actions;
+    }
+    const old = this.displayGen !== g ? this.displayGen : null;
+    if (old) this.pushEvict(old, this.geometry.maxTotalResident - g.resident.size - 1, actions);
+    // Reserve decoded storage before the transfer lands.
+    const newBudget =
+      Math.min(this.residentLimit, this.geometry.maxTotalResident - (old?.resident.size ?? 0)) - 1;
+    this.pushEvict(g, newBudget, actions);
+    let fits = g.resident.size <= newBudget;
+    if (!fits && this.geometry.exceedsStorage && old) {
+      // Single-generation mode: drop the old display instead of overflowing storage.
+      this.pushReleaseGen(old, actions);
+      this.displayGen = null;
+      fits = g.resident.size + 1 <= this.geometry.maxResident;
+    }
+    if (fits) {
+      capture.inFlight = true;
+      actions.push(this.shootAction(g, next));
+    } else {
+      this.settleStalled(g, actions);
     }
     return actions;
   }
@@ -498,6 +464,11 @@ export class Scheduler {
     const ids = Array.from(g.resident, (i) => imageId(g.gen, i));
     if (ids.length) actions.push({ type: "deleteGen", imageIds: ids });
     actions.push({ type: "releaseGen", gen: g.gen });
+  }
+
+  private pushEvict(g: GenState, maxSize: number, actions: Action[]): void {
+    const freed = this.evictToSize(g, maxSize);
+    if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
   }
 
   private resumePendingDisplay(actions: Action[]): boolean {
@@ -519,8 +490,7 @@ export class Scheduler {
     this.pendingScrollPx = null;
     this.capture = null;
     actions.push({ type: "redraw" });
-    const freed = this.evictToSize(g, this.geometry.maxResident);
-    if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
+    this.pushEvict(g, this.geometry.maxResident, actions);
     if (this.rerun) actions.push(...this.startPipeline());
   }
 
@@ -549,7 +519,6 @@ export class Scheduler {
   }
 
   private allVisibleResident(g: GenState, scroll: number): boolean {
-    const vis = visibleTiles(scroll, this.contentRows, this.geometry.cellHpx, g.tiles);
-    return vis.every((p) => g.resident.has(p.tileIndex));
+    return this.visibleSet(g, scroll).isSubsetOf(g.resident);
   }
 }

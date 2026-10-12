@@ -21,8 +21,6 @@ const GFX_PROBE_ID = 31;
 const KEY_CTRL_C = "\x03";
 const KEY_CTRL_D = "\x04";
 const KEY_CTRL_U = "\x15";
-const CURSOR_UP_FINAL = 0x41;
-const CURSOR_DOWN_FINAL = 0x42;
 const OSC_INTRODUCER = 0x5d;
 const DCS_INTRODUCER = 0x50;
 const APC_INTRODUCER = 0x5f;
@@ -133,10 +131,7 @@ export class Term {
    */
   queryKittyGraphics(timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
-      let settled = false;
       const finish = (v: boolean) => {
-        if (settled) return;
-        settled = true;
         if (this.kittyGraphicsReplyHandler === onGraphics) this.kittyGraphicsReplyHandler = null;
         if (this.primaryDaReplyHandler === onDa) this.primaryDaReplyHandler = null;
         clearTimeout(timer);
@@ -181,7 +176,7 @@ export class Term {
           i += 1;
           continue;
         }
-        this.handleCursorKey(buf[i + 2]!);
+        this.handleCursorKey(String.fromCharCode(buf[i + 2]!));
         i += 3;
       } else if (
         kind === OSC_INTRODUCER ||
@@ -231,12 +226,12 @@ export class Term {
       this.primaryDaReplyHandler?.();
       return;
     }
-    this.handleCursorKey(final);
+    this.handleCursorKey(ch);
   }
 
-  private handleCursorKey(final: number): void {
-    if (final === CURSOR_UP_FINAL) this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } });
-    else if (final === CURSOR_DOWN_FINAL) this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
+  private handleCursorKey(final: string): void {
+    if (final === "A") this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } });
+    else if (final === "B") this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
   }
 
   private handleByte(b: number): void {

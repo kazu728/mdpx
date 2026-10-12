@@ -3,7 +3,8 @@ import { realpathSync, statSync, watch, type FSWatcher } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { resolveAssets, type Assets, type Theme } from "./html.ts";
+import { setTimeout as sleep } from "node:timers/promises";
+import { resolveAssets } from "./html.ts";
 import { Chrome, resolveExecutable } from "./chrome.ts";
 import { Pipeline } from "./pipeline.ts";
 import { Scheduler } from "./scheduler.ts";
@@ -24,6 +25,10 @@ function errorText(e: unknown): string {
   return e instanceof Error ? (e.stack ?? e.message) : String(e);
 }
 
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 function fail(msg: string): never {
   warn(msg);
   process.exit(1);
@@ -41,8 +46,7 @@ function resolveCliMdPath(argv: string[]): string {
 
 async function runApp(mdPath: string): Promise<void> {
   const mdDir = dirname(mdPath);
-  const fileName = basename(mdPath);
-  const watchTarget = fileName.normalize("NFC").toLowerCase();
+  const watchTarget = basename(mdPath).normalize("NFC").toLowerCase();
 
   if (!process.stdout.isTTY || !process.stdin.isTTY) fail(UNSUPPORTED_TERMINAL);
 
@@ -70,83 +74,75 @@ async function runApp(mdPath: string): Promise<void> {
       watcher?.close();
       term.restore();
       if (message) warn(message);
-      await Promise.race([chrome.close(), new Promise((r) => setTimeout(r, CHROME_CLOSE_TIMEOUT_MS))]);
+      await Promise.race([chrome.close(), sleep(CHROME_CLOSE_TIMEOUT_MS)]);
       if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
     } catch {}
     process.exit(code);
   }
 
-  let pipeline: Pipeline | null = null;
+  let started: Pipeline | null = null;
   term.onKey((k) => {
     if (k.type === "quit") return void shutdown(0);
-    if (shuttingDown || !pipeline) return;
-    if (k.type === "theme") return pipeline.toggleTheme();
-    pipeline.execute(scheduler.dispatch({ type: "key", delta: k.delta }));
+    if (shuttingDown || !started) return;
+    if (k.type === "theme") return started.toggleTheme();
+    started.dispatch({ type: "key", delta: k.delta });
   });
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => void shutdown(0));
   process.on("uncaughtException", (e) => void shutdown(1, errorText(e)));
   process.on("unhandledRejection", (e) => void shutdown(1, errorText(e)));
 
-  const cell = await term.queryCellSize(CELL_QUERY_MS);
-  if (!cell || !(await term.queryKittyGraphics(GRAPHICS_QUERY_TIMEOUT_MS))) {
-    term.restore();
-    fail(UNSUPPORTED_TERMINAL);
-  }
-
-  let assets: Record<Theme, Assets>;
   try {
-    assets = { light: resolveAssets("light"), dark: resolveAssets("dark") };
+    const cell = await term.queryCellSize(CELL_QUERY_MS);
+    if (!cell || !(await term.queryKittyGraphics(GRAPHICS_QUERY_TIMEOUT_MS))) {
+      return shutdown(1, UNSUPPORTED_TERMINAL);
+    }
+
+    const assets = resolveAssets();
     dir = await mkdtemp(join(tmpdir(), "mdpx-"));
-  } catch (e) {
-    return shutdown(1, errorText(e));
-  }
-  try {
-    await chrome.launch();
-  } catch (e) {
-    return shutdown(1, `cannot launch Chrome (${chromeExecutable}): ${errorText(e)}`);
-  }
+    try {
+      await chrome.launch();
+    } catch (e) {
+      return shutdown(1, `cannot launch Chrome (${chromeExecutable}): ${errorText(e)}`);
+    }
 
-  const scheduler = new Scheduler(resolveGeometry(term.size(), cell));
-  pipeline = new Pipeline({
-    chrome,
-    scheduler,
-    term,
-    mdPath,
-    mdDir,
-    fileName,
-    htmlDir: dir,
-    assets,
-    isShuttingDown: () => shuttingDown,
-    onFatal: (message) => shutdown(1, message),
-  });
-
-  let resizeSeq = 0;
-  term.onResizeEvent(() => {
-    const seq = ++resizeSeq;
-    void (async () => {
-      if (shuttingDown) return;
-      const c = await term.queryCellSize(CELL_QUERY_MS);
-      if (!c || shuttingDown || seq !== resizeSeq) return;
-      pipeline.execute(scheduler.dispatch({ type: "resize", geometry: resolveGeometry(term.size(), c) }));
-    })();
-  });
-
-  try {
-    watcher = watch(mdDir, (_event, changed) => {
-      if (changed !== null && changed.normalize("NFC").toLowerCase() !== watchTarget) return;
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => {
-        debounce = null;
-        if (!shuttingDown) pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-      }, WATCH_DEBOUNCE_MS);
+    const pipeline = new Pipeline({
+      chrome,
+      scheduler: new Scheduler(resolveGeometry(term.size(), cell)),
+      term,
+      mdPath,
+      htmlDir: dir,
+      assets,
+      isShuttingDown: () => shuttingDown,
+      onFatal: (e) => shutdown(1, `Chrome failed: ${errorMessage(e)}`),
     });
-  } catch (e) {
-    return shutdown(1, `cannot watch the directory: ${e instanceof Error ? e.message : e}`);
-  }
+    started = pipeline;
 
-  term.enterAltScreen();
-  try {
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
+    let resizeSeq = 0;
+    term.onResizeEvent(() => {
+      const seq = ++resizeSeq;
+      void (async () => {
+        if (shuttingDown) return;
+        const c = await term.queryCellSize(CELL_QUERY_MS);
+        if (!c || shuttingDown || seq !== resizeSeq) return;
+        pipeline.dispatch({ type: "resize", geometry: resolveGeometry(term.size(), c) });
+      })();
+    });
+
+    try {
+      watcher = watch(mdDir, (_event, changed) => {
+        if (changed !== null && changed.normalize("NFC").toLowerCase() !== watchTarget) return;
+        if (debounce) clearTimeout(debounce);
+        debounce = setTimeout(() => {
+          debounce = null;
+          if (!shuttingDown) pipeline.dispatch({ type: "trigger" });
+        }, WATCH_DEBOUNCE_MS);
+      });
+    } catch (e) {
+      return shutdown(1, `cannot watch the directory: ${errorMessage(e)}`);
+    }
+
+    term.enterAltScreen();
+    pipeline.dispatch({ type: "trigger" });
   } catch (e) {
     return shutdown(1, errorText(e));
   }

@@ -59,8 +59,7 @@ export function computeTiles(
     return { tiles: [], truncated: false, contentHeightPx: 0 };
   }
   const unit = tileAlign(cellHpx);
-  const clampedDocumentHeightPx = Math.max(0, documentHeightPx);
-  const paddedH = Math.ceil(clampedDocumentHeightPx / unit) * unit;
+  const paddedH = Math.ceil(documentHeightPx / unit) * unit;
   const tiles: Tile[] = [];
   let y = 0;
   while (y < paddedH && tiles.length < MAX_TILES) {
@@ -68,17 +67,12 @@ export function computeTiles(
     tiles.push({ topPx: y, heightPx: height });
     y += height;
   }
-  const cellPadded = Math.ceil(clampedDocumentHeightPx / cellHpx) * cellHpx;
+  const cellPadded = Math.ceil(documentHeightPx / cellHpx) * cellHpx;
   return {
     tiles,
     truncated: y < paddedH,
-    contentHeightPx: Math.min(cellPadded, coveredHeightPx(tiles)),
+    contentHeightPx: Math.min(cellPadded, y),
   };
-}
-
-export function coveredHeightPx(tiles: Tile[]): number {
-  const last = tiles[tiles.length - 1];
-  return last ? last.topPx + last.heightPx : 0;
 }
 
 export function maxScrollPx(

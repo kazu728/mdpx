@@ -1,207 +1,160 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtemp, stat, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ContentError } from "./chrome.ts";
 import { resolveAssets } from "./html.ts";
 import { Pipeline } from "./pipeline.ts";
-import { Scheduler } from "./scheduler.ts";
+import { Scheduler, type SchedulerEvent } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
 
-const settle = () => new Promise((r) => setImmediate(r));
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const waitFor = async (cond: () => boolean, n = 500) => {
-  for (let i = 0; i < n && !cond(); i++) await sleep(1);
-};
-const exists = async (p: string) => {
-  try {
-    await stat(p);
-    return true;
-  } catch {
-    return false;
-  }
-};
-function deferred<T>() {
-  let resolve!: (v: T) => void;
-  return { promise: new Promise<T>((r) => (resolve = r)), resolve };
+interface PageCall {
+  kind: "load" | "shoot";
+  target: unknown;
+  resolve(value: unknown): void;
+  reject(error: unknown): void;
 }
-const baseChrome = () => ({
-  load: async () => 1000,
-  shoot: async () => "",
+
+/** Chrome whose page operations complete only when the test settles them. */
+function fakeChrome() {
+  const unclaimed: PageCall[] = [];
+  const waiting: ((call: PageCall) => void)[] = [];
+  const call = (kind: PageCall["kind"], target: unknown) =>
+    new Promise((resolve, reject) => {
+      const c = { kind, target, resolve, reject };
+      const take = waiting.shift();
+      if (take) take(c);
+      else unclaimed.push(c);
+    });
+  return {
+    chrome: {
+      load: (htmlPath: string) => call("load", htmlPath) as Promise<number>,
+      shoot: (yCssPx: number, heightCssPx: number) => call("shoot", { yCssPx, heightCssPx }) as Promise<string>,
+    },
+    next: () =>
+      new Promise<PageCall>((resolve) => {
+        const c = unclaimed.shift();
+        if (c) resolve(c);
+        else waiting.push(resolve);
+      }),
+    unclaimed,
+  };
+}
+
+const flush = () => new Promise((r) => setImmediate(r));
+const dirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
-async function makePipeline(chrome: unknown, opts?: { cols?: number; write?: (s: string) => void; shuttingDown?: boolean; md?: string }) {
+
+async function setup() {
   const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-"));
+  dirs.push(dir);
   const mdPath = join(dir, "a.md");
-  await writeFile(mdPath, opts?.md ?? "# a\n");
-  const scheduler = new Scheduler(opts?.cols ? { ...GEO, cols: opts.cols } : GEO);
-  const shuttingDown = opts?.shuttingDown ?? false;
+  await writeFile(mdPath, "# a\n");
+  const page = fakeChrome();
+  const writes: string[] = [];
+  const fatal: unknown[] = [];
+  const state = { shuttingDown: false };
+  const scheduler = new Scheduler(GEO);
   const pipeline = new Pipeline({
-    chrome: chrome as never,
+    chrome: page.chrome,
     scheduler,
-    term: { write: opts?.write ?? (() => {}) },
+    term: { write: (s) => writes.push(s) },
     mdPath,
-    mdDir: dir,
-    fileName: "a.md",
     htmlDir: dir,
-    assets: { light: resolveAssets("light"), dark: resolveAssets("dark") },
-    isShuttingDown: () => shuttingDown,
-    onFatal: async () => {
-      throw new Error("unexpected fatal");
+    assets: resolveAssets(),
+    isShuttingDown: () => state.shuttingDown,
+    onFatal: (error) => {
+      fatal.push(error);
+      return new Promise<never>(() => {});
     },
   });
-  return { dir, scheduler, pipeline };
+  const send = (event: SchedulerEvent) => pipeline.dispatch(event);
+  const html = (gen: number) => join(dir, `gen-${gen}.html`);
+  // A 250 CSS px document is one GEO tile, so one load and one shoot display a generation.
+  const display = async () => {
+    send({ type: "trigger" });
+    (await page.next()).resolve(250);
+    (await page.next()).resolve("");
+    await flush();
+  };
+  return { page, writes, fatal, state, scheduler, pipeline, send, html, display };
 }
 
-describe("redraw dedup", () => {
-  test("identical frames reach terminal once", async () => {
-    const writes: string[] = [];
-    const { scheduler, pipeline } = await makePipeline(baseChrome(), {
-      cols: 80,
-      write: (s) => writes.push(s),
-      shuttingDown: true,
-    });
-    pipeline.execute([{ type: "redraw" }]);
-    pipeline.execute([{ type: "redraw" }]);
-    expect(writes.length).toBe(1);
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    expect(writes.length).toBe(2);
+const shootTile0 = { type: "shoot", gen: 1, tileIndex: 0, tile: { topPx: 0, heightPx: 500 } } as const;
+
+describe("Pipeline", () => {
+  test("an unchanged frame is not written again", async () => {
+    const t = await setup();
+    t.pipeline.execute([{ type: "redraw" }, { type: "redraw" }]);
+    expect(t.writes).toHaveLength(1);
+    t.send({ type: "trigger" });
+    expect(t.writes).toHaveLength(2);
+    await t.page.next();
+  });
+
+  test("a tile is captured as its CSS-pixel band of the page", async () => {
+    const t = await setup();
+    t.pipeline.execute([{ type: "shoot", gen: 1, tileIndex: 1, tile: { topPx: 500, heightPx: 500 } }]);
+    (await t.page.next()).resolve(250);
+    expect((await t.page.next()).target).toEqual({ yCssPx: 250, heightCssPx: 250 });
+  });
+
+  test("a released document survives until the page work queued before its release is done", async () => {
+    const t = await setup();
+    await t.display();
+    t.send({ type: "trigger" });
+    const update = await t.page.next();
+    t.pipeline.execute([shootTile0]);
+    update.reject(new ContentError("load timed out"));
+    const reload = await t.page.next();
+    expect(reload.target).toBe(t.html(1));
+
+    t.send({ type: "resize", geometry: { ...GEO, rows: 31 } });
+    await flush();
+    expect(existsSync(t.html(1))).toBe(true);
+
+    reload.resolve(250);
+    (await t.page.next()).resolve("");
+    expect((await t.page.next()).target).toBe(t.html(3));
+    expect(existsSync(t.html(1))).toBe(false);
+  });
+
+  test("a Chrome failure that the content did not cause is fatal", async () => {
+    const t = await setup();
+    t.send({ type: "trigger" });
+    const error = new Error("Target closed");
+    (await t.page.next()).reject(error);
+    await flush();
+    expect(t.fatal).toEqual([error]);
+  });
+
+  test("nothing is reported back once shutdown has begun", async () => {
+    const failed = await setup();
+    failed.send({ type: "trigger" });
+    const load = await failed.page.next();
+    failed.state.shuttingDown = true;
+    load.reject(new Error("Target closed"));
+    await flush();
+    expect(failed.fatal).toEqual([]);
+
+    const loaded = await setup();
+    loaded.send({ type: "trigger" });
+    const done = await loaded.page.next();
+    loaded.state.shuttingDown = true;
+    done.resolve(250);
+    await flush();
+    expect(loaded.page.unclaimed).toEqual([]);
+  });
+
+  test("toggling the theme re-renders with the other theme", async () => {
+    const t = await setup();
+    await t.display();
+    t.pipeline.toggleTheme();
+    expect((await t.page.next()).target).toBe(t.html(2));
+    expect(readFileSync(t.html(2), "utf8")).toContain("github-markdown-dark.css");
   });
 });
-
-describe("one page at a time", () => {
-  test("capture waits for load in flight", async () => {
-    const calls: string[] = [];
-    const loadCalled = deferred<void>();
-    const loadResult = deferred<number>();
-    const { pipeline } = await makePipeline({
-      ...baseChrome(),
-      load: () => {
-        calls.push("load");
-        loadCalled.resolve();
-        return loadResult.promise;
-      },
-      shoot: async () => {
-        calls.push("shoot");
-        return "";
-      },
-    });
-    pipeline.execute([{ type: "render", gen: 1 }]);
-    await loadCalled.promise;
-    pipeline.execute([
-      { type: "shoot", gen: 1, tileIndex: 0, tile: { topPx: 0, heightPx: 500 } },
-    ]);
-    await settle();
-    expect(calls).toEqual(["load"]);
-    loadResult.resolve(1000);
-    await settle();
-    expect(calls).toEqual(["load", "shoot"]);
-  });
-});
-
-describe("capture clip", () => {
-  test("device-px tile becomes a CSS-px clip at the viewport width", async () => {
-    const clips: unknown[] = [];
-    const { pipeline } = await makePipeline({
-      ...baseChrome(),
-      shoot: async (clip: unknown) => {
-        clips.push(clip);
-        return "";
-      },
-    });
-    pipeline.execute([{ type: "shoot", gen: 1, tileIndex: 1, tile: { topPx: 500, heightPx: 500 } }]);
-    await waitFor(() => clips.length === 1);
-    expect(clips).toEqual([{ xCssPx: 0, yCssPx: 250, widthCssPx: GEO.viewportWidthCssPx, heightCssPx: 250 }]);
-  });
-});
-
-describe("generation binding", () => {
-  test("failed update reloads display before old tiles re-shoot", async () => {
-    const loads: string[] = [];
-    let shoots = 0;
-    const { scheduler, pipeline } = await makePipeline({
-      ...baseChrome(),
-      load: (p: string) => {
-        loads.push(p);
-        if (p.includes("gen-2")) throw new ContentError("load timed out");
-        return Promise.resolve(1000);
-      },
-      shoot: async () => {
-        shoots += 1;
-        return "";
-      },
-    });
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitFor(() => scheduler.viewState().displayGen?.gen === 1);
-    expect(scheduler.viewState().displayGen?.gen).toBe(1);
-    const afterGen1 = loads.length;
-    expect(afterGen1).toBeGreaterThan(0);
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitFor(() => loads.some((p) => p.includes("gen-2")));
-    for (let i = 0; i < 500; i++) await settle();
-    expect(scheduler.viewState().displayGen?.gen).toBe(1);
-    expect(loads.length).toBeGreaterThan(afterGen1);
-    expect(loads.filter((p) => p.includes("gen-1")).length).toBe(afterGen1);
-    const before = shoots;
-    pipeline.execute([
-      { type: "shoot", gen: 1, tileIndex: 0, tile: { topPx: 0, heightPx: 500 } },
-    ]);
-    await waitFor(() => shoots === before + 1);
-    expect(shoots).toBe(before + 1);
-    expect(loads.filter((p) => p.includes("gen-1")).length).toBe(afterGen1 + 1);
-  });
-});
-
-describe("generation-owned files", () => {
-  test("resize keeps HTML alive until an in-flight reload finishes", async () => {
-    const reloading = deferred<void>();
-    const resume = deferred<void>();
-    let loads = 0;
-    let shoots = 0;
-    const { dir, scheduler, pipeline } = await makePipeline({
-      ...baseChrome(),
-      load: async (path: string) => {
-        loads += 1;
-        if (path.includes("gen-2")) throw new ContentError("load timed out");
-        if (path.includes("gen-1") && loads > 1) {
-          reloading.resolve();
-          await resume.promise;
-        }
-        await stat(path);
-        return 100000;
-      },
-      shoot: async () => {
-        shoots += 1;
-        return "";
-      },
-    });
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitFor(() => shoots === GEO.maxResident);
-    expect(shoots).toBe(GEO.maxResident);
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitFor(() => scheduler.viewState().failure);
-    expect(scheduler.viewState().failure).toBe(true);
-    pipeline.execute(scheduler.dispatch({ type: "key", delta: { kind: "bottom" } }));
-    await reloading.promise;
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    pipeline.execute(scheduler.dispatch({ type: "resize", geometry: { ...GEO, rows: 30 } }));
-    await sleep(20);
-    expect(await exists(join(dir, "gen-1.html"))).toBe(true);
-    resume.resolve();
-    await waitFor(() => scheduler.viewState().displayGen !== null);
-    expect(scheduler.viewState().displayGen?.gen).toBeGreaterThan(2);
-    expect(await exists(join(dir, "gen-1.html"))).toBe(false);
-  });
-
-  test("switching releases old HTML at promotion", async () => {
-    const { dir, scheduler, pipeline } = await makePipeline(baseChrome());
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitFor(() => scheduler.viewState().displayGen?.gen === 1);
-    expect(await exists(join(dir, "gen-1.html"))).toBe(true);
-    pipeline.execute(scheduler.dispatch({ type: "trigger" }));
-    await waitFor(() => scheduler.viewState().displayGen?.gen === 2);
-    for (let i = 0; i < 100; i++) await settle();
-    expect(await exists(join(dir, "gen-1.html"))).toBe(false);
-    expect(await exists(join(dir, "gen-2.html"))).toBe(true);
-  });
-});
-

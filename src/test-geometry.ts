@@ -3,10 +3,10 @@ import { alignedTileHeightPx } from "./viewport.ts";
 
 export const GEO: Geometry = {
   rows: 51,
-  cols: 10,
+  cols: 80,
   cellHpx: 10,
-  imgWidthPx: 200,
-  viewportWidthCssPx: 100,
+  imgWidthPx: 800,
+  viewportWidthCssPx: 400,
   renderScale: 2,
   tileHeightPx: alignedTileHeightPx(10, 50),
   exceedsFrameLimit: false,

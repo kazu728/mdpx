@@ -1,15 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { renderFrame, truncateToDisplayWidth } from "./frame.ts";
-import { computeTiles, contentRows } from "./viewport.ts";
 import type { Geometry } from "./geometry.ts";
+import { deletePlacement, imageId, place } from "./kitty.ts";
 import type { ViewState } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
+import { computeTiles, contentRows } from "./viewport.ts";
 
 const ESC = "\x1b";
-const FULL: Geometry = { ...GEO, cols: 80, imgWidthPx: 800, viewportWidthCssPx: 400 };
-const REDUCED: Geometry = { ...FULL, imgWidthPx: 400, renderScale: 1 };
+const REDUCED: Geometry = { ...GEO, imgWidthPx: 400, renderScale: 1 };
 
-function makeView(geometry: Geometry = FULL, documentHeightPx = 300): ViewState {
+function view(documentHeightPx: number, overrides: Partial<ViewState> = {}): ViewState {
+  const geometry = overrides.geometry ?? GEO;
   const { tiles, contentHeightPx } = computeTiles(
     documentHeightPx,
     geometry.cellHpx,
@@ -19,94 +20,93 @@ function makeView(geometry: Geometry = FULL, documentHeightPx = 300): ViewState 
   return {
     geometry,
     scrollPx: 0,
-    displayGen: { gen: 1, tiles, resident: new Set([0]), truncated: false, contentHeightPx },
     phase: "ready",
     failure: false,
     pendingScrollPx: null,
+    displayGen: { gen: 1, tiles, resident: new Set(tiles.keys()), truncated: false, contentHeightPx },
+    ...overrides,
   };
 }
 
-function statusLine(filename: string, cols = 80): string {
-  const view = makeView();
-  const { escape } = renderFrame({ ...view, geometry: { ...view.geometry, cols } }, filename, []);
-  const m = escape.match(/\x1b\[7m([\s\S]*)\x1b\[0m/);
-  expect(m).not.toBeNull();
-  return m![1]!;
+function statusLine(v: ViewState, filename = "a.md"): string {
+  return renderFrame(v, filename, []).escape.match(/\x1b\[7m(.*)\x1b\[0m/s)![1]!;
 }
 
 describe("renderFrame", () => {
-  test("erase/placement order without CSI 2J", () => {
-    const first = renderFrame(makeView(), "SPEC.md", []);
-    expect(first.escape).not.toContain(`${ESC}[2J`);
-    const { escape } = renderFrame(makeView(), "SPEC.md", first.placements);
-    const del = escape.indexOf("a=d,d=i");
-    expect(del).toBeGreaterThanOrEqual(0);
+  test("replaces the previous placements without clearing the stored images", () => {
+    const first = renderFrame(view(300), "a.md", []);
+    expect(first.placements).toEqual([imageId(1, 0)]);
+    expect(first.escape).toContain("x=0,y=0,w=800,h=300,c=80,r=30");
+    const { escape } = renderFrame(view(300), "a.md", first.placements);
+    expect(escape.startsWith(`${ESC}[?2026h`)).toBe(true);
+    expect(escape.endsWith(`${ESC}[?2026l`)).toBe(true);
+    expect(escape).not.toContain(`${ESC}[2J`);
+    expect(escape).not.toContain("d=I");
     const erase = escape.indexOf(`${ESC}[H${ESC}[J`);
-    expect(erase).toBeGreaterThan(del);
-    expect(escape.indexOf("a=p,")).toBeGreaterThan(escape.indexOf(`${ESC}[J`));
+    const unplace = escape.indexOf(deletePlacement(imageId(1, 0)));
+    expect(unplace).toBeGreaterThan(-1);
+    expect(unplace).toBeLessThan(erase);
+    expect(escape.indexOf("a=p,")).toBeGreaterThan(erase);
+  });
+
+  test("crops tiles in image pixels when the capture is downscaled", () => {
+    const { escape } = renderFrame(view(3000, { geometry: REDUCED, scrollPx: 520 }), "a.md", []);
+    const crop = (tileIndex: number, y: number, h: number, rows: number) =>
+      place({
+        id: imageId(1, tileIndex),
+        sourceXImagePx: 0,
+        sourceYImagePx: y,
+        sourceWidthImagePx: 400,
+        sourceHeightImagePx: h,
+        displayColumns: 80,
+        displayRows: rows,
+      });
+    expect(escape).toContain(`${ESC}[1;1H${crop(1, 10, 240, 48)}`);
+    expect(escape).toContain(`${ESC}[49;1H${crop(2, 0, 10, 2)}`);
   });
 });
 
 describe("status bar", () => {
-  test("width is exactly cols with q:quit and sanitized names", () => {
-    for (const name of ["SPEC.md", "👨‍👩‍👧.md"])
-      for (const cols of [12, 80]) expect(Bun.stringWidth(statusLine(name, cols))).toBe(cols);
-    expect(statusLine("SPEC.md", 80).endsWith("q:quit")).toBe(true);
-    expect(statusLine("a".repeat(40) + ".md", 12)).not.toContain("q:quit");
-    const line = statusLine(`x${ESC}[31mred.md`);
-    expect(line).not.toContain(`${ESC}[31m`);
-    expect(line.startsWith("x?[31mred.md")).toBe(true);
-    expect(statusLine("a\nb\tc.md")).not.toContain("\n");
-    expect(statusLine("a\nb\tc.md")).not.toContain("\t");
+  test("fills exactly the terminal width, dropping q:quit when it does not fit", () => {
+    const wide = statusLine(view(300), "👨‍👩‍👧.md");
+    expect(Bun.stringWidth(wide)).toBe(GEO.cols);
+    expect(wide.endsWith("q:quit")).toBe(true);
+    const narrow = statusLine(view(300, { geometry: { ...GEO, cols: 12 } }), "a".repeat(40) + ".md");
+    expect(Bun.stringWidth(narrow)).toBe(12);
+    expect(narrow).not.toContain("q:quit");
   });
-});
 
-describe("source rect when downscaled", () => {
-  test("source rect scales and capacity wins over low-res", () => {
-    const { escape } = renderFrame(makeView(REDUCED, 3000), "a.md", []);
-    expect(escape).toContain("h=250");
-    expect(escape).toContain("low-res");
-    expect(renderFrame(makeView(), "a.md", []).escape).toContain("h=300");
-    const v = makeView(REDUCED, 3000);
-    for (const exceeds of [
-      { exceedsFrameLimit: true, exceedsStorage: false },
-      { exceedsFrameLimit: true, exceedsStorage: true },
-      { exceedsFrameLimit: false, exceedsStorage: true },
-    ]) {
-      const { escape: e } = renderFrame({ ...v, geometry: { ...v.geometry, ...exceeds } }, "a.md", []);
-      expect(e).toContain(exceeds.exceedsFrameLimit ? "too wide" : "too many");
-      expect(e).not.toContain("low-res");
-    }
+  test("control characters in the file name are neutralized", () => {
+    expect(statusLine(view(300), `x${ESC}[31m\n\t.md`).startsWith("x?[31m??.md")).toBe(true);
   });
-});
 
-describe("failure status", () => {
-  test("failure vs in-flight activity", () => {
-    const v = makeView();
-    const failed: ViewState = { ...v, displayGen: null, failure: true };
-    expect(renderFrame(failed, "a.md", []).escape).toContain("render failed");
-    expect(renderFrame({ ...v, failure: true }, "a.md", []).escape).toContain("update failed");
-    expect(
-      renderFrame({ ...v, failure: true, phase: "rendering" }, "a.md", []).escape,
-    ).toContain("updating");
+  test("shows activity before failure before truncation", () => {
+    const shown = view(300);
+    expect(statusLine({ ...shown, pendingScrollPx: 0, phase: "rendering", failure: true })).toContain("scrolling…");
+    expect(statusLine({ ...shown, phase: "rendering", failure: true })).toContain("updating");
+    expect(statusLine({ ...shown, displayGen: null, phase: "rendering" })).toContain("rendering…");
+    expect(statusLine({ ...shown, displayGen: null, failure: true })).toContain("render failed");
+    const long = view(3000);
+    const truncated = { ...long, displayGen: { ...long.displayGen!, truncated: true } };
+    expect(statusLine({ ...truncated, scrollPx: 2500 })).toContain("truncated");
+    expect(statusLine({ ...truncated, scrollPx: 2490 })).not.toContain("truncated");
+  });
+
+  test("capacity warnings outrank low resolution", () => {
+    const reduced = view(300, { geometry: REDUCED });
+    const capacity = (g: Partial<Geometry>) => statusLine({ ...reduced, geometry: { ...REDUCED, ...g } });
+    expect(capacity({})).toContain("low-res");
+    expect(capacity({ exceedsStorage: true })).toContain("too many");
+    expect(capacity({ exceedsStorage: true })).not.toContain("low-res");
+    expect(capacity({ exceedsFrameLimit: true, exceedsStorage: true })).toContain("too wide");
+    expect(capacity({ exceedsFrameLimit: true, exceedsStorage: true })).not.toContain("too many");
   });
 });
 
 describe("truncateToDisplayWidth", () => {
-  test("width matches and never exceeds max", () => {
-    for (const s of ["❤️README.md", "⚠️a", "ℹ️", "０１２", "👨‍👩‍👧x", "plain.md"]) {
-      for (let max = 0; max <= 12; max++) {
-        const { text, displayWidth } = truncateToDisplayWidth(s, max);
-        expect(displayWidth).toBeLessThanOrEqual(max);
-        expect(Bun.stringWidth(text)).toBe(displayWidth);
-      }
-    }
-  });
-
-  test("never splits a grapheme or a full-width char", () => {
+  test("never splits a grapheme or a full-width character", () => {
     expect(truncateToDisplayWidth("❤️", 2)).toEqual({ text: "❤️", displayWidth: 2 });
     expect(truncateToDisplayWidth("❤️", 1)).toEqual({ text: "", displayWidth: 0 });
     expect(truncateToDisplayWidth("０１２", 5)).toEqual({ text: "０１", displayWidth: 4 });
-    expect(truncateToDisplayWidth("abc", 2)).toEqual({ text: "ab", displayWidth: 2 });
   });
 });

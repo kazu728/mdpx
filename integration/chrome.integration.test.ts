@@ -24,6 +24,7 @@ const PNG_IHDR_HEIGHT_OFFSET = 20;
 let dir: string;
 let htmlPath: string;
 let chrome: Chrome;
+let documentHeightCssPx: number;
 
 function pngSize(data: Uint8Array): { width: number; height: number } {
   const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
@@ -41,14 +42,14 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
     const html = await buildHtml({
       markdown: md,
       mdDir: dirname(FIXTURE),
-      assets: resolveAssets("light"),
+      assets: resolveAssets(),
       theme: "light",
     });
     await writeFile(htmlPath, html);
 
     chrome = new Chrome(exe!);
     await chrome.launch();
-    const documentHeightCssPx = await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
+    documentHeightCssPx = await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
     expect(documentHeightCssPx).toBeGreaterThan(0);
   }, 60000);
 
@@ -61,51 +62,16 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
     expect(await chrome.page!.evaluate(() => document.querySelectorAll(".mermaid svg").length)).toBe(1);
   });
 
-  test("the tile screenshot's PNG dimensions are cell-aligned", async () => {
+  test("both render scales keep the CSS layout and cell-aligned PNG dimensions", async () => {
     const tileH = alignedTileHeightPx(CELL_HPX, CONTENT_ROWS);
-    const b64 = await chrome.shoot({
-      xCssPx: 0,
-      yCssPx: 0,
-      widthCssPx: CSS_WIDTH,
-      heightCssPx: tileH / CSS_SCALE,
-    });
-    const { width, height } = pngSize(Buffer.from(b64, "base64"));
-    expect(height).toBe(tileH);
-    expect(height % CELL_HPX).toBe(0);
-    expect(width).toBe(CSS_WIDTH * CSS_SCALE);
-  });
-
-  test("renderScale=1 keeps the same CSS layout and only halves the image", async () => {
-    const full = await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
-    const fullPng = pngSize(
-      Buffer.from(
-        await chrome.shoot({
-          xCssPx: 0,
-          yCssPx: 0,
-          widthCssPx: CSS_WIDTH,
-          heightCssPx: 100,
-        }),
-        "base64",
-      ),
-    );
-
+    const fullPng = pngSize(Buffer.from(await chrome.shoot(0, tileH / CSS_SCALE), "base64"));
+    expect(fullPng.height).toBe(tileH);
+    expect(fullPng.width).toBe(CSS_WIDTH * CSS_SCALE);
     const reduced = await chrome.load(htmlPath, CSS_WIDTH, 1);
-    const reducedPng = pngSize(
-      Buffer.from(
-        await chrome.shoot({
-          xCssPx: 0,
-          yCssPx: 0,
-          widthCssPx: CSS_WIDTH,
-          heightCssPx: 100,
-        }),
-        "base64",
-      ),
-    );
+    const reducedPng = pngSize(Buffer.from(await chrome.shoot(0, tileH / CSS_SCALE), "base64"));
 
-    expect(reduced).toBe(full);
+    expect(reduced).toBe(documentHeightCssPx);
     expect(reducedPng.width * 2).toBe(fullPng.width);
     expect(reducedPng.height * 2).toBe(fullPng.height);
-
-    await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
   }, 30000);
 });

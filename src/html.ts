@@ -20,14 +20,17 @@ const katex: typeof import("@vscode/markdown-it-katex").default = require(
 export type Theme = "light" | "dark";
 
 export interface Assets {
-  githubMarkdownCss: string;
+  githubMarkdownCss: Record<Theme, string>;
   katexCss: string;
   mermaidJs: string;
 }
 
-export function resolveAssets(theme: Theme): Assets {
+export function resolveAssets(): Assets {
   return {
-    githubMarkdownCss: require.resolve(`github-markdown-css/github-markdown-${theme}.css`),
+    githubMarkdownCss: {
+      light: require.resolve("github-markdown-css/github-markdown-light.css"),
+      dark: require.resolve("github-markdown-css/github-markdown-dark.css"),
+    },
     katexCss: require.resolve("katex/dist/katex.min.css"),
     mermaidJs: require.resolve("mermaid/dist/mermaid.min.js"),
   };
@@ -64,18 +67,25 @@ for (const info of bundledLanguagesInfo) {
   }
 }
 
-let highlighterPromise: Promise<Highlighter> | null = null;
-function getHighlighter(): Promise<Highlighter> {
-  if (!highlighterPromise) {
-    highlighterPromise = createHighlighter({
+interface Renderer {
+  highlighter: Highlighter;
+  md: MarkdownIt;
+}
+
+let rendererPromise: Promise<Renderer> | null = null;
+function getRenderer(): Promise<Renderer> {
+  if (!rendererPromise) {
+    rendererPromise = createHighlighter({
       themes: Object.values(SHIKI_THEME),
       langs: [],
-    }).catch((e) => {
-      highlighterPromise = null;
-      throw e;
-    });
+    })
+      .then((highlighter) => ({ highlighter, md: createMarkdown(highlighter) }))
+      .catch((e) => {
+        rendererPromise = null;
+        throw e;
+      });
   }
-  return highlighterPromise;
+  return rendererPromise;
 }
 
 /** Escaping (not deleting) keeps `<<meta>meta ...>` from becoming a tag. */
@@ -92,10 +102,7 @@ function fenceLanguage(token: Token): string {
   return token.info.trim().split(/\s+/g)[0]!;
 }
 
-let renderer: MarkdownIt | null = null;
-function getRenderer(highlighter: Highlighter): MarkdownIt {
-  if (renderer) return renderer;
-
+function createMarkdown(highlighter: Highlighter): MarkdownIt {
   const md = new MarkdownIt({ html: true, linkify: true });
   md.use(taskLists);
   md.use(katex);
@@ -121,7 +128,6 @@ function getRenderer(highlighter: Highlighter): MarkdownIt {
     }
   };
 
-  renderer = md;
   return md;
 }
 
@@ -145,8 +151,7 @@ interface BuildHtmlInput {
 }
 
 export async function buildHtml(input: BuildHtmlInput): Promise<string> {
-  const highlighter = await getHighlighter();
-  const md = getRenderer(highlighter);
+  const { highlighter, md } = await getRenderer();
 
   const env: RenderEnv = { theme: input.theme };
   const tokens = md.parse(input.markdown, env);
@@ -183,7 +188,7 @@ export async function buildHtml(input: BuildHtmlInput): Promise<string> {
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy(nonce)}">
 <base href="${base}">
-<link rel="stylesheet" href="${href(input.assets.githubMarkdownCss)}">
+<link rel="stylesheet" href="${href(input.assets.githubMarkdownCss[input.theme])}">
 <link rel="stylesheet" href="${href(input.assets.katexCss)}">
 <style>
   html, body { margin: 0; padding: 0; background: ${PAGE_BG[input.theme]}; }

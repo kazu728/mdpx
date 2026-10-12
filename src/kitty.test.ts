@@ -3,77 +3,74 @@ import {
   deleteAll,
   deleteImage,
   deletePlacement,
-  imageId,
   MAX_PAYLOAD_CHUNK_SIZE,
   place,
   TILE_PLACEMENT_ID,
   transmit,
 } from "./kitty.ts";
 
-interface Apc {
-  control: string;
-  payload: string;
-}
-function parseApc(s: string): Apc[] {
-  const out: Apc[] = [];
-  const re = /\x1b_G([^;]*)(?:;([\s\S]*?))?\x1b\\/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s))) out.push({ control: m[1]!, payload: m[2] ?? "" });
-  return out;
-}
-function keys(control: string): Record<string, string> {
-  return Object.fromEntries(
-    control.split(",").map((kv) => {
-      const [k, v] = kv.split("=");
-      return [k!, v ?? ""];
-    }),
-  );
+function commands(escape: string): { keys: Record<string, string>; payload: string }[] {
+  return [...escape.matchAll(/\x1b_G([^;\x1b]*)(?:;([^\x1b]*))?\x1b\\/g)].map((m) => ({
+    keys: Object.fromEntries(m[1]!.split(",").map((kv) => kv.split("="))),
+    payload: m[2] ?? "",
+  }));
 }
 
 describe("transmit", () => {
-  test("chunks at 4096 with m flag, single chunk otherwise", () => {
-    const b64 = "A".repeat(MAX_PAYLOAD_CHUNK_SIZE * 2 + 10);
-    const apcs = parseApc(transmit(imageId(3, 1), b64));
-    expect(apcs).toHaveLength(3);
-    expect(apcs[0]!.payload.length).toBe(MAX_PAYLOAD_CHUNK_SIZE);
-    expect(apcs[1]!.payload.length).toBe(MAX_PAYLOAD_CHUNK_SIZE);
-    expect(apcs[2]!.payload.length).toBe(10);
-    expect(keys(apcs[0]!.control)).toMatchObject({ a: "t", f: "100", t: "d", i: String(imageId(3, 1)), q: "1", m: "1" });
-    expect(keys(apcs[2]!.control).m).toBe("0");
-    expect(apcs[1]!.control).toBe("m=1");
-    const single = parseApc(transmit(1024, "Zm9v"));
-    expect(single).toHaveLength(1);
-    expect(keys(single[0]!.control).m).toBe("0");
-    expect(single[0]!.payload).toBe("Zm9v");
+  test("splits a PNG into chunks the terminal reassembles into one image", () => {
+    const png = "A".repeat(MAX_PAYLOAD_CHUNK_SIZE * 2) + "B".repeat(10);
+    const chunks = commands(transmit(7, png));
+    expect(chunks.map((c) => c.payload).join("")).toBe(png);
+    expect(chunks.every((c) => c.payload.length <= MAX_PAYLOAD_CHUNK_SIZE)).toBe(true);
+    // Bun's toEqual treats { "1": undefined } as equal to { m: "1" }, so parsed keys are compared strictly.
+    expect(chunks.map((c) => c.keys)).toStrictEqual([
+      { a: "t", f: "100", t: "d", i: "7", q: "1", m: "1" },
+      { m: "1" },
+      { m: "0" },
+    ]);
+
+    const [single] = commands(transmit(7, "Zm9v"));
+    expect(single!.keys).toMatchObject({ a: "t", i: "7", m: "0" });
   });
 });
 
 describe("place", () => {
-  test("source rect and display cells", () => {
-    const s = place({
-      id: 2053,
-      sourceXImagePx: 0,
-      sourceYImagePx: 120,
-      sourceWidthImagePx: 3024,
-      sourceHeightImagePx: 620,
-      displayColumns: 216,
-      displayRows: 20,
+  test("crops the source rect and scales it onto the display cells", () => {
+    const [cmd] = commands(
+      place({
+        id: 2053,
+        sourceXImagePx: 3,
+        sourceYImagePx: 120,
+        sourceWidthImagePx: 3024,
+        sourceHeightImagePx: 620,
+        displayColumns: 216,
+        displayRows: 20,
+      }),
+    );
+    expect(cmd!.keys).toStrictEqual({
+      a: "p",
+      i: "2053",
+      p: String(TILE_PLACEMENT_ID),
+      x: "3",
+      y: "120",
+      w: "3024",
+      h: "620",
+      c: "216",
+      r: "20",
+      q: "1",
     });
-    const [apc] = parseApc(s);
-    expect(keys(apc!.control)).toMatchObject({
-      a: "p", i: "2053", p: String(TILE_PLACEMENT_ID),
-      x: "0", y: "120", w: "3024", h: "620", c: "216", r: "20", q: "1",
-    });
-    expect(apc!.payload).toBe("");
   });
 });
 
 describe("delete", () => {
-  test("placement/image/all use d=i/d=I/d=A", () => {
-    expect(keys(parseApc(deletePlacement(2053))[0]!.control)).toMatchObject({
-      a: "d", d: "i", i: "2053", p: String(TILE_PLACEMENT_ID),
+  test("a placement delete keeps the image data; image and full deletes free it", () => {
+    expect(commands(deletePlacement(2053))[0]!.keys).toStrictEqual({
+      a: "d",
+      d: "i",
+      i: "2053",
+      p: String(TILE_PLACEMENT_ID),
     });
-    expect(keys(parseApc(deleteImage(2053))[0]!.control)).toMatchObject({ a: "d", d: "I", i: "2053" });
-    expect(keys(parseApc(deleteAll())[0]!.control)).toMatchObject({ a: "d", d: "A" });
+    expect(commands(deleteImage(2053))[0]!.keys).toStrictEqual({ a: "d", d: "I", i: "2053" });
+    expect(commands(deleteAll())[0]!.keys).toStrictEqual({ a: "d", d: "A" });
   });
 });
