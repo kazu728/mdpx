@@ -32,9 +32,9 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/main.js",
     "test": "bun test src/",
-    "test:integration": "for f in integration/*.test.ts; do [ -e \"$f\" ] || continue; bun test \"$f\" || exit 1; done",
+    "test:integration": "bun test integration/",
     "test:node": "node integration/node-runtime.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -51,6 +51,7 @@
   "devDependencies": {
     "@types/bun": "^1.3.14",
     "@types/markdown-it": "^14.1.2",
+    "@types/node": "^22.20.5",
     "typescript": "^7.0.2"
   }
 }

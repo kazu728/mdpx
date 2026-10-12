@@ -14,18 +14,19 @@ export const TILE_PLACEMENT_ID = 1;
 
 /** q=1 suppresses the success reply. */
 export function transmit(id: number, pngBase64: string): string {
-  const chunks: string[] = [];
-  for (let i = 0; i < pngBase64.length; i += MAX_PAYLOAD_CHUNK_SIZE) {
-    chunks.push(pngBase64.slice(i, i + MAX_PAYLOAD_CHUNK_SIZE));
-  }
   let out = "";
-  for (let idx = 0; idx < chunks.length; idx++) {
-    const more = idx < chunks.length - 1 ? 1 : 0;
-    const control =
-      idx === 0 ? `a=t,f=100,t=d,i=${id},q=1,m=${more}` : `m=${more}`;
-    out += `${APC_START}${control};${chunks[idx]}${APC_END}`;
+  for (let i = 0; i < pngBase64.length; i += MAX_PAYLOAD_CHUNK_SIZE) {
+    const more = i + MAX_PAYLOAD_CHUNK_SIZE < pngBase64.length ? 1 : 0;
+    const control = i === 0 ? `a=t,f=100,t=d,i=${id},q=1,m=${more}` : `m=${more}`;
+    out += `${APC_START}${control};${pngBase64.slice(i, i + MAX_PAYLOAD_CHUNK_SIZE)}${APC_END}`;
   }
   return out;
+}
+
+// Bounds what transmit writes: base64 expansion, one control header per chunk, plus slack.
+export function transferSize(dataLenBytes: number): number {
+  const base64Len = Math.ceil(dataLenBytes / 3) * 4;
+  return base64Len + Math.ceil(base64Len / MAX_PAYLOAD_CHUNK_SIZE) * 16 + 1024;
 }
 
 interface PlaceParams {

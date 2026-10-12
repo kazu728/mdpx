@@ -18,8 +18,13 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
       - run: bun install --frozen-lockfile
-      - run: bun test src/
+      - run: bun run test
+        if: matrix.node-version == '22'
       - run: bun run typecheck
+      - run: |
+          chrome_path=$(command -v google-chrome)
+          PUPPETEER_EXECUTABLE_PATH="$chrome_path" bun run test:integration
+        if: matrix.node-version == '22'
       - run: npm run build
       - name: Smoke-test the built CLI on Node
         run: |

@@ -1,11 +1,11 @@
 import { readFile, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { Chrome, ContentError } from "./chrome.ts";
-import { renderFrame } from "./frame.ts";
 import { buildHtml, type Assets, type Theme } from "./html.ts";
 import { deleteImage, imageId, transmit } from "./kitty.ts";
-import { Scheduler, type Action } from "./scheduler.ts";
-import { Term } from "./term.ts";
-import { CSS_SCALE } from "./viewport.ts";
+import { Scheduler, type Action, type SchedulerEvent } from "./scheduler.ts";
+import { renderFrame, Term } from "./term.ts";
+import { CSS_SCALE } from "./geometry.ts";
 
 type ShootAction = Extract<Action, { type: "shoot" }>;
 
@@ -14,12 +14,10 @@ interface PipelineDeps {
   scheduler: Scheduler;
   term: Pick<Term, "write">;
   mdPath: string;
-  mdDir: string;
-  fileName: string;
-  htmlPath: string;
-  assets: Record<Theme, Assets>;
+  htmlDir: string;
+  assets: Assets;
   isShuttingDown: () => boolean;
-  onFatal: (message: string) => Promise<never>;
+  onFatal: (error: unknown) => Promise<never>;
 }
 
 export class Pipeline {
@@ -31,12 +29,16 @@ export class Pipeline {
 
   constructor(private readonly deps: PipelineDeps) {}
 
+  dispatch(event: SchedulerEvent): void {
+    this.execute(this.deps.scheduler.dispatch(event));
+  }
+
   execute(actions: Action[]): void {
-    const { scheduler, term, fileName } = this.deps;
+    const { scheduler, term, mdPath } = this.deps;
     for (const a of actions) {
       switch (a.type) {
         case "redraw": {
-          const frame = renderFrame(scheduler.viewState(), fileName, this.lastPlacements);
+          const frame = renderFrame(scheduler.viewState(), basename(mdPath), this.lastPlacements);
           if (frame.escape !== this.lastEscape) {
             term.write(frame.escape);
             this.lastEscape = frame.escape;
@@ -62,7 +64,7 @@ export class Pipeline {
 
   toggleTheme(): void {
     this.theme = this.theme === "light" ? "dark" : "light";
-    this.execute(this.deps.scheduler.dispatch({ type: "trigger" }));
+    this.dispatch({ type: "trigger" });
   }
 
   private onPage<T>(work: () => Promise<T>): Promise<T> {
@@ -72,7 +74,7 @@ export class Pipeline {
   }
 
   private htmlFor(gen: number): string {
-    return `${this.deps.htmlPath}.gen-${gen}.html`;
+    return join(this.deps.htmlDir, `gen-${gen}.html`);
   }
 
   private async loadGenDocument(gen: number): Promise<number> {
@@ -90,31 +92,28 @@ export class Pipeline {
   }
 
   private async handleChromeError(e: unknown, gen: number): Promise<void> {
-    const { scheduler, isShuttingDown } = this.deps;
+    const { isShuttingDown, onFatal } = this.deps;
+    if (isShuttingDown()) return;
     if (e instanceof ContentError) {
-      if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
+      this.dispatch({ type: "renderFailed", gen });
       return;
     }
-    if (!isShuttingDown()) {
-      const reason = e instanceof Error ? e.message : String(e);
-      await this.deps.onFatal(`mdpx: Chrome failed: ${reason}\n`);
-    }
+    await onFatal(e);
   }
 
   private async runRender(gen: number): Promise<void> {
-    const { scheduler, mdPath, mdDir, assets, isShuttingDown } = this.deps;
-    let md: string;
+    const { mdPath, assets, isShuttingDown } = this.deps;
     try {
-      md = await readFile(mdPath, "utf8");
-      const { html } = await buildHtml({
-        markdown: md,
-        mdDir,
-        assets: assets[this.theme],
+      const markdown = await readFile(mdPath, "utf8");
+      const html = await buildHtml({
+        markdown,
+        mdDir: dirname(mdPath),
+        assets,
         theme: this.theme,
       });
       await writeFile(this.htmlFor(gen), html);
     } catch {
-      if (!isShuttingDown()) this.execute(scheduler.dispatch({ type: "renderFailed", gen }));
+      if (!isShuttingDown()) this.dispatch({ type: "renderFailed", gen });
       return;
     }
     let documentHeightCssPx: number;
@@ -125,24 +124,22 @@ export class Pipeline {
       return;
     }
     if (!isShuttingDown()) {
-      this.execute(
-        scheduler.dispatch({
-          type: "renderDone",
-          gen,
-          documentHeightPx: documentHeightCssPx * CSS_SCALE,
-        }),
-      );
+      this.dispatch({
+        type: "renderDone",
+        gen,
+        documentHeightPx: documentHeightCssPx * CSS_SCALE,
+      });
     }
   }
 
   private async runShoot(action: ShootAction): Promise<void> {
-    const { chrome, scheduler, term, isShuttingDown } = this.deps;
-    const { gen, tileIndex, clip } = action;
+    const { chrome, term, isShuttingDown } = this.deps;
+    const { gen, tileIndex, tile } = action;
     let base64: string;
     try {
       base64 = await this.onPage(async () => {
         if (this.loadedGen !== gen) await this.loadGenDocument(gen);
-        return chrome.shoot(clip);
+        return chrome.shoot(tile.topPx / CSS_SCALE, tile.heightPx / CSS_SCALE);
       });
     } catch (e) {
       await this.handleChromeError(e, gen);
@@ -150,6 +147,6 @@ export class Pipeline {
     }
     if (isShuttingDown()) return;
     term.write(transmit(imageId(gen, tileIndex), base64));
-    this.execute(scheduler.dispatch({ type: "tileReady", gen, tileIndex }));
+    this.dispatch({ type: "tileReady", gen, tileIndex });
   }
 }

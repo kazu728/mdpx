@@ -2,12 +2,13 @@
 import { buildHtml, resolveAssets } from "../dist/html.js";
 
 const MARKDOWN = "# h\n\n$x^2$\n\n- [ ] a\n\n```ts\nlet x = 1;\n```\n";
-const EXPECTED = ["katex", "task-list-item", "shiki"];
+// The KaTeX stylesheet path contains "katex" on every page; only rendered math carries the class.
+const EXPECTED = ['class="katex', "task-list-item", "shiki"];
 
-const { html } = await buildHtml({
+const html = await buildHtml({
   markdown: MARKDOWN,
   mdDir: import.meta.dirname,
-  assets: resolveAssets("dark"),
+  assets: resolveAssets(),
   theme: "dark",
 });
 

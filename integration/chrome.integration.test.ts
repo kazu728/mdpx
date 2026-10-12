@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildHtml, resolveAssets } from "../src/html.ts";
 import { Chrome, resolveExecutable } from "../src/chrome.ts";
-import { alignedTileHeightPx, CSS_SCALE } from "../src/viewport.ts";
+import { alignedTileHeightPx, CSS_SCALE } from "../src/geometry.ts";
 
 const exe = await resolveExecutable();
 if (!exe) {
@@ -38,18 +38,16 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
     dir = await mkdtemp(join(tmpdir(), "mdpx-it-"));
     htmlPath = join(dir, "view.html");
     const md = await readFile(FIXTURE, "utf8");
-    const built = await buildHtml({
+    const html = await buildHtml({
       markdown: md,
       mdDir: dirname(FIXTURE),
-      assets: resolveAssets("light"),
+      assets: resolveAssets(),
       theme: "light",
     });
-    await writeFile(htmlPath, built.html);
+    await writeFile(htmlPath, html);
 
-    chrome = new Chrome(exe);
+    chrome = new Chrome(exe!);
     await chrome.launch();
-    const documentHeightCssPx = await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
-    expect(documentHeightCssPx).toBeGreaterThan(0);
   }, 60000);
 
   afterAll(async () => {
@@ -58,54 +56,32 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
   });
 
   test("Mermaid becomes SVG on the client", async () => {
+    expect(await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE)).toBeGreaterThan(0);
     expect(await chrome.page!.evaluate(() => document.querySelectorAll(".mermaid svg").length)).toBe(1);
-  });
+  }, 30000);
 
-  test("the tile screenshot's PNG dimensions are cell-aligned", async () => {
+  test("both render scales keep the CSS layout and cell-aligned PNG dimensions", async () => {
+    // Font loading and Mermaid can change the sample document's height between loads.
+    const layoutPath = join(dir, "layout.html");
+    await writeFile(
+      layoutPath,
+      await buildHtml({
+        markdown: `<div style="height: 1200px"></div>`,
+        mdDir: dirname(FIXTURE),
+        assets: resolveAssets(),
+        theme: "light",
+      }),
+    );
+    const documentHeightCssPx = await chrome.load(layoutPath, CSS_WIDTH, CSS_SCALE);
     const tileH = alignedTileHeightPx(CELL_HPX, CONTENT_ROWS);
-    const b64 = await chrome.shoot({
-      xCssPx: 0,
-      yCssPx: 0,
-      widthCssPx: CSS_WIDTH,
-      heightCssPx: tileH / CSS_SCALE,
-    });
-    const { width, height } = pngSize(Buffer.from(b64, "base64"));
-    expect(height).toBe(tileH);
-    expect(height % CELL_HPX).toBe(0);
-    expect(width).toBe(CSS_WIDTH * CSS_SCALE);
-  });
+    const fullPng = pngSize(Buffer.from(await chrome.shoot(0, tileH / CSS_SCALE), "base64"));
+    expect(fullPng.height).toBe(tileH);
+    expect(fullPng.width).toBe(CSS_WIDTH * CSS_SCALE);
+    const reduced = await chrome.load(layoutPath, CSS_WIDTH, 1);
+    const reducedPng = pngSize(Buffer.from(await chrome.shoot(0, tileH / CSS_SCALE), "base64"));
 
-  test("renderScale=1 keeps the same CSS layout and only halves the image", async () => {
-    const full = await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
-    const fullPng = pngSize(
-      Buffer.from(
-        await chrome.shoot({
-          xCssPx: 0,
-          yCssPx: 0,
-          widthCssPx: CSS_WIDTH,
-          heightCssPx: 100,
-        }),
-        "base64",
-      ),
-    );
-
-    const reduced = await chrome.load(htmlPath, CSS_WIDTH, 1);
-    const reducedPng = pngSize(
-      Buffer.from(
-        await chrome.shoot({
-          xCssPx: 0,
-          yCssPx: 0,
-          widthCssPx: CSS_WIDTH,
-          heightCssPx: 100,
-        }),
-        "base64",
-      ),
-    );
-
-    expect(reduced).toBe(full);
+    expect(reduced).toBe(documentHeightCssPx);
     expect(reducedPng.width * 2).toBe(fullPng.width);
     expect(reducedPng.height * 2).toBe(fullPng.height);
-
-    await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE);
   }, 30000);
 });

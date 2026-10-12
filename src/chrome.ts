@@ -1,8 +1,8 @@
 import { accessSync, closeSync, constants, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, delimiter, isAbsolute, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import puppeteer, { TimeoutError, type Browser, type Page } from "puppeteer-core";
-import type { Clip } from "./geometry.ts";
 
 /** Content-caused failure (not a Chrome fault); the caller keeps the current frame. */
 export class ContentError extends Error {}
@@ -59,16 +59,13 @@ const STABLE_FONTS_MS = 500;
 const STABLE_IMG_DECODE_MS = 1000;
 const STABLE_MERMAID_MS = 3000;
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
 export class Chrome {
   private browser: Browser | null = null;
   page: Page | null = null;
 
-  constructor(private readonly executablePath: string | null) {}
+  constructor(private readonly executablePath: string) {}
 
   async launch(): Promise<void> {
-    if (!this.executablePath) throw new Error("no Chromium found");
     // No --allow-file-access-from-files: body scripts could read local files over XHR.
     this.browser = await puppeteer.launch({
       executablePath: this.executablePath,
@@ -109,8 +106,7 @@ export class Chrome {
     await page
       .waitForFunction("window.__mermaidDone === true", { timeout: STABLE_MERMAID_MS })
       .catch(() => {});
-    const documentHeightCssPx = await page.evaluate(() => document.body.scrollHeight);
-    return documentHeightCssPx;
+    return page.evaluate(() => document.body.scrollHeight);
   }
 
   private decodeAllImages(): Promise<void> {
@@ -121,18 +117,13 @@ export class Chrome {
     );
   }
 
-  async shoot(clip: Clip): Promise<string> {
-    const data = await this.page!.screenshot({
-      clip: {
-        x: clip.xCssPx,
-        y: clip.yCssPx,
-        width: clip.widthCssPx,
-        height: clip.heightCssPx,
-      },
+  async shoot(yCssPx: number, heightCssPx: number): Promise<string> {
+    const page = this.page!;
+    return page.screenshot({
+      clip: { x: 0, y: yCssPx, width: page.viewport()!.width, height: heightCssPx },
       optimizeForSpeed: true,
       encoding: "base64",
     });
-    return data as string;
   }
 
   async close(): Promise<void> {

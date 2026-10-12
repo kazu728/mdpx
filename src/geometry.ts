@@ -1,18 +1,76 @@
-import {
-  alignedTileHeightPx,
-  CSS_SCALE,
-  contentRows,
-  maximumTileHeightPx,
-  REDUCED_SCALE,
-  scrollUnitPx,
-  toImagePx,
-} from "./viewport.ts";
-import { MAX_PAYLOAD_CHUNK_SIZE } from "./kitty.ts";
+import { transferSize } from "./kitty.ts";
 
 export interface GraphicsLimits {
   frameBytes: number | null;
   storageBytes: number;
 }
+
+export interface CellSize {
+  cellHpx: number;
+  cellWpx: number;
+}
+
+export interface ScreenSize {
+  cols: number;
+  rows: number;
+}
+
+interface CapturePlan {
+  renderScale: number;
+  imgWidthPx: number;
+  tileHeightPx: number;
+  exceedsFrameLimit: boolean;
+  /** One image fits transfer but old+new visible tiles do not fit storage. */
+  exceedsStorage: boolean;
+  maxResident: number;
+  maxTotalResident: number;
+}
+
+export interface Geometry extends ScreenSize, CapturePlan {
+  cellHpx: number;
+  viewportWidthCssPx: number;
+}
+
+interface TileOption {
+  renderScale: number;
+  imgWidthPx: number;
+  tileHeightPx: number;
+  tilesInFrame: number;
+  tileBytes: number;
+  fitsFrame: boolean;
+}
+
+export type ScrollDirection = -1 | 0 | 1;
+
+export interface Tile {
+  topPx: number;
+  heightPx: number;
+}
+
+interface TileLayout {
+  tiles: Tile[];
+  truncated: boolean;
+  contentHeightPx: number;
+}
+
+interface Placement {
+  tileIndex: number;
+  sourceTopPx: number;
+  sourceHeightPx: number;
+  destinationRow: number;
+  destinationRows: number;
+}
+
+/** CSS layout ratio; not the screenshot deviceScaleFactor. */
+export const CSS_SCALE = 2;
+
+/** Bounds capture cost and stays below IMAGE_ID_GENERATION_STRIDE. */
+const MAX_TILES = 128;
+
+// Terminal rows are unbounded, so cap screenshot requests independently of kitty limits.
+const MAX_TILE_PX = 4096;
+
+const REDUCED_SCALE = 1;
 
 const HERDR_RELAY: GraphicsLimits = {
   frameBytes: 32 * 1024 * 1024 - 2 * 1024 * 1024,
@@ -27,32 +85,9 @@ export function detectGraphicsLimits(env: NodeJS.ProcessEnv = process.env): Grap
   return v !== undefined && v !== "" && v !== "0" ? HERDR_RELAY : DIRECT;
 }
 
-// kitty transfer overhead: base64 expansion, one control header per chunk, plus slack.
-function transferSize(dataLenBytes: number): number {
-  const base64Len = Math.ceil(dataLenBytes / 3) * 4;
-  return base64Len + Math.ceil(base64Len / MAX_PAYLOAD_CHUNK_SIZE) * 16 + 1024;
-}
-
-function tileCount(storageBytes: number, tileBytes: number): number {
-  return Math.floor(storageBytes / Math.max(1, tileBytes));
-}
-
-function totalTileCapacity(tileBytes: number, limits: GraphicsLimits): number {
-  return tileCount(limits.storageBytes, tileBytes);
-}
-
-/** Working set stays below terminal eviction and never below the visible floor. */
-function maxResidentTiles(
-  tileBytes: number,
-  limits: GraphicsLimits,
-  minTiles: number,
-): number {
-  return Math.max(minTiles, tileCount(limits.storageBytes * 0.8, tileBytes));
-}
-
 /** Worst case touches one extra boundary while straddling. */
 export function maxTilesInFrame(viewportHeightPx: number, tileHeightPx: number): number {
-  return Math.max(1, Math.ceil(viewportHeightPx / Math.max(1, tileHeightPx)) + 1);
+  return Math.ceil(viewportHeightPx / tileHeightPx) + 1;
 }
 
 export function fitsGraphicsFrame(
@@ -66,45 +101,6 @@ export function fitsGraphicsFrame(
   );
 }
 
-export interface CellSize {
-  cellHpx: number;
-  cellWpx: number;
-}
-
-export interface ScreenSize {
-  cols: number;
-  rows: number;
-}
-
-export interface Geometry extends ScreenSize {
-  cellHpx: number;
-  imgWidthPx: number;
-  viewportWidthCssPx: number;
-  renderScale: number;
-  tileHeightPx: number;
-  exceedsFrameLimit: boolean;
-  /** One image fits transfer but old+new visible tiles do not fit storage. */
-  exceedsStorage: boolean;
-  maxResident: number;
-  maxTotalResident: number;
-}
-
-export interface Clip {
-  xCssPx: number;
-  yCssPx: number;
-  widthCssPx: number;
-  heightCssPx: number;
-}
-
-interface CapturePlan {
-  renderScale: number;
-  tileHeightPx: number;
-  exceedsFrameLimit: boolean;
-  exceedsStorage: boolean;
-  maxResident: number;
-  maxTotalResident: number;
-}
-
 function tileHeightCandidates(cellHpx: number): number[] {
   const maximum = maximumTileHeightPx(cellHpx);
   const candidates: number[] = [];
@@ -114,117 +110,46 @@ function tileHeightCandidates(cellHpx: number): number[] {
   return candidates;
 }
 
+/** Working set stays below terminal eviction and never below the visible floor. */
 function cappedBudgets(
   tileBytes: number,
   minTiles: number,
   limits: GraphicsLimits,
 ): { maxResident: number; maxTotalResident: number } {
-  const maxTotalResident = totalTileCapacity(tileBytes, limits);
-  return {
-    maxResident: Math.min(maxResidentTiles(tileBytes, limits, minTiles), maxTotalResident),
-    maxTotalResident,
-  };
+  const maxTotalResident = Math.floor(limits.storageBytes / tileBytes);
+  const workingSet = Math.max(minTiles, Math.floor((limits.storageBytes * 0.8) / tileBytes));
+  return { maxResident: Math.min(workingSet, maxTotalResident), maxTotalResident };
 }
 
-interface FittingTile {
-  tileHeightPx: number;
-  tilesInFrame: number;
-  tileBytes: number;
-}
-
-function fittingTiles(
+function tileOptions(
   screenWidthPx: number,
   viewportHeightPx: number,
   cellHpx: number,
   renderScale: number,
   limits: GraphicsLimits,
-): FittingTile[] {
+): TileOption[] {
+  // At 1:1 cropping 1px is sharper than resampling the whole image.
   const imgWidthPx = toImagePx(screenWidthPx, renderScale);
-  const out: FittingTile[] = [];
-  for (const tileHeightPx of tileHeightCandidates(cellHpx)) {
-    const tilesInFrame = maxTilesInFrame(viewportHeightPx, tileHeightPx);
+  return tileHeightCandidates(cellHpx).map((tileHeightPx) => {
     const imageTileHeightPx = toImagePx(tileHeightPx, renderScale);
-    if (!fitsGraphicsFrame(limits, imgWidthPx, imageTileHeightPx)) continue;
-    out.push({ tileHeightPx, tilesInFrame, tileBytes: imgWidthPx * imageTileHeightPx * 4 });
-  }
-  return out;
-}
-
-function planAtScale(
-  screenWidthPx: number,
-  viewportHeightPx: number,
-  cellHpx: number,
-  renderScale: number,
-  limits: GraphicsLimits,
-  generations: 1 | 2,
-): CapturePlan | null {
-  for (const { tileHeightPx, tilesInFrame, tileBytes } of fittingTiles(
-    screenWidthPx,
-    viewportHeightPx,
-    cellHpx,
-    renderScale,
-    limits,
-  )) {
-    if (generations * tilesInFrame * tileBytes > limits.storageBytes) continue;
     return {
       renderScale,
+      imgWidthPx,
       tileHeightPx,
-      exceedsFrameLimit: false,
-      exceedsStorage: generations !== 2,
-      ...cappedBudgets(tileBytes, tilesInFrame + 1, limits),
+      tilesInFrame: maxTilesInFrame(viewportHeightPx, tileHeightPx),
+      tileBytes: imgWidthPx * imageTileHeightPx * 4,
+      fitsFrame: fitsGraphicsFrame(limits, imgWidthPx, imageTileHeightPx),
     };
-  }
-  return null;
+  });
 }
 
-/** Among transfer-fitting tiles, the smallest visible footprint overflows least. */
-function transferBestAtScale(
-  screenWidthPx: number,
-  viewportHeightPx: number,
-  cellHpx: number,
-  renderScale: number,
-  limits: GraphicsLimits,
-): CapturePlan | null {
-  let best: CapturePlan | null = null;
-  let bestSingleBytes = Number.POSITIVE_INFINITY;
-  for (const { tileHeightPx, tilesInFrame, tileBytes } of fittingTiles(
-    screenWidthPx,
-    viewportHeightPx,
-    cellHpx,
-    renderScale,
-    limits,
-  )) {
-    const singleBytes = tilesInFrame * tileBytes;
-    if (singleBytes >= bestSingleBytes) continue;
-    bestSingleBytes = singleBytes;
-    best = {
-      renderScale,
-      tileHeightPx,
-      exceedsFrameLimit: false,
-      exceedsStorage: true,
-      ...cappedBudgets(tileBytes, tilesInFrame + 1, limits),
-    };
-  }
-  return best;
-}
-
-function smallestPlanAtScale(
-  screenWidthPx: number,
-  viewportHeightPx: number,
-  cellHpx: number,
-  renderScale: number,
-  limits: GraphicsLimits,
-): CapturePlan {
-  const candidates = tileHeightCandidates(cellHpx);
-  const tileHeightPx = candidates[candidates.length - 1]!;
-  const imgWidthPx = toImagePx(screenWidthPx, renderScale);
-  const imageTileHeightPx = toImagePx(tileHeightPx, renderScale);
-  const tilesInFrame = maxTilesInFrame(viewportHeightPx, tileHeightPx);
-  const tileBytes = imgWidthPx * imageTileHeightPx * 4;
+function toPlan(option: TileOption, limits: GraphicsLimits): CapturePlan {
+  const { renderScale, imgWidthPx, tileHeightPx, tilesInFrame, tileBytes } = option;
   return {
     renderScale,
+    imgWidthPx,
     tileHeightPx,
-    exceedsFrameLimit: !fitsGraphicsFrame(limits, imgWidthPx, imageTileHeightPx),
+    exceedsFrameLimit: !option.fitsFrame,
     exceedsStorage: 2 * tilesInFrame * tileBytes > limits.storageBytes,
     ...cappedBudgets(tileBytes, tilesInFrame + 1, limits),
   };
@@ -240,26 +165,21 @@ function resolveCapturePlan(
     limits.frameBytes !== null &&
     viewportHeightPx >= scrollUnitPx(cellHpx, REDUCED_SCALE);
   const scales = canReduce ? [CSS_SCALE, REDUCED_SCALE] : [CSS_SCALE];
-  for (const scale of scales) {
-    const both = planAtScale(screenWidthPx, viewportHeightPx, cellHpx, scale, limits, 2);
-    if (both) return both;
-  }
-  for (const scale of scales) {
-    const single = planAtScale(screenWidthPx, viewportHeightPx, cellHpx, scale, limits, 1);
-    if (single) return single;
-  }
-  for (const scale of scales) {
-    const best = transferBestAtScale(screenWidthPx, viewportHeightPx, cellHpx, scale, limits);
-    if (best) return best;
-  }
-  // Even the smallest tile overflows one transaction; keep it to minimize the overflow.
-  return smallestPlanAtScale(
-    screenWidthPx,
-    viewportHeightPx,
-    cellHpx,
-    canReduce ? REDUCED_SCALE : CSS_SCALE,
-    limits,
+  const options = scales.map((scale) =>
+    tileOptions(screenWidthPx, viewportHeightPx, cellHpx, scale, limits),
   );
+  const fitting = options.map((atScale) => atScale.filter((o) => o.fitsFrame));
+  const visibleBytes = (o: TileOption) => o.tilesInFrame * o.tileBytes;
+  const chosen =
+    fitting.flat().find((o) => 2 * visibleBytes(o) <= limits.storageBytes) ??
+    fitting.flat().find((o) => visibleBytes(o) <= limits.storageBytes) ??
+    // Among transfer-fitting tiles, the smallest visible footprint overflows least.
+    fitting
+      .find((atScale) => atScale.length > 0)
+      ?.reduce((best, o) => (visibleBytes(o) < visibleBytes(best) ? o : best)) ??
+    // Even the smallest tile overflows one transaction; keep it to minimize the overflow.
+    options.at(-1)!.at(-1)!;
+  return toPlan(chosen, limits);
 }
 
 export function resolveGeometry(
@@ -279,14 +199,136 @@ export function resolveGeometry(
     cell.cellHpx,
     limits,
   );
-  // At 1:1 cropping 1px is sharper than resampling the whole image.
-  const imgWidthPx = toImagePx(screenWidthPx, plan.renderScale);
   return {
     rows,
     cols,
     cellHpx: cell.cellHpx,
-    imgWidthPx,
     viewportWidthCssPx,
     ...plan,
   };
+}
+
+export function contentRows(rows: number): number {
+  return Math.max(0, rows - 1);
+}
+
+export function toImagePx(screenPx: number, renderScale: number): number {
+  return Math.round((screenPx * renderScale) / CSS_SCALE);
+}
+
+/** Odd-height downscaled cells need a two-cell scroll unit. */
+export function scrollUnitPx(cellHpx: number, renderScale: number): number {
+  return (cellHpx * renderScale) % CSS_SCALE === 0 ? cellHpx : cellHpx * CSS_SCALE;
+}
+
+function tileAlign(cellHpx: number): number {
+  return cellHpx * CSS_SCALE;
+}
+
+function maximumTileHeightPx(cellHpx: number): number {
+  const unit = tileAlign(cellHpx);
+  return Math.floor(MAX_TILE_PX / unit) * unit;
+}
+
+export function alignedTileHeightPx(cellHpx: number, rows: number): number {
+  const unit = tileAlign(cellHpx);
+  const capped = maximumTileHeightPx(cellHpx);
+  const requested = Math.ceil((rows * cellHpx) / unit) * unit;
+  return Math.max(unit, Math.min(requested, capped));
+}
+
+export function computeTiles(
+  documentHeightPx: number,
+  cellHpx: number,
+  contentRows: number,
+  tileHeightPx: number,
+): TileLayout {
+  if (contentRows <= 0) {
+    return { tiles: [], truncated: false, contentHeightPx: 0 };
+  }
+  const unit = tileAlign(cellHpx);
+  const paddedH = Math.ceil(documentHeightPx / unit) * unit;
+  const tiles: Tile[] = [];
+  let y = 0;
+  while (y < paddedH && tiles.length < MAX_TILES) {
+    const height = Math.min(tileHeightPx, paddedH - y);
+    tiles.push({ topPx: y, heightPx: height });
+    y += height;
+  }
+  const cellPadded = Math.ceil(documentHeightPx / cellHpx) * cellHpx;
+  return {
+    tiles,
+    truncated: y < paddedH,
+    contentHeightPx: Math.min(cellPadded, y),
+  };
+}
+
+export function maxScrollPx(
+  contentHeightPx: number,
+  contentRows: number,
+  cellHpx: number,
+  renderScale: number,
+): number {
+  const unit = scrollUnitPx(cellHpx, renderScale);
+  const raw = Math.ceil(Math.max(0, contentHeightPx - contentRows * cellHpx) / unit) * unit;
+  // Keep at least one body image placed over the document.
+  const inside = Math.max(0, Math.ceil(contentHeightPx / unit) * unit - unit);
+  return Math.min(raw, inside);
+}
+
+export function clampScroll(
+  scrollPx: number,
+  contentHeightPx: number,
+  contentRows: number,
+  cellHpx: number,
+  renderScale: number,
+): number {
+  const unit = scrollUnitPx(cellHpx, renderScale);
+  const snapped = Math.round(scrollPx / unit) * unit;
+  return Math.max(
+    0,
+    Math.min(snapped, maxScrollPx(contentHeightPx, contentRows, cellHpx, renderScale)),
+  );
+}
+
+export function visibleTiles(
+  scrollPx: number,
+  contentRows: number,
+  cellHpx: number,
+  tiles: Tile[],
+): Placement[] {
+  const viewTop = scrollPx;
+  const viewBottom = scrollPx + contentRows * cellHpx;
+  const placements: Placement[] = [];
+  for (let i = 0; i < tiles.length; i++) {
+    const tile = tiles[i]!;
+    const overlapTop = Math.max(viewTop, tile.topPx);
+    const overlapBottom = Math.min(viewBottom, tile.topPx + tile.heightPx);
+    if (overlapBottom <= overlapTop) continue;
+    placements.push({
+      tileIndex: i,
+      sourceTopPx: overlapTop - tile.topPx,
+      sourceHeightPx: overlapBottom - overlapTop,
+      destinationRow: (overlapTop - viewTop) / cellHpx,
+      destinationRows: (overlapBottom - overlapTop) / cellHpx,
+    });
+  }
+  return placements;
+}
+
+export function backfillOrder(
+  scrollPx: number,
+  contentRows: number,
+  cellHpx: number,
+  tiles: Tile[],
+  direction: ScrollDirection = 0,
+): number[] {
+  const center = scrollPx + (contentRows * cellHpx) / 2;
+  return tiles
+    .map((tile, index) => ({
+      index,
+      dist: Math.abs(tile.topPx + tile.heightPx / 2 - center),
+    }))
+    .sort((a, b) => a.dist - b.dist || direction * (b.index - a.index) || a.index - b.index)
+    .map((t) => t.index);
 }
