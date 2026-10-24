@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildHtml, resolveAssets } from "../src/html.ts";
 import { Chrome, resolveExecutable } from "../src/chrome.ts";
-import { alignedTileHeightPx, CSS_SCALE } from "../src/geometry.ts";
+import {
+  alignedTileHeightPx,
+  contentRows,
+  detectGraphicsLimits,
+  resolveGeometry,
+  toCssPx,
+  toImagePx,
+} from "../src/geometry.ts";
 
 const exe = await resolveExecutable();
 if (!exe) {
@@ -15,15 +22,20 @@ if (!exe) {
 }
 
 const FIXTURE = resolve(import.meta.dir, "fixtures/sample.md");
-const CELL_HPX = 31;
-const CONTENT_ROWS = 64;
-const CSS_WIDTH = 490;
+// Wide enough that the relay limits drop to the reduced scale.
+const SCREEN = { cols: 300, rows: 65 };
+const CELL_WPX = 14;
 const PNG_IHDR_WIDTH_OFFSET = 16;
 const PNG_IHDR_HEIGHT_OFFSET = 20;
 
 let dir: string;
 let htmlPath: string;
+let layoutPath: string;
 let chrome: Chrome;
+
+function geometryFor(cellHpx: number, env: NodeJS.ProcessEnv = {}) {
+  return resolveGeometry(SCREEN, { cellHpx, cellWpx: CELL_WPX }, detectGraphicsLimits(env));
+}
 
 function pngSize(data: Uint8Array): { width: number; height: number } {
   const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
@@ -45,6 +57,17 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
       theme: "light",
     });
     await writeFile(htmlPath, html);
+    // Font loading and Mermaid can change the sample document's height between loads.
+    layoutPath = join(dir, "layout.html");
+    await writeFile(
+      layoutPath,
+      await buildHtml({
+        markdown: `<div style="height: 1200px"></div>`,
+        mdDir: dirname(FIXTURE),
+        assets: resolveAssets(),
+        theme: "light",
+      }),
+    );
 
     chrome = new Chrome(exe!);
     await chrome.launch();
@@ -56,32 +79,25 @@ describe.skipIf(!exe)("chrome + html pipeline", () => {
   });
 
   test("Mermaid becomes SVG on the client", async () => {
-    expect(await chrome.load(htmlPath, CSS_WIDTH, CSS_SCALE)).toBeGreaterThan(0);
+    const g = geometryFor(31);
+    expect(await chrome.load(htmlPath, g.viewportWidthCssPx, g.deviceScaleFactor)).toBeGreaterThan(0);
     expect(await chrome.page!.evaluate(() => document.querySelectorAll(".mermaid svg").length)).toBe(1);
   }, 30000);
 
-  test("both render scales keep the CSS layout and cell-aligned PNG dimensions", async () => {
-    // Font loading and Mermaid can change the sample document's height between loads.
-    const layoutPath = join(dir, "layout.html");
-    await writeFile(
-      layoutPath,
-      await buildHtml({
-        markdown: `<div style="height: 1200px"></div>`,
-        mdDir: dirname(FIXTURE),
-        assets: resolveAssets(),
-        theme: "light",
-      }),
-    );
-    const documentHeightCssPx = await chrome.load(layoutPath, CSS_WIDTH, CSS_SCALE);
-    const tileH = alignedTileHeightPx(CELL_HPX, CONTENT_ROWS);
-    const fullPng = pngSize(Buffer.from(await chrome.shoot(0, tileH / CSS_SCALE), "base64"));
-    expect(fullPng.height).toBe(tileH);
-    expect(fullPng.width).toBe(CSS_WIDTH * CSS_SCALE);
-    const reduced = await chrome.load(layoutPath, CSS_WIDTH, 1);
-    const reducedPng = pngSize(Buffer.from(await chrome.shoot(0, tileH / CSS_SCALE), "base64"));
-
-    expect(reduced).toBe(documentHeightCssPx);
-    expect(reducedPng.width * 2).toBe(fullPng.width);
-    expect(reducedPng.height * 2).toBe(fullPng.height);
-  }, 30000);
+  for (const cellHpx of [31, 33]) {
+    test(`${cellHpx}px cells: both render scales keep the CSS layout and cover the tile crop`, async () => {
+      const full = geometryFor(cellHpx);
+      const reduced = geometryFor(cellHpx, { HERDR_ENV: "1" });
+      expect(reduced.renderScale).toBeLessThan(full.renderScale);
+      const tileH = alignedTileHeightPx(cellHpx, contentRows(SCREEN.rows));
+      const documentHeightsCssPx: number[] = [];
+      for (const g of [full, reduced]) {
+        documentHeightsCssPx.push(await chrome.load(layoutPath, g.viewportWidthCssPx, g.deviceScaleFactor));
+        const png = pngSize(Buffer.from(await chrome.shoot(0, toCssPx(tileH, cellHpx)), "base64"));
+        expect(png.height).toBe(toImagePx(tileH, g.renderScale));
+        expect(png.width).toBeGreaterThanOrEqual(g.imgWidthPx);
+      }
+      expect(documentHeightsCssPx[1]).toBe(documentHeightsCssPx[0]);
+    }, 30000);
+  }
 });

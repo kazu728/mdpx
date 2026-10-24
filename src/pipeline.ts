@@ -5,7 +5,7 @@ import { buildHtml, type Assets, type Theme } from "./html.ts";
 import { deleteImage, imageId, transmit } from "./kitty.ts";
 import { Scheduler, type Action, type SchedulerEvent } from "./scheduler.ts";
 import { renderFrame, Term } from "./term.ts";
-import { CSS_SCALE } from "./geometry.ts";
+import { toCssPx, toScreenPx, type Geometry } from "./geometry.ts";
 
 type ShootAction = Extract<Action, { type: "shoot" }>;
 
@@ -25,7 +25,7 @@ export class Pipeline {
   private lastEscape = "";
   private theme: Theme = "light";
   private page: Promise<unknown> = Promise.resolve();
-  private loadedGen: number | null = null;
+  private loaded: { gen: number; geometry: Geometry } | null = null;
 
   constructor(private readonly deps: PipelineDeps) {}
 
@@ -80,10 +80,10 @@ export class Pipeline {
   private async loadGenDocument(gen: number): Promise<number> {
     const { chrome, scheduler } = this.deps;
     const g = scheduler.viewState().geometry;
-    this.loadedGen = null;
-    const h = await chrome.load(this.htmlFor(gen), g.viewportWidthCssPx, g.renderScale);
-    this.loadedGen = gen;
-    return h;
+    this.loaded = null;
+    const h = await chrome.load(this.htmlFor(gen), g.viewportWidthCssPx, g.deviceScaleFactor);
+    this.loaded = { gen, geometry: g };
+    return toScreenPx(h, g.cellHpx);
   }
 
   private releaseGen(gen: number): void {
@@ -116,19 +116,15 @@ export class Pipeline {
       if (!isShuttingDown()) this.dispatch({ type: "renderFailed", gen });
       return;
     }
-    let documentHeightCssPx: number;
+    let documentHeightPx: number;
     try {
-      documentHeightCssPx = await this.onPage(() => this.loadGenDocument(gen));
+      documentHeightPx = await this.onPage(() => this.loadGenDocument(gen));
     } catch (e) {
       await this.handleChromeError(e, gen);
       return;
     }
     if (!isShuttingDown()) {
-      this.dispatch({
-        type: "renderDone",
-        gen,
-        documentHeightPx: documentHeightCssPx * CSS_SCALE,
-      });
+      this.dispatch({ type: "renderDone", gen, documentHeightPx });
     }
   }
 
@@ -138,8 +134,9 @@ export class Pipeline {
     let base64: string;
     try {
       base64 = await this.onPage(async () => {
-        if (this.loadedGen !== gen) await this.loadGenDocument(gen);
-        return chrome.shoot(tile.topPx / CSS_SCALE, tile.heightPx / CSS_SCALE);
+        if (this.loaded?.gen !== gen) await this.loadGenDocument(gen);
+        const { cellHpx } = this.loaded!.geometry;
+        return chrome.shoot(toCssPx(tile.topPx, cellHpx), toCssPx(tile.heightPx, cellHpx));
       });
     } catch (e) {
       await this.handleChromeError(e, gen);
