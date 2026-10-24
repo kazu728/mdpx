@@ -82,13 +82,13 @@ export class Chrome {
   async load(
     htmlPath: string,
     viewportWidthCssPx: number,
-    renderScale: number,
+    deviceScaleFactor: number,
   ): Promise<number> {
     const page = this.page!;
     await page.setViewport({
       width: viewportWidthCssPx,
       height: 900,
-      deviceScaleFactor: renderScale,
+      deviceScaleFactor,
     });
     try {
       await page.goto(pathToFileURL(htmlPath).href, {

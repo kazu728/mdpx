@@ -100,7 +100,7 @@ describe("Pipeline", () => {
     const t = await setup();
     t.pipeline.execute([{ type: "shoot", gen: 1, tileIndex: 1, tile: { topPx: 500, heightPx: 500 } }]);
     (await t.page.next()).resolve(250);
-    expect((await t.page.next()).target).toEqual({ yCssPx: 250, heightCssPx: 250 });
+    expect((await t.page.next()).target).toEqual({ yCssPx: 800, heightCssPx: 800 });
   });
 
   test("a released document survives until the page work queued before its release is done", async () => {

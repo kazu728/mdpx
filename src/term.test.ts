@@ -6,7 +6,7 @@ import type { ViewState } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
 
 const ESC = "\x1b";
-const REDUCED: Geometry = { ...GEO, imgWidthPx: 400, renderScale: 1 };
+const REDUCED: Geometry = { ...GEO, imgWidthPx: 400, renderScale: 0.5 };
 
 function view(documentHeightPx: number, overrides: Partial<ViewState> = {}): ViewState {
   const geometry = overrides.geometry ?? GEO;

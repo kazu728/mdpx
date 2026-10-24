@@ -1,7 +1,7 @@
 import stringWidth from "string-width";
 import { deleteAll, deletePlacement, imageId, place } from "./kitty.ts";
 import {
-  CSS_SCALE,
+  FULL_SCALE,
   contentRows,
   maxScrollPx,
   toImagePx,
@@ -365,7 +365,7 @@ function statusBar(view: ViewState, filename: string): string {
     ? "too wide"
     : geometry.exceedsStorage
       ? "too many"
-      : geometry.renderScale < CSS_SCALE
+      : geometry.renderScale < FULL_SCALE
         ? "low-res"
         : "";
   const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");

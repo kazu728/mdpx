@@ -286,8 +286,7 @@ describe("scrolling", () => {
       cols: 216,
       cellHpx: 31,
       imgWidthPx: 1512,
-      viewportWidthCssPx: 1512,
-      renderScale: 1,
+      renderScale: 0.5,
       tileHeightPx: alignedTileHeightPx(31, 64),
     };
     const s = displayed(reduced, 100000);

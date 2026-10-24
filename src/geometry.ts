@@ -16,6 +16,7 @@ export interface ScreenSize {
 }
 
 interface CapturePlan {
+  /** Image px per terminal px. */
   renderScale: number;
   imgWidthPx: number;
   tileHeightPx: number;
@@ -29,6 +30,8 @@ interface CapturePlan {
 export interface Geometry extends ScreenSize, CapturePlan {
   cellHpx: number;
   viewportWidthCssPx: number;
+  /** Image px per CSS px. */
+  deviceScaleFactor: number;
 }
 
 interface TileOption {
@@ -61,8 +64,11 @@ interface Placement {
   destinationRows: number;
 }
 
-/** CSS layout ratio; not the screenshot deviceScaleFactor. */
-export const CSS_SCALE = 2;
+/**
+ * CSS px spanned by one cell's height. GitHub's 16px body text then follows the terminal
+ * font size, and a power of two keeps the device scale factor exact.
+ */
+const CELL_CSS_PX = 16;
 
 /** Bounds capture cost and stays below IMAGE_ID_GENERATION_STRIDE. */
 const MAX_TILES = 128;
@@ -70,7 +76,8 @@ const MAX_TILES = 128;
 // Terminal rows are unbounded, so cap screenshot requests independently of kitty limits.
 const MAX_TILE_PX = 4096;
 
-const REDUCED_SCALE = 1;
+export const FULL_SCALE = 1;
+const REDUCED_SCALE = 0.5;
 
 const HERDR_RELAY: GraphicsLimits = {
   frameBytes: 32 * 1024 * 1024 - 2 * 1024 * 1024,
@@ -164,7 +171,7 @@ function resolveCapturePlan(
   const canReduce =
     limits.frameBytes !== null &&
     viewportHeightPx >= scrollUnitPx(cellHpx, REDUCED_SCALE);
-  const scales = canReduce ? [CSS_SCALE, REDUCED_SCALE] : [CSS_SCALE];
+  const scales = canReduce ? [FULL_SCALE, REDUCED_SCALE] : [FULL_SCALE];
   const options = scales.map((scale) =>
     tileOptions(screenWidthPx, viewportHeightPx, cellHpx, scale, limits),
   );
@@ -190,7 +197,8 @@ export function resolveGeometry(
   const { rows } = screen;
   const cols = Math.max(1, screen.cols);
   const screenWidthPx = cols * cell.cellWpx;
-  const viewportWidthCssPx = Math.round(screenWidthPx / CSS_SCALE);
+  // Chrome rounds the screenshot width, so rounding up keeps it no narrower than the 1:1 crop.
+  const viewportWidthCssPx = Math.ceil(toCssPx(screenWidthPx, cell.cellHpx));
   const contentRowCount = contentRows(rows);
   const viewportHeightPx = contentRowCount * cell.cellHpx;
   const plan = resolveCapturePlan(
@@ -204,6 +212,7 @@ export function resolveGeometry(
     cols,
     cellHpx: cell.cellHpx,
     viewportWidthCssPx,
+    deviceScaleFactor: (plan.renderScale * cell.cellHpx) / CELL_CSS_PX,
     ...plan,
   };
 }
@@ -213,16 +222,25 @@ export function contentRows(rows: number): number {
 }
 
 export function toImagePx(screenPx: number, renderScale: number): number {
-  return Math.round((screenPx * renderScale) / CSS_SCALE);
+  return Math.round(screenPx * renderScale);
+}
+
+export function toCssPx(screenPx: number, cellHpx: number): number {
+  return (screenPx * CELL_CSS_PX) / cellHpx;
+}
+
+export function toScreenPx(cssPx: number, cellHpx: number): number {
+  return (cssPx * cellHpx) / CELL_CSS_PX;
 }
 
 /** Odd-height downscaled cells need a two-cell scroll unit. */
 export function scrollUnitPx(cellHpx: number, renderScale: number): number {
-  return (cellHpx * renderScale) % CSS_SCALE === 0 ? cellHpx : cellHpx * CSS_SCALE;
+  return Number.isInteger(cellHpx * renderScale) ? cellHpx : 2 * cellHpx;
 }
 
+/** Two cells keep tile edges on whole image px at the reduced scale. */
 function tileAlign(cellHpx: number): number {
-  return cellHpx * CSS_SCALE;
+  return 2 * cellHpx;
 }
 
 function maximumTileHeightPx(cellHpx: number): number {

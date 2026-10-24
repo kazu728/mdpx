@@ -63,13 +63,27 @@ describe("resolveGeometry", () => {
   });
 
   test("downscales only on the relay and only when full resolution cannot fit", () => {
-    expect(resolveGeometry({ cols: 216, rows: 65 }, CELL, relayed).renderScale).toBe(2);
+    expect(resolveGeometry({ cols: 216, rows: 65 }, CELL, relayed).renderScale).toBe(1);
     const full = resolveGeometry({ cols: 300, rows: 65 }, CELL, direct);
-    expect(full.renderScale).toBe(2);
+    expect(full.renderScale).toBe(1);
     expect(full.imgWidthPx).toBe(300 * 14);
     const reduced = resolveGeometry({ cols: 300, rows: 65 }, CELL, relayed);
-    expect(reduced.renderScale).toBe(1);
+    expect(reduced.renderScale).toBe(0.5);
     expect(reduced.imgWidthPx).toBe((300 * 14) / 2);
+    expect(reduced.deviceScaleFactor).toBe(full.deviceScaleFactor / 2);
+    expect(reduced.viewportWidthCssPx).toBe(full.viewportWidthCssPx);
+  });
+
+  test("a larger terminal font enlarges the page while the image keeps the window width", () => {
+    const before = resolveGeometry({ cols: 216, rows: 65 }, CELL, direct);
+    const after = resolveGeometry({ cols: 189, rows: 56 }, { cellHpx: 35, cellWpx: 16 }, direct);
+    expect(after.imgWidthPx).toBe(before.imgWidthPx);
+    expect(before.deviceScaleFactor).toBe(31 / 16);
+    expect(after.deviceScaleFactor).toBe(35 / 16);
+    expect(after.viewportWidthCssPx).toBeLessThan(before.viewportWidthCssPx);
+    for (const g of [before, after]) {
+      expect(g.viewportWidthCssPx * g.deviceScaleFactor).toBeGreaterThanOrEqual(g.imgWidthPx);
+    }
   });
 
   test("screens too large for two generations report it and cap the budgets to storage", () => {
@@ -115,18 +129,18 @@ describe("computeTiles", () => {
 describe("clampScroll", () => {
   test("keeps the scroll inside the document on cell boundaries", () => {
     const { contentHeightPx } = layout(8000);
-    expect(clampScroll(-100, contentHeightPx, ROWS, CELL_HPX, 2)).toBe(0);
-    expect(clampScroll(37, contentHeightPx, ROWS, CELL_HPX, 2)).toBe(40);
-    expect(clampScroll(10 ** 6, contentHeightPx, ROWS, CELL_HPX, 2)).toBe(8000 - ROWS * CELL_HPX);
-    expect(clampScroll(100, layout(300).contentHeightPx, ROWS, CELL_HPX, 2)).toBe(0);
+    expect(clampScroll(-100, contentHeightPx, ROWS, CELL_HPX, 1)).toBe(0);
+    expect(clampScroll(37, contentHeightPx, ROWS, CELL_HPX, 1)).toBe(40);
+    expect(clampScroll(10 ** 6, contentHeightPx, ROWS, CELL_HPX, 1)).toBe(8000 - ROWS * CELL_HPX);
+    expect(clampScroll(100, layout(300).contentHeightPx, ROWS, CELL_HPX, 1)).toBe(0);
   });
 
   test("downscaled odd cells scroll in two-cell steps and still reach the tail", () => {
     const { contentHeightPx } = layout(3131, 31, 64);
-    const max = maxScrollPx(contentHeightPx, 64, 31, 1);
+    const max = maxScrollPx(contentHeightPx, 64, 31, 0.5);
     expect(max % 62).toBe(0);
     expect(max + 64 * 31).toBeGreaterThanOrEqual(contentHeightPx);
-    expect(clampScroll(10 ** 6, contentHeightPx, 64, 31, 2)).toBe(3131 - 64 * 31);
+    expect(clampScroll(10 ** 6, contentHeightPx, 64, 31, 1)).toBe(3131 - 64 * 31);
   });
 });
 
