@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { realpathSync, statSync, watch, type FSWatcher } from "node:fs";
+import { realpathSync, statSync, watch } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -62,16 +62,12 @@ async function runApp(mdPath: string): Promise<void> {
 
   const chrome = new Chrome(chromeExecutable);
   let dir: string | null = null;
-  let watcher: FSWatcher | null = null;
-  let debounce: ReturnType<typeof setTimeout> | null = null;
   let shuttingDown = false;
 
   async function shutdown(code: number, message?: string): Promise<never> {
     if (shuttingDown) return new Promise<never>(() => {});
     shuttingDown = true;
     try {
-      if (debounce) clearTimeout(debounce);
-      watcher?.close();
       term.restore();
       if (message) warn(message);
       await Promise.race([chrome.close(), sleep(CHROME_CLOSE_TIMEOUT_MS)]);
@@ -117,23 +113,22 @@ async function runApp(mdPath: string): Promise<void> {
     });
     started = pipeline;
 
-    let resizeSeq = 0;
     term.onResizeEvent(() => {
-      const seq = ++resizeSeq;
       void (async () => {
         if (shuttingDown) return;
         const c = await term.queryCellSize(CELL_QUERY_MS);
-        if (!c || shuttingDown || seq !== resizeSeq) return;
+        if (!c || shuttingDown) return;
         pipeline.dispatch({ type: "resize", geometry: resolveGeometry(term.size(), c) });
       })();
     });
 
+    let debounce: ReturnType<typeof setTimeout> | undefined;
     try {
-      watcher = watch(mdDir, (_event, changed) => {
+      // Not closed on shutdown: shutdown can run before the watcher exists, so the callback checks instead.
+      watch(mdDir, (_event, changed) => {
         if (changed !== null && changed.normalize("NFC").toLowerCase() !== watchTarget) return;
-        if (debounce) clearTimeout(debounce);
+        clearTimeout(debounce);
         debounce = setTimeout(() => {
-          debounce = null;
           if (!shuttingDown) pipeline.dispatch({ type: "trigger" });
         }, WATCH_DEBOUNCE_MS);
       });
