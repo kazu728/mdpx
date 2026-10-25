@@ -78,12 +78,7 @@ function getRenderer(): Promise<Renderer> {
     rendererPromise = createHighlighter({
       themes: Object.values(SHIKI_THEME),
       langs: [],
-    })
-      .then((highlighter) => ({ highlighter, md: createMarkdown(highlighter) }))
-      .catch((e) => {
-        rendererPromise = null;
-        throw e;
-      });
+    }).then((highlighter) => ({ highlighter, md: createMarkdown(highlighter) }));
   }
   return rendererPromise;
 }
