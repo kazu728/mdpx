@@ -29,7 +29,6 @@ export type SchedulerEvent =
 export type Action =
   | { type: "render"; gen: number }
   | { type: "shoot"; gen: number; tileIndex: number; tile: Tile }
-  | { type: "redraw" }
   | { type: "deleteGen"; imageIds: number[] }
   | { type: "releaseGen"; gen: number };
 
@@ -73,7 +72,7 @@ export class Scheduler {
   private displayGen: GenState | null = null;
   private capture: Capture | null = null;
   private rerun = false;
-  private failedGen: number | null = null;
+  private renderFailed = false;
   private pendingScrollPx: number | null = null;
   private scrollFailed = false;
 
@@ -112,7 +111,7 @@ export class Scheduler {
       geometry: this.geometry,
       scrollPx: this.scrollPx,
       phase: this.capture?.reason === "render" ? "rendering" : "ready",
-      failure: this.failedGen !== null || this.scrollFailed,
+      failure: this.renderFailed || this.scrollFailed,
       pendingScrollPx: this.pendingScrollPx,
       displayGen: this.displayGen,
     };
@@ -127,7 +126,7 @@ export class Scheduler {
   }
 
   private onResize(geometry: Geometry): Action[] {
-    if (sameGeometry(this.geometry, geometry)) return [{ type: "redraw" }];
+    if (sameGeometry(this.geometry, geometry)) return [];
     this.geometry = geometry;
     this.pendingScrollPx = null;
     const old = this.displayGen;
@@ -138,7 +137,6 @@ export class Scheduler {
     }
     if (this.capture) {
       this.rerun = true;
-      actions.push({ type: "redraw" });
       return actions;
     }
     actions.push(...this.startPipeline());
@@ -160,7 +158,7 @@ export class Scheduler {
       inFlight: false,
     };
     this.rerun = false;
-    return [{ type: "render", gen: this.genCounter }, { type: "redraw" }];
+    return [{ type: "render", gen: this.genCounter }];
   }
 
   private onKey(delta: ScrollDelta): Action[] {
@@ -202,9 +200,9 @@ export class Scheduler {
           direction,
           this.geometry.maxResident,
         );
-        return [{ type: "redraw" }];
+        return [];
       }
-      return [{ type: "redraw" }, ...this.startPrefetchIfNeeded(direction)];
+      return this.startPrefetchIfNeeded(direction);
     }
     if (capture) {
       if (capture.target.tiles.length > 0) {
@@ -215,9 +213,9 @@ export class Scheduler {
           this.geometry.maxTotalResident,
         );
       }
-      return [{ type: "redraw" }];
+      return [];
     }
-    return [{ type: "redraw" }, ...this.beginFetch(shown, req, this.geometry.maxTotalResident, direction)];
+    return this.beginFetch(shown, req, this.geometry.maxTotalResident, direction);
   }
 
   private queueAround(
@@ -330,10 +328,9 @@ export class Scheduler {
     if (!g || g.gen !== gen) return [];
     const actions: Action[] = [];
     if (this.displayGen !== g) {
-      this.failedGen = g.gen;
+      this.renderFailed = true;
       if (this.rerun) {
         this.pushReleaseGen(g, actions);
-        actions.push({ type: "redraw" });
         actions.push(...this.startPipeline());
         return actions;
       }
@@ -349,7 +346,7 @@ export class Scheduler {
       if (shown && shown.gen === gen) {
         shown.resident.add(tileIndex);
         const committed = this.takeCommitted(shown);
-        const actions: Action[] = [{ type: "redraw" }];
+        const actions: Action[] = [];
         this.pushEvict(shown, this.residentLimit, actions);
         if (committed && this.capture) this.shrinkQueueToSteady(this.capture);
         return actions;
@@ -360,10 +357,10 @@ export class Scheduler {
     capture.inFlight = false;
     g.resident.add(tileIndex);
     if (this.rerun) return this.abortStalePipeline();
-    const freed = this.evictToSize(g, this.residentLimit);
-    const actions = this.drive();
-    const withRedraw: Action[] = actions[0]?.type === "redraw" ? actions : [{ type: "redraw" }, ...actions];
-    return freed.length ? [...withRedraw, { type: "deleteGen", imageIds: freed }] : withRedraw;
+    const actions: Action[] = [];
+    this.pushEvict(g, this.residentLimit, actions);
+    actions.push(...this.drive());
+    return actions;
   }
 
   private scrollFor(g: GenState): number {
@@ -376,20 +373,6 @@ export class Scheduler {
       this.geometry.cellHpx,
       this.geometry.renderScale,
     );
-  }
-
-  private evictToSize(g: GenState, maxSize: number): number[] {
-    if (g.resident.size <= maxSize) return [];
-    const visible = this.protectedSet(g);
-    const order = backfillOrder(this.scrollFor(g), this.contentRows, this.geometry.cellHpx, g.tiles);
-    const freed: number[] = [];
-    for (let i = order.length - 1; i >= 0 && g.resident.size > maxSize; i--) {
-      const tileIndex = order[i]!;
-      if (!g.resident.has(tileIndex) || visible.has(tileIndex)) continue;
-      g.resident.delete(tileIndex);
-      freed.push(imageId(g.gen, tileIndex));
-    }
-    return freed;
   }
 
   private abortStalePipeline(): Action[] {
@@ -417,8 +400,7 @@ export class Scheduler {
         this.displayGen = g;
         this.pendingScrollPx = null;
         if (hadPending) this.scrollFailed = false;
-        if (this.failedGen !== null && g.gen >= this.failedGen) this.failedGen = null;
-        actions.push({ type: "redraw" });
+        this.renderFailed = false;
         if (old) {
           this.pushReleaseGen(old, actions);
         }
@@ -426,7 +408,6 @@ export class Scheduler {
         this.shrinkQueueToSteady(capture);
       }
     } else if (this.takeCommitted(g)) {
-      actions.push({ type: "redraw" });
       this.pushEvict(g, this.geometry.maxResident, actions);
       this.shrinkQueueToSteady(capture);
     }
@@ -444,14 +425,7 @@ export class Scheduler {
     const newBudget =
       Math.min(this.residentLimit, this.geometry.maxTotalResident - (old?.resident.size ?? 0)) - 1;
     this.pushEvict(g, newBudget, actions);
-    let fits = g.resident.size <= newBudget;
-    if (!fits && this.geometry.exceedsStorage && old) {
-      // Single-generation mode: drop the old display instead of overflowing storage.
-      this.pushReleaseGen(old, actions);
-      this.displayGen = null;
-      fits = g.resident.size + 1 <= this.geometry.maxResident;
-    }
-    if (fits) {
+    if (g.resident.size <= newBudget) {
       capture.inFlight = true;
       actions.push(this.shootAction(g, next));
     } else {
@@ -467,29 +441,31 @@ export class Scheduler {
   }
 
   private pushEvict(g: GenState, maxSize: number, actions: Action[]): void {
-    const freed = this.evictToSize(g, maxSize);
+    if (g.resident.size <= maxSize) return;
+    const visible = this.protectedSet(g);
+    const order = backfillOrder(this.scrollFor(g), this.contentRows, this.geometry.cellHpx, g.tiles);
+    const freed: number[] = [];
+    for (let i = order.length - 1; i >= 0 && g.resident.size > maxSize; i--) {
+      const tileIndex = order[i]!;
+      if (!g.resident.has(tileIndex) || visible.has(tileIndex)) continue;
+      g.resident.delete(tileIndex);
+      freed.push(imageId(g.gen, tileIndex));
+    }
     if (freed.length) actions.push({ type: "deleteGen", imageIds: freed });
   }
 
-  private resumePendingDisplay(actions: Action[]): boolean {
+  private resumePendingDisplay(actions: Action[]): void {
     const shown = this.displayGen;
     const pend = shown ? this.clampPendingToGen(shown) : null;
-    if (!shown || pend === null) return false;
-    if (this.takeCommitted(shown)) {
-      actions.push({ type: "redraw" });
-      actions.push(...this.startPrefetchIfNeeded(0));
-      return true;
-    }
-    actions.push({ type: "redraw" });
-    actions.push(...this.beginFetch(shown, pend, this.geometry.maxTotalResident, 0));
-    return true;
+    if (!shown || pend === null) return;
+    if (this.takeCommitted(shown)) actions.push(...this.startPrefetchIfNeeded(0));
+    else actions.push(...this.beginFetch(shown, pend, this.geometry.maxTotalResident, 0));
   }
 
   private failDisplayedGen(g: GenState, actions: Action[]): void {
     if (this.pendingScrollPx !== null) this.scrollFailed = true;
     this.pendingScrollPx = null;
     this.capture = null;
-    actions.push({ type: "redraw" });
     this.pushEvict(g, this.geometry.maxResident, actions);
     if (this.rerun) actions.push(...this.startPipeline());
   }
@@ -502,8 +478,7 @@ export class Scheduler {
     }
     this.pushReleaseGen(g, actions);
     this.capture = null;
-    if (this.resumePendingDisplay(actions)) return;
-    actions.push({ type: "redraw" });
+    this.resumePendingDisplay(actions);
   }
 
   private nextShoot(capture: Capture): number | null {

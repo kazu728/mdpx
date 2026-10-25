@@ -86,21 +86,19 @@ describe("resolveGeometry", () => {
     }
   });
 
-  test("screens too large for two generations report it and cap the budgets to storage", () => {
-    const tall = resolveGeometry({ cols: 400, rows: 200 }, CELL, relayed);
+  test("screens too large for two generations still show one and cap the budgets to storage", () => {
     for (const g of [
       resolveGeometry({ cols: 2000, rows: 65 }, CELL, relayed),
       resolveGeometry({ cols: 24000, rows: 3 }, CELL, relayed),
-      tall,
+      resolveGeometry({ cols: 400, rows: 200 }, CELL, relayed),
     ]) {
-      expect(g.exceedsFrameLimit).toBe(false);
-      expect(g.exceedsStorage).toBe(true);
+      expect(2 * visibleBytes(g)).toBeGreaterThan(relayed.storageBytes);
+      expect(visibleBytes(g)).toBeLessThanOrEqual(relayed.storageBytes);
       expect(g.maxResident).toBeLessThanOrEqual(g.maxTotalResident);
       expect(g.maxTotalResident * tileBytes(g)).toBeLessThanOrEqual(relayed.storageBytes);
     }
-    expect(visibleBytes(tall)).toBeLessThanOrEqual(relayed.storageBytes);
     const huge = resolveGeometry({ cols: 300, rows: 201 }, CELL, direct);
-    expect(huge.exceedsStorage).toBe(false);
+    expect(2 * visibleBytes(huge)).toBeLessThanOrEqual(direct.storageBytes);
   });
 
   test("a zero-column screen still captures a positive width", () => {

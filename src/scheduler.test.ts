@@ -30,6 +30,7 @@ class Session {
 
   send(event: Parameters<Scheduler["dispatch"]>[0]): Action[] {
     const actions = this.scheduler.dispatch(event);
+    this.redraw();
     for (const action of actions) this.apply(action);
     this.expectWithinBudget();
     return actions;
@@ -82,15 +83,15 @@ class Session {
       .sort((a, b) => a - b);
   }
 
+  private redraw(): void {
+    const frame = renderFrame(this.view, "a.md", []);
+    this.screen = frame.escape;
+    this.placed = new Set(frame.placements);
+    for (const id of this.placed) expect(this.live.has(id)).toBe(true);
+  }
+
   private apply(action: Action): void {
     switch (action.type) {
-      case "redraw": {
-        const frame = renderFrame(this.view, "a.md", []);
-        this.screen = frame.escape;
-        this.placed = new Set(frame.placements);
-        for (const id of this.placed) expect(this.live.has(id)).toBe(true);
-        break;
-      }
       case "deleteGen":
         for (const id of action.imageIds) {
           // Deleting a placed image blanks it until the next redraw, unless nothing stays shown anyway.
@@ -152,7 +153,6 @@ describe("rendering", () => {
 
   test("a document that cannot be shown within storage settles instead of retrying forever", () => {
     const g = resolveGeometry({ cols: 400, rows: 400 }, { cellHpx: 31, cellWpx: 14 }, detectGraphicsLimits({ HERDR_ENV: "1" }));
-    expect(g.exceedsStorage).toBe(true);
     const s = new Session(g);
     s.save();
     s.rendered(399 * 31);
@@ -303,7 +303,7 @@ describe("resize", () => {
     s.save();
     s.rendered(1500);
     const bigger: Geometry = { ...GEO, rows: 61, cellHpx: 12, tileHeightPx: alignedTileHeightPx(12, 60) };
-    expect(s.send({ type: "resize", geometry: bigger })).toEqual([{ type: "redraw" }]);
+    expect(s.send({ type: "resize", geometry: bigger })).toEqual([]);
     expect(s.view).toMatchObject({ displayGen: null, geometry: { cellHpx: 12 } });
     s.deliver();
     expect(s.liveTiles(1)).toEqual([]);
@@ -322,14 +322,14 @@ describe("resize", () => {
     expect(s.liveTiles(1)).toEqual([]);
   });
 
-  test("a resize frees the shown generation and re-renders; the same size only redraws", () => {
+  test("a resize frees the shown generation and re-renders; the same size changes nothing", () => {
     const s = displayed(GEO, 1500);
     s.send({ type: "resize", geometry: { ...GEO, rows: 41 } });
     expect(s.liveTiles(1)).toEqual([]);
     expect(s.pendingRenders()).toEqual([2]);
 
     const same = displayed(GEO, 1500);
-    expect(same.send({ type: "resize", geometry: { ...GEO } })).toEqual([{ type: "redraw" }]);
+    expect(same.send({ type: "resize", geometry: { ...GEO } })).toEqual([]);
     expect(same.liveTiles(1)).toEqual([0, 1, 2]);
   });
 });
@@ -345,16 +345,6 @@ describe("storage across generations", () => {
     s.deliverAll();
     expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 400 });
     expect(s.liveTiles(1)).toEqual([]);
-    expect(s.released).toEqual([1]);
-  });
-
-  test("when two generations cannot fit, the old display is dropped instead of overflowing", () => {
-    const s = displayed({ ...GEO, maxResident: 3, maxTotalResident: 3, exceedsStorage: true }, 5000);
-    s.key({ kind: "lines", n: 10 });
-    s.save();
-    s.rendered(5000);
-    s.deliverAll();
-    expect(s.view.displayGen?.gen).toBe(2);
     expect(s.released).toEqual([1]);
   });
 });

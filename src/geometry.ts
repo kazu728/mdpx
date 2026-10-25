@@ -1,6 +1,6 @@
 import { transferSize } from "./kitty.ts";
 
-export interface GraphicsLimits {
+interface GraphicsLimits {
   frameBytes: number | null;
   storageBytes: number;
 }
@@ -20,9 +20,6 @@ interface CapturePlan {
   renderScale: number;
   imgWidthPx: number;
   tileHeightPx: number;
-  exceedsFrameLimit: boolean;
-  /** One image fits transfer but old+new visible tiles do not fit storage. */
-  exceedsStorage: boolean;
   maxResident: number;
   maxTotalResident: number;
 }
@@ -156,8 +153,6 @@ function toPlan(option: TileOption, limits: GraphicsLimits): CapturePlan {
     renderScale,
     imgWidthPx,
     tileHeightPx,
-    exceedsFrameLimit: !option.fitsFrame,
-    exceedsStorage: 2 * tilesInFrame * tileBytes > limits.storageBytes,
     ...cappedBudgets(tileBytes, tilesInFrame + 1, limits),
   };
 }
@@ -178,6 +173,7 @@ function resolveCapturePlan(
   const fitting = options.map((atScale) => atScale.filter((o) => o.fitsFrame));
   const visibleBytes = (o: TileOption) => o.tilesInFrame * o.tileBytes;
   const chosen =
+    // An update holds the old and the new generation's visible tiles at once.
     fitting.flat().find((o) => 2 * visibleBytes(o) <= limits.storageBytes) ??
     fitting.flat().find((o) => visibleBytes(o) <= limits.storageBytes) ??
     // Among transfer-fitting tiles, the smallest visible footprint overflows least.

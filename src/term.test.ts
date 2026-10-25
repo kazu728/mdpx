@@ -40,11 +40,14 @@ describe("Term", () => {
       written.push(String(chunk));
       return true;
     });
+    // A non-TTY stdin has no setRawMode for restore() to call.
+    Object.defineProperty(process.stdin, "setRawMode", { value: () => process.stdin, configurable: true });
   });
 
   afterEach(() => {
     jest.useRealTimers();
     jest.restoreAllMocks();
+    Reflect.deleteProperty(process.stdin, "setRawMode");
   });
 
   function terminal(): { term: Term; keys: Key[]; input(s: string): void } {
@@ -248,14 +251,9 @@ describe("status bar", () => {
     expect(statusLine({ ...truncated, scrollPx: 2490 })).not.toContain("truncated");
   });
 
-  test("capacity warnings outrank low resolution", () => {
-    const reduced = view(300, { geometry: REDUCED });
-    const capacity = (g: Partial<Geometry>) => statusLine({ ...reduced, geometry: { ...REDUCED, ...g } });
-    expect(capacity({})).toContain("low-res");
-    expect(capacity({ exceedsStorage: true })).toContain("too many");
-    expect(capacity({ exceedsStorage: true })).not.toContain("low-res");
-    expect(capacity({ exceedsFrameLimit: true, exceedsStorage: true })).toContain("too wide");
-    expect(capacity({ exceedsFrameLimit: true, exceedsStorage: true })).not.toContain("too many");
+  test("a downscaled capture is marked low-res", () => {
+    expect(statusLine(view(300, { geometry: REDUCED }))).toContain("low-res");
+    expect(statusLine(view(300))).not.toContain("low-res");
   });
 });
 

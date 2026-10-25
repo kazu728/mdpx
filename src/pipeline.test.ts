@@ -89,10 +89,11 @@ const shootTile0 = { type: "shoot", gen: 1, tileIndex: 0, tile: { topPx: 0, heig
 describe("Pipeline", () => {
   test("an unchanged frame is not written again", async () => {
     const t = await setup();
-    t.pipeline.execute([{ type: "redraw" }, { type: "redraw" }]);
-    expect(t.writes).toHaveLength(1);
     t.send({ type: "trigger" });
-    expect(t.writes).toHaveLength(2);
+    expect(t.writes).toHaveLength(1);
+    // A save during the render coalesces and leaves the frame as it was.
+    t.send({ type: "trigger" });
+    expect(t.writes).toHaveLength(1);
     await t.page.next();
   });
 

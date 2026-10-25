@@ -81,7 +81,6 @@ function sanitizeTerminalLine(s: string): string {
 }
 
 export class Term {
-  private raw = false;
   private alt = false;
   private buffer = Buffer.alloc(0);
   private resyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -103,7 +102,6 @@ export class Term {
 
   enableInput(): void {
     process.stdin.setRawMode(true);
-    this.raw = true;
     process.stdin.resume();
     process.stdin.on("data", this.onData);
     process.stdout.on("resize", this.onResize);
@@ -292,8 +290,7 @@ export class Term {
     this.resyncTimer = null;
     process.stdin.off("data", this.onData);
     process.stdout.off("resize", this.onResize);
-    if (this.raw) process.stdin.setRawMode(false);
-    this.raw = false;
+    process.stdin.setRawMode(false);
     process.stdin.pause();
   }
 }
@@ -360,15 +357,8 @@ function statusBar(view: ViewState, filename: string): string {
         : shown && shown.truncated && scrollPx >= max
           ? "truncated"
           : "";
-  // Capacity outlives transient states so it survives at a truncated tail.
-  const capacity = geometry.exceedsFrameLimit
-    ? "too wide"
-    : geometry.exceedsStorage
-      ? "too many"
-      : geometry.renderScale < FULL_SCALE
-        ? "low-res"
-        : "";
-  const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");
+  const resolution = geometry.renderScale < FULL_SCALE ? "low-res" : "";
+  const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, resolution].filter(Boolean).join("  ");
   const right = "q:quit";
   const cols = geometry.cols;
   const { text, displayWidth: leftW } = truncateToDisplayWidth(left, cols);

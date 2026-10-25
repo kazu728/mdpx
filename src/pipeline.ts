@@ -30,22 +30,16 @@ export class Pipeline {
   constructor(private readonly deps: PipelineDeps) {}
 
   dispatch(event: SchedulerEvent): void {
-    this.execute(this.deps.scheduler.dispatch(event));
+    const actions = this.deps.scheduler.dispatch(event);
+    // Drawn before the actions so that deleted images are no longer placed.
+    this.redraw();
+    this.execute(actions);
   }
 
   execute(actions: Action[]): void {
-    const { scheduler, term, mdPath } = this.deps;
+    const { term } = this.deps;
     for (const a of actions) {
       switch (a.type) {
-        case "redraw": {
-          const frame = renderFrame(scheduler.viewState(), basename(mdPath), this.lastPlacements);
-          if (frame.escape !== this.lastEscape) {
-            term.write(frame.escape);
-            this.lastEscape = frame.escape;
-          }
-          this.lastPlacements = frame.placements;
-          break;
-        }
         case "deleteGen":
           term.write(a.imageIds.map(deleteImage).join(""));
           break;
@@ -65,6 +59,16 @@ export class Pipeline {
   toggleTheme(): void {
     this.theme = this.theme === "light" ? "dark" : "light";
     this.dispatch({ type: "trigger" });
+  }
+
+  private redraw(): void {
+    const { scheduler, term, mdPath } = this.deps;
+    const frame = renderFrame(scheduler.viewState(), basename(mdPath), this.lastPlacements);
+    if (frame.escape !== this.lastEscape) {
+      term.write(frame.escape);
+      this.lastEscape = frame.escape;
+    }
+    this.lastPlacements = frame.placements;
   }
 
   private onPage<T>(work: () => Promise<T>): Promise<T> {
