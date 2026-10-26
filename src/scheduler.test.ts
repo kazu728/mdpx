@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderFrame } from "./term.ts";
-import { alignedTileHeightPx, detectGraphicsLimits, resolveGeometry, type Geometry } from "./geometry.ts";
+import { alignedTileHeightPx, contentRows, detectGraphicsLimits, resolveGeometry, type Geometry } from "./geometry.ts";
 import { IMAGE_ID_GENERATION_STRIDE, imageId } from "./kitty.ts";
 import { Scheduler, type Action, type ScrollDelta } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
@@ -153,6 +153,7 @@ describe("rendering", () => {
 
   test("a document that cannot be shown within storage settles instead of retrying forever", () => {
     const g = resolveGeometry({ cols: 400, rows: 400 }, { cellHpx: 31, cellWpx: 14 }, detectGraphicsLimits({ HERDR_ENV: "1" }));
+    expect(contentRows(g.rows) * g.cellHpx).toBeGreaterThan(g.maxTotalResident * g.tileHeightPx);
     const s = new Session(g);
     s.save();
     s.rendered(399 * 31);
