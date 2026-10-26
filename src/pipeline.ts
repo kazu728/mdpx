@@ -36,7 +36,7 @@ export class Pipeline {
     this.execute(actions);
   }
 
-  execute(actions: Action[]): void {
+  private execute(actions: Action[]): void {
     const { term } = this.deps;
     for (const a of actions) {
       switch (a.type) {

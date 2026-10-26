@@ -84,8 +84,6 @@ async function setup() {
   return { page, writes, fatal, state, scheduler, pipeline, send, html, display };
 }
 
-const shootTile0 = { type: "shoot", gen: 1, tileIndex: 0, tile: { topPx: 0, heightPx: 500 } } as const;
-
 describe("Pipeline", () => {
   test("an unchanged frame is not written again", async () => {
     const t = await setup();
@@ -99,21 +97,29 @@ describe("Pipeline", () => {
 
   test("a tile is captured as its CSS-pixel band of the page", async () => {
     const t = await setup();
-    t.pipeline.execute([{ type: "shoot", gen: 1, tileIndex: 1, tile: { topPx: 500, heightPx: 500 } }]);
-    (await t.page.next()).resolve(250);
+    t.send({ type: "trigger" });
+    // 1600 CSS px is two GEO tiles.
+    (await t.page.next()).resolve(1600);
+    (await t.page.next()).resolve("");
     expect((await t.page.next()).target).toEqual({ yCssPx: 800, heightCssPx: 800 });
   });
 
   test("a released document survives until the page work queued before its release is done", async () => {
     const t = await setup();
-    await t.display();
+    // 2400 CSS px is three GEO tiles; the update starts before the bottom one is shot.
     t.send({ type: "trigger" });
-    const update = await t.page.next();
-    t.pipeline.execute([shootTile0]);
-    update.reject(new ContentError("load timed out"));
+    (await t.page.next()).resolve(2400);
+    (await t.page.next()).resolve("");
+    const backfill = await t.page.next();
+    t.send({ type: "key", delta: { kind: "bottom" } });
+    t.send({ type: "trigger" });
+    backfill.resolve("");
+    (await t.page.next()).reject(new ContentError("load timed out"));
     const reload = await t.page.next();
     expect(reload.target).toBe(t.html(1));
 
+    // Moving the capture to gen 3 lets the resize release gen 1 while its reload is still queued.
+    t.send({ type: "trigger" });
     t.send({ type: "resize", geometry: { ...GEO, rows: 31 } });
     await flush();
     expect(existsSync(t.html(1))).toBe(true);
