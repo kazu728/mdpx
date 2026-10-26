@@ -168,7 +168,7 @@ describe("Term", () => {
   });
 
   describe("alternate screen", () => {
-    test("enters with alternate scroll and a full clear, and restore undoes it once", () => {
+    test("enters with alternate scroll and a full clear, and restore undoes it", () => {
       const term = new Term();
       term.restore();
       expect(written).toEqual([]);
@@ -177,9 +177,6 @@ describe("Term", () => {
       written.length = 0;
       term.restore();
       expect(written.join("")).toBe(`${deleteAll()}${ESC}[?25h${ESC}[?1007l${ESC}[?1049l`);
-      written.length = 0;
-      term.restore();
-      expect(written).toEqual([]);
     });
   });
 

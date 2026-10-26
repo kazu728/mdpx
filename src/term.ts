@@ -89,8 +89,6 @@ export class Term {
   private reportHandler: ((params: number[]) => void) | null = null;
   private kittyGraphicsReplyHandler: (() => void) | null = null;
   private primaryDaReplyHandler: (() => void) | null = null;
-  private readonly onData = (chunk: Buffer) => this.feed(chunk);
-  private readonly onResize = () => this.resizeHandler?.();
 
   size(): ScreenSize {
     return { cols: process.stdout.columns, rows: process.stdout.rows };
@@ -103,8 +101,8 @@ export class Term {
   enableInput(): void {
     process.stdin.setRawMode(true);
     process.stdin.resume();
-    process.stdin.on("data", this.onData);
-    process.stdout.on("resize", this.onResize);
+    process.stdin.on("data", (chunk: Buffer) => this.feed(chunk));
+    process.stdout.on("resize", () => this.resizeHandler?.());
   }
 
   onKey(cb: (k: Key) => void): void {
@@ -281,15 +279,10 @@ export class Term {
     this.write(ALT_ENTER + ALT_SCROLL_ENTER + HIDE_CURSOR + CLEAR_SCREEN);
   }
 
+  // Runs once right before exit and main ignores late events, so listeners stay attached.
+  // Pausing still matters: keys typed while Chrome closes are left for the shell.
   restore(): void {
-    if (this.alt) {
-      this.write(deleteAll() + SHOW_CURSOR + ALT_SCROLL_EXIT + ALT_EXIT);
-      this.alt = false;
-    }
-    if (this.resyncTimer) clearTimeout(this.resyncTimer);
-    this.resyncTimer = null;
-    process.stdin.off("data", this.onData);
-    process.stdout.off("resize", this.onResize);
+    if (this.alt) this.write(deleteAll() + SHOW_CURSOR + ALT_SCROLL_EXIT + ALT_EXIT);
     process.stdin.setRawMode(false);
     process.stdin.pause();
   }

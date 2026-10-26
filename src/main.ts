@@ -71,7 +71,7 @@ async function runApp(mdPath: string): Promise<void> {
       term.restore();
       if (message) warn(message);
       await Promise.race([chrome.close(), sleep(CHROME_CLOSE_TIMEOUT_MS)]);
-      if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+      if (dir) await rm(dir, { recursive: true, force: true });
     } catch {}
     process.exit(code);
   }
