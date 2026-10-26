@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { deleteAll, deletePlacement, imageId, place } from "./kitty.ts";
-import { renderFrame, sanitizeTerminalBlock, Term, truncateToDisplayWidth, type Key } from "./term.ts";
+import { renderFrame, sanitizeTerminalBlock, Term, type Key } from "./term.ts";
 import { computeTiles, contentRows, type Geometry } from "./geometry.ts";
 import type { ViewState } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
@@ -232,6 +232,10 @@ describe("status bar", () => {
     expect(narrow).not.toContain("q:quit");
   });
 
+  test("never splits a grapheme or a full-width character in the file name", () => {
+    expect(statusLine(view(300, { geometry: { ...GEO, cols: 5 } }), "❤️０１２.md")).toBe("❤️０ ");
+  });
+
   test("control characters in the file name are neutralized", () => {
     expect(statusLine(view(300), `x${ESC}[31m\n\t.md`).startsWith("x?[31m??.md")).toBe(true);
   });
@@ -251,13 +255,5 @@ describe("status bar", () => {
   test("a downscaled capture is marked low-res", () => {
     expect(statusLine(view(300, { geometry: REDUCED }))).toContain("low-res");
     expect(statusLine(view(300))).not.toContain("low-res");
-  });
-});
-
-describe("truncateToDisplayWidth", () => {
-  test("never splits a grapheme or a full-width character", () => {
-    expect(truncateToDisplayWidth("❤️", 2)).toEqual({ text: "❤️", displayWidth: 2 });
-    expect(truncateToDisplayWidth("❤️", 1)).toEqual({ text: "", displayWidth: 0 });
-    expect(truncateToDisplayWidth("０１２", 5)).toEqual({ text: "０１", displayWidth: 4 });
   });
 });

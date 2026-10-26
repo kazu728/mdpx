@@ -278,7 +278,7 @@ export class Scheduler {
     const scroll = this.scrollFor(g);
     if (!this.allVisibleResident(g, scroll)) return false;
     const old = this.displayGen;
-    if (this.pendingScrollPx !== null) this.scrollFailed = false;
+    this.scrollFailed = false;
     this.scrollPx = scroll;
     this.displayGen = g;
     this.pendingScrollPx = null;
@@ -339,10 +339,8 @@ export class Scheduler {
   private onRenderFailed(gen: number): Action[] {
     const g = this.capture?.target;
     if (!g || g.gen !== gen) return [];
-    if (this.displayGen !== g) {
-      this.renderFailed = true;
-      if (this.rerun) return this.abortStalePipeline();
-    }
+    if (this.displayGen !== g) this.renderFailed = true;
+    if (this.rerun) return this.abortStalePipeline();
     const actions: Action[] = [];
     this.settleStalled(g, actions);
     return actions;
@@ -456,7 +454,6 @@ export class Scheduler {
       if (this.pendingScrollPx !== null) this.scrollFailed = true;
       this.pendingScrollPx = null;
       this.pushEvict(g, this.geometry.maxResident, actions);
-      if (this.rerun) actions.push(...this.startPipeline());
       return;
     }
     this.pushReleaseGen(g, actions);

@@ -90,7 +90,7 @@ export function detectGraphicsLimits(env: NodeJS.ProcessEnv = process.env): Grap
 }
 
 /** Worst case touches one extra boundary while straddling. */
-export function maxTilesInFrame(viewportHeightPx: number, tileHeightPx: number): number {
+function maxTilesInFrame(viewportHeightPx: number, tileHeightPx: number): number {
   return Math.ceil(viewportHeightPx / tileHeightPx) + 1;
 }
 

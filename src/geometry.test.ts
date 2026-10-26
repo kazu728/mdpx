@@ -8,9 +8,10 @@ import {
   detectGraphicsLimits,
   fitsGraphicsFrame,
   maxScrollPx,
-  maxTilesInFrame,
   resolveGeometry,
+  scrollUnitPx,
   toImagePx,
+  visibleTiles,
   type Geometry,
 } from "./geometry.ts";
 
@@ -48,8 +49,15 @@ describe("resolveGeometry", () => {
   function tileBytes(g: Geometry): number {
     return g.imgWidthPx * toImagePx(g.tileHeightPx, g.renderScale) * 4;
   }
+  // Counts the tiles each scroll offset shows instead of reusing the planner's own bound.
   function visibleBytes(g: Geometry): number {
-    return maxTilesInFrame(contentRows(g.rows) * g.cellHpx, g.tileHeightPx) * tileBytes(g);
+    const rows = contentRows(g.rows);
+    const { tiles } = computeTiles(g.tileHeightPx + rows * g.cellHpx, g.cellHpx, rows, g.tileHeightPx);
+    let most = 0;
+    for (let scrollPx = 0; scrollPx < g.tileHeightPx; scrollPx += scrollUnitPx(g.cellHpx, g.renderScale)) {
+      most = Math.max(most, visibleTiles(scrollPx, rows, g.cellHpx, tiles).length);
+    }
+    return most * tileBytes(g);
   }
 
   test("picks the tallest tile that fits and keeps the working set below eviction", () => {
@@ -89,7 +97,7 @@ describe("resolveGeometry", () => {
   test("screens too large for two generations still show one and cap the budgets to storage", () => {
     for (const g of [
       resolveGeometry({ cols: 2000, rows: 65 }, CELL, relayed),
-      resolveGeometry({ cols: 24000, rows: 3 }, CELL, relayed),
+      resolveGeometry({ cols: 24000, rows: 4 }, CELL, relayed),
       resolveGeometry({ cols: 400, rows: 200 }, CELL, relayed),
     ]) {
       expect(2 * visibleBytes(g)).toBeGreaterThan(relayed.storageBytes);

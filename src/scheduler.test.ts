@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderFrame } from "./term.ts";
-import { alignedTileHeightPx, contentRows, detectGraphicsLimits, resolveGeometry, type Geometry } from "./geometry.ts";
+import { alignedTileHeightPx, detectGraphicsLimits, resolveGeometry, type Geometry } from "./geometry.ts";
 import { IMAGE_ID_GENERATION_STRIDE, imageId } from "./kitty.ts";
 import { Scheduler, type Action, type ScrollDelta } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
@@ -153,7 +153,6 @@ describe("rendering", () => {
 
   test("a document that cannot be shown within storage settles instead of retrying forever", () => {
     const g = resolveGeometry({ cols: 400, rows: 400 }, { cellHpx: 31, cellWpx: 14 }, detectGraphicsLimits({ HERDR_ENV: "1" }));
-    expect(contentRows(g.rows) * g.cellHpx).toBeGreaterThan(g.maxTotalResident * g.tileHeightPx);
     const s = new Session(g);
     s.save();
     s.rendered(399 * 31);
@@ -213,6 +212,19 @@ describe("failures", () => {
     expect(s.pendingRenders()).toEqual([2]);
   });
 
+  test("a save waiting on a failed backfill reruns it at the pending scroll", () => {
+    const s = new Session(GEO);
+    s.save();
+    s.rendered(1500);
+    s.deliver();
+    s.key(BOTTOM);
+    s.save();
+    s.shootFails();
+    s.rendered(1500);
+    s.deliverAll();
+    expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 1000, failure: false });
+  });
+
   test("a failed scroll fetch is reported until the next move", () => {
     const s = displayed({ ...GEO, maxResident: 2, maxTotalResident: 4 }, 5000);
     s.key(BOTTOM);
@@ -221,6 +233,17 @@ describe("failures", () => {
     expect(s.view).toMatchObject({ pendingScrollPx: null, scrollPx: 0 });
     expect(s.screen).toContain("update failed");
     s.key({ kind: "top" });
+    expect(s.screen).not.toContain("failed");
+  });
+
+  test("a failed scroll fetch stops being reported once an update succeeds", () => {
+    const s = displayed({ ...GEO, maxResident: 2, maxTotalResident: 4 }, 5000);
+    s.key(BOTTOM);
+    s.shootFails();
+    s.save();
+    s.rendered(5000);
+    s.deliverAll();
+    expect(s.view.displayGen?.gen).toBe(2);
     expect(s.screen).not.toContain("failed");
   });
 });

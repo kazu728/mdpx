@@ -58,10 +58,9 @@ async function setup() {
   const writes: string[] = [];
   const fatal: unknown[] = [];
   const state = { shuttingDown: false };
-  const scheduler = new Scheduler(GEO);
   const pipeline = new Pipeline({
     chrome: page.chrome,
-    scheduler,
+    scheduler: new Scheduler(GEO),
     term: { write: (s) => writes.push(s) },
     mdPath,
     htmlDir: dir,
@@ -81,7 +80,7 @@ async function setup() {
     (await page.next()).resolve("");
     await flush();
   };
-  return { page, writes, fatal, state, scheduler, pipeline, send, html, display };
+  return { page, writes, fatal, state, pipeline, send, html, display };
 }
 
 describe("Pipeline", () => {

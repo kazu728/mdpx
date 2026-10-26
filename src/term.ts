@@ -363,7 +363,7 @@ function statusBar(view: ViewState, filename: string): string {
   return `${ESC}[7m${line}${ESC}[0m`;
 }
 
-export function truncateToDisplayWidth(
+function truncateToDisplayWidth(
   text: string,
   maxDisplayWidth: number,
 ): { text: string; displayWidth: number } {
