@@ -143,16 +143,14 @@ export class Term {
   queryKittyGraphics(timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
       const finish = (v: boolean) => {
-        if (this.kittyGraphicsReplyHandler === onGraphics) this.kittyGraphicsReplyHandler = null;
-        if (this.primaryDaReplyHandler === onDa) this.primaryDaReplyHandler = null;
+        this.kittyGraphicsReplyHandler = null;
+        this.primaryDaReplyHandler = null;
         clearTimeout(timer);
         resolve(v);
       };
-      const onGraphics = () => finish(true);
-      const onDa = () => finish(false);
       const timer = setTimeout(() => finish(false), timeoutMs);
-      this.kittyGraphicsReplyHandler = onGraphics;
-      this.primaryDaReplyHandler = onDa;
+      this.kittyGraphicsReplyHandler = () => finish(true);
+      this.primaryDaReplyHandler = () => finish(false);
       this.write(`${ESC}_Gi=${GFX_PROBE_ID},s=1,v=1,a=q,t=d,f=24;AAAA${ESC}\\${ESC}[c`);
     });
   }
@@ -279,7 +277,7 @@ export class Term {
     this.write(ALT_ENTER + ALT_SCROLL_ENTER + HIDE_CURSOR + CLEAR_SCREEN);
   }
 
-  // Runs once right before exit and main ignores late events, so listeners stay attached.
+  // Runs once right before exit and late events are dropped, so listeners stay attached.
   // Pausing still matters: keys typed while Chrome closes are left for the shell.
   restore(): void {
     if (this.alt) this.write(deleteAll() + SHOW_CURSOR + ALT_SCROLL_EXIT + ALT_EXIT);

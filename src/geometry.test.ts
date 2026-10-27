@@ -6,7 +6,6 @@ import {
   computeTiles,
   contentRows,
   detectGraphicsLimits,
-  fitsGraphicsFrame,
   maxScrollPx,
   resolveGeometry,
   scrollUnitPx,
@@ -34,14 +33,6 @@ describe("detectGraphicsLimits", () => {
     expect(limited({ HERDR_ENV: "" })).toBe(false);
     expect(limited({ HERDR_ENV: "0" })).toBe(false);
     expect(limited({})).toBe(false);
-  });
-});
-
-describe("fitsGraphicsFrame", () => {
-  test("judges a tile by its base64 transfer size, not its raw size", () => {
-    expect(fitsGraphicsFrame(relayed, 1512, 2046)).toBe(true);
-    // 24MB of RGBA fits the 30MB frame raw, but not once base64 grows it by a third.
-    expect(fitsGraphicsFrame(relayed, 3024, 1984)).toBe(false);
   });
 });
 
@@ -107,6 +98,12 @@ describe("resolveGeometry", () => {
     }
     const huge = resolveGeometry({ cols: 300, rows: 201 }, CELL, direct);
     expect(2 * visibleBytes(huge)).toBeLessThanOrEqual(direct.storageBytes);
+  });
+
+  test("sizes a tile by its base64 transfer, not its raw pixels", () => {
+    // A full-scale tile's raw RGBA fits the frame here, but not once base64 grows it by a third.
+    const g = resolveGeometry({ cols: 6800, rows: 65 }, CELL, relayed);
+    expect(Math.ceil(tileBytes(g) / 3) * 4).toBeLessThanOrEqual(relayed.frameBytes!);
   });
 
   test("a zero-column screen still captures a positive width", () => {

@@ -94,7 +94,7 @@ function maxTilesInFrame(viewportHeightPx: number, tileHeightPx: number): number
   return Math.ceil(viewportHeightPx / tileHeightPx) + 1;
 }
 
-export function fitsGraphicsFrame(
+function fitsGraphicsFrame(
   limits: GraphicsLimits,
   imageWidthPx: number,
   tileHeightPx: number,
