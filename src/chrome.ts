@@ -4,10 +4,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import puppeteer, { TimeoutError, type Browser, type Page } from "puppeteer-core";
 
-/** Content-caused failure (not a Chrome fault); the caller keeps the current frame. */
 export class ContentError extends Error {}
 
-/** Cap domcontentloaded; a parse that never returns is treated as content-caused. */
 const NAV_TIMEOUT_MS = 15000;
 
 const PATH_EXECUTABLES = ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"];

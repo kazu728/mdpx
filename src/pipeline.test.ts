@@ -16,7 +16,6 @@ interface PageCall {
   reject(error: unknown): void;
 }
 
-/** Chrome whose page operations complete only when the test settles them. */
 function fakeChrome() {
   const unclaimed: PageCall[] = [];
   const waiting: ((call: PageCall) => void)[] = [];
@@ -73,7 +72,6 @@ async function setup() {
   });
   const send = (event: SchedulerEvent) => pipeline.dispatch(event);
   const html = (gen: number) => join(dir, `gen-${gen}.html`);
-  // A 250 CSS px document is one GEO tile, so one load and one shoot display a generation.
   const display = async () => {
     send({ type: "trigger" });
     (await page.next()).resolve(250);
@@ -88,7 +86,6 @@ describe("Pipeline", () => {
     const t = await setup();
     t.send({ type: "trigger" });
     expect(t.writes).toHaveLength(1);
-    // A save during the render coalesces and leaves the frame as it was.
     t.send({ type: "trigger" });
     expect(t.writes).toHaveLength(1);
     await t.page.next();
@@ -97,7 +94,6 @@ describe("Pipeline", () => {
   test("a tile is captured as its CSS-pixel band of the page", async () => {
     const t = await setup();
     t.send({ type: "trigger" });
-    // 1600 CSS px is two GEO tiles.
     (await t.page.next()).resolve(1600);
     (await t.page.next()).resolve("");
     expect((await t.page.next()).target).toEqual({ yCssPx: 800, heightCssPx: 800 });
@@ -105,7 +101,6 @@ describe("Pipeline", () => {
 
   test("a released document survives until the page work queued before its release is done", async () => {
     const t = await setup();
-    // 2400 CSS px is three GEO tiles; the update starts before the bottom one is shot.
     t.send({ type: "trigger" });
     (await t.page.next()).resolve(2400);
     (await t.page.next()).resolve("");
@@ -117,7 +112,6 @@ describe("Pipeline", () => {
     const reload = await t.page.next();
     expect(reload.target).toBe(t.html(1));
 
-    // Moving the capture to gen 3 lets the resize release gen 1 while its reload is still queued.
     t.send({ type: "trigger" });
     t.send({ type: "resize", geometry: { ...GEO, rows: 31 } });
     await flush();

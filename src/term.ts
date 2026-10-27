@@ -137,9 +137,6 @@ export class Term {
     });
   }
 
-  /**
-   * 1x1 query (a=q) reports support without storing; Primary DA is the sync marker.
-   */
   queryKittyGraphics(timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
       const finish = (v: boolean) => {
@@ -201,7 +198,6 @@ export class Term {
         }
         i = end;
       } else {
-        // A lone ESC consumes one byte so ESC→Space / ESC→arrow keeps its follow-up.
         i += 1;
       }
     }
@@ -277,7 +273,6 @@ export class Term {
     this.write(ALT_ENTER + ALT_SCROLL_ENTER + HIDE_CURSOR + CLEAR_SCREEN);
   }
 
-  // Runs once right before exit and late events are dropped, so listeners stay attached.
   // Pausing still matters: keys typed while Chrome closes are left for the shell.
   restore(): void {
     if (this.alt) this.write(deleteAll() + SHOW_CURSOR + ALT_SCROLL_EXIT + ALT_EXIT);

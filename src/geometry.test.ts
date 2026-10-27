@@ -40,7 +40,6 @@ describe("resolveGeometry", () => {
   function tileBytes(g: Geometry): number {
     return g.imgWidthPx * toImagePx(g.tileHeightPx, g.renderScale) * 4;
   }
-  // Counts the tiles each scroll offset shows instead of reusing the planner's own bound.
   function visibleBytes(g: Geometry): number {
     const rows = contentRows(g.rows);
     const { tiles } = computeTiles(g.tileHeightPx + rows * g.cellHpx, g.cellHpx, rows, g.tileHeightPx);
@@ -101,7 +100,6 @@ describe("resolveGeometry", () => {
   });
 
   test("sizes a tile by its base64 transfer, not its raw pixels", () => {
-    // A full-scale tile's raw RGBA fits the frame here, but not once base64 grows it by a third.
     const g = resolveGeometry({ cols: 6800, rows: 65 }, CELL, relayed);
     expect(Math.ceil(tileBytes(g) / 3) * 4).toBeLessThanOrEqual(relayed.frameBytes!);
   });

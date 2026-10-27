@@ -7,10 +7,6 @@ import { GEO } from "./test-geometry.ts";
 
 type Shoot = Extract<Action, { type: "shoot" }>;
 
-/**
- * Plays the scheduler's actions against a model of the terminal and fails on
- * anything the user would see: a blank tile, a flash, a wasted or overflowing transfer.
- */
 class Session {
   readonly scheduler: Scheduler;
   readonly released: number[] = [];
@@ -123,7 +119,6 @@ class Session {
     return phase === "ready" && pendingScrollPx === null;
   }
 
-  // Only a pending scroll or a render may hold more than the steady budget; its transfers count once they land.
   private expectWithinBudget(): void {
     const { maxResident, maxTotalResident } = this.view.geometry;
     expect(this.live.size + this.inFlight.length).toBeLessThanOrEqual(maxTotalResident);
@@ -133,7 +128,6 @@ class Session {
   }
 }
 
-/** GEO shows 50 rows of 10px cells; tiles are 500px, so a 1500px document has three. */
 function displayed(geometry: Geometry, documentHeightPx: number): Session {
   const s = new Session(geometry);
   s.save();

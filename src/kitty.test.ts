@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { deleteAll, deleteImage, deletePlacement, place, transmit } from "./kitty.ts";
 
-/** The kitty graphics protocol caps each chunk's payload at 4096 bytes. */
 const PROTOCOL_CHUNK_LIMIT = 4096;
 
 const TILE = {
@@ -27,7 +26,6 @@ describe("transmit", () => {
     const chunks = commands(transmit(7, png));
     expect(chunks.map((c) => c.payload).join("")).toBe(png);
     expect(chunks.every((c) => c.payload.length <= PROTOCOL_CHUNK_LIMIT)).toBe(true);
-    // Bun's toEqual treats { "1": undefined } as equal to { m: "1" }, so parsed keys are compared strictly.
     expect(chunks.map((c) => c.keys)).toStrictEqual([
       { a: "t", f: "100", t: "d", i: "7", q: "1", m: "1" },
       { m: "1" },

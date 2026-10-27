@@ -40,7 +40,6 @@ describe("Term", () => {
       written.push(String(chunk));
       return true;
     });
-    // A non-TTY stdin has no setRawMode for restore() to call.
     Object.defineProperty(process.stdin, "setRawMode", { value: () => process.stdin, configurable: true });
   });
 

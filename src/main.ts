@@ -123,7 +123,6 @@ async function runApp(mdPath: string): Promise<void> {
 
     let debounce: ReturnType<typeof setTimeout> | undefined;
     try {
-      // Not closed on shutdown: shutdown can run before the watcher exists, so the pipeline checks instead.
       watch(mdDir, (_event, changed) => {
         if (changed !== null && changed.normalize("NFC").toLowerCase() !== watchTarget) return;
         clearTimeout(debounce);

@@ -48,14 +48,11 @@ export interface ViewState {
   phase: Phase;
   failure: boolean;
   pendingScrollPx: number | null;
-  /** No displayed generation vs. a displayed empty document. */
   displayGen: Readonly<GenState> | null;
 }
 
 interface Capture {
   target: GenState;
-  // "render" lasts through the backfill after promotion, so triggers coalesce and the
-  // status shows "updating"; "refetch" yields to a new trigger immediately.
   reason: "render" | "refetch";
   queue: number[];
 }
@@ -84,7 +81,6 @@ export class Scheduler {
     return contentRows(this.geometry.rows);
   }
 
-  // A pending scroll may burst to the total budget until it commits.
   private get residentLimit(): number {
     return this.pendingScrollPx !== null ? this.geometry.maxTotalResident : this.geometry.maxResident;
   }
@@ -290,9 +286,6 @@ export class Scheduler {
     );
   }
 
-  // Display plus any outstanding request must survive eviction.
-  // Non-displayed generations are positioned by scrollFor, which already
-  // clamps the pending scroll when one exists.
   private protectedSet(g: GenState): Set<number> {
     if (g === this.displayGen) {
       const out = new Set<number>();
@@ -384,7 +377,6 @@ export class Scheduler {
     }
     const old = this.displayGen !== g ? this.displayGen : null;
     if (old) this.evict(old, this.geometry.maxTotalResident - g.resident.size - 1);
-    // Reserve decoded storage before the transfer lands.
     const newBudget =
       Math.min(this.residentLimit, this.geometry.maxTotalResident - (old?.resident.size ?? 0)) - 1;
     this.evict(g, newBudget);
@@ -415,7 +407,6 @@ export class Scheduler {
     if (freed.length) this.actions.push({ type: "deleteGen", imageIds: freed });
   }
 
-  // Leave rendering on shortage so a later update/resize can retry.
   private settleStalled(g: GenState): void {
     this.capture = null;
     const shown = this.displayGen;
