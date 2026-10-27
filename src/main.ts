@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { realpathSync, statSync, watch, type FSWatcher } from "node:fs";
+import { realpathSync, statSync, watch } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -62,20 +62,16 @@ async function runApp(mdPath: string): Promise<void> {
 
   const chrome = new Chrome(chromeExecutable);
   let dir: string | null = null;
-  let watcher: FSWatcher | null = null;
-  let debounce: ReturnType<typeof setTimeout> | null = null;
   let shuttingDown = false;
 
   async function shutdown(code: number, message?: string): Promise<never> {
     if (shuttingDown) return new Promise<never>(() => {});
     shuttingDown = true;
     try {
-      if (debounce) clearTimeout(debounce);
-      watcher?.close();
       term.restore();
       if (message) warn(message);
       await Promise.race([chrome.close(), sleep(CHROME_CLOSE_TIMEOUT_MS)]);
-      if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+      if (dir) await rm(dir, { recursive: true, force: true });
     } catch {}
     process.exit(code);
   }
@@ -83,7 +79,7 @@ async function runApp(mdPath: string): Promise<void> {
   let started: Pipeline | null = null;
   term.onKey((k) => {
     if (k.type === "quit") return void shutdown(0);
-    if (shuttingDown || !started) return;
+    if (!started) return;
     if (k.type === "theme") return started.toggleTheme();
     started.dispatch({ type: "key", delta: k.delta });
   });
@@ -117,25 +113,20 @@ async function runApp(mdPath: string): Promise<void> {
     });
     started = pipeline;
 
-    let resizeSeq = 0;
     term.onResizeEvent(() => {
-      const seq = ++resizeSeq;
       void (async () => {
         if (shuttingDown) return;
         const c = await term.queryCellSize(CELL_QUERY_MS);
-        if (!c || shuttingDown || seq !== resizeSeq) return;
-        pipeline.dispatch({ type: "resize", geometry: resolveGeometry(term.size(), c) });
+        if (c) pipeline.dispatch({ type: "resize", geometry: resolveGeometry(term.size(), c) });
       })();
     });
 
+    let debounce: ReturnType<typeof setTimeout> | undefined;
     try {
-      watcher = watch(mdDir, (_event, changed) => {
+      watch(mdDir, (_event, changed) => {
         if (changed !== null && changed.normalize("NFC").toLowerCase() !== watchTarget) return;
-        if (debounce) clearTimeout(debounce);
-        debounce = setTimeout(() => {
-          debounce = null;
-          if (!shuttingDown) pipeline.dispatch({ type: "trigger" });
-        }, WATCH_DEBOUNCE_MS);
+        clearTimeout(debounce);
+        debounce = setTimeout(() => pipeline.dispatch({ type: "trigger" }), WATCH_DEBOUNCE_MS);
       });
     } catch (e) {
       return shutdown(1, `cannot watch the directory: ${errorMessage(e)}`);

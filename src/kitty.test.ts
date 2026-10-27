@@ -1,13 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import {
-  deleteAll,
-  deleteImage,
-  deletePlacement,
-  MAX_PAYLOAD_CHUNK_SIZE,
-  place,
-  TILE_PLACEMENT_ID,
-  transmit,
-} from "./kitty.ts";
+import { deleteAll, deleteImage, deletePlacement, place, transmit } from "./kitty.ts";
+
+const PROTOCOL_CHUNK_LIMIT = 4096;
+
+const TILE = {
+  id: 2053,
+  sourceXImagePx: 3,
+  sourceYImagePx: 120,
+  sourceWidthImagePx: 3024,
+  sourceHeightImagePx: 620,
+  displayColumns: 216,
+  displayRows: 20,
+};
 
 function commands(escape: string): { keys: Record<string, string>; payload: string }[] {
   return [...escape.matchAll(/\x1b_G([^;\x1b]*)(?:;([^\x1b]*))?\x1b\\/g)].map((m) => ({
@@ -18,11 +22,10 @@ function commands(escape: string): { keys: Record<string, string>; payload: stri
 
 describe("transmit", () => {
   test("splits a PNG into chunks the terminal reassembles into one image", () => {
-    const png = "A".repeat(MAX_PAYLOAD_CHUNK_SIZE * 2) + "B".repeat(10);
+    const png = "A".repeat(PROTOCOL_CHUNK_LIMIT * 2) + "B".repeat(10);
     const chunks = commands(transmit(7, png));
     expect(chunks.map((c) => c.payload).join("")).toBe(png);
-    expect(chunks.every((c) => c.payload.length <= MAX_PAYLOAD_CHUNK_SIZE)).toBe(true);
-    // Bun's toEqual treats { "1": undefined } as equal to { m: "1" }, so parsed keys are compared strictly.
+    expect(chunks.every((c) => c.payload.length <= PROTOCOL_CHUNK_LIMIT)).toBe(true);
     expect(chunks.map((c) => c.keys)).toStrictEqual([
       { a: "t", f: "100", t: "d", i: "7", q: "1", m: "1" },
       { m: "1" },
@@ -36,21 +39,10 @@ describe("transmit", () => {
 
 describe("place", () => {
   test("crops the source rect and scales it onto the display cells", () => {
-    const [cmd] = commands(
-      place({
-        id: 2053,
-        sourceXImagePx: 3,
-        sourceYImagePx: 120,
-        sourceWidthImagePx: 3024,
-        sourceHeightImagePx: 620,
-        displayColumns: 216,
-        displayRows: 20,
-      }),
-    );
-    expect(cmd!.keys).toStrictEqual({
+    expect(commands(place(TILE))[0]!.keys).toStrictEqual({
       a: "p",
       i: "2053",
-      p: String(TILE_PLACEMENT_ID),
+      p: expect.any(String),
       x: "3",
       y: "120",
       w: "3024",
@@ -63,12 +55,13 @@ describe("place", () => {
 });
 
 describe("delete", () => {
-  test("a placement delete keeps the image data; image and full deletes free it", () => {
+  test("a placement delete removes the placed tile but keeps the image data; image and full deletes free it", () => {
+    const placed = commands(place(TILE))[0]!.keys;
     expect(commands(deletePlacement(2053))[0]!.keys).toStrictEqual({
       a: "d",
       d: "i",
       i: "2053",
-      p: String(TILE_PLACEMENT_ID),
+      p: placed.p!,
     });
     expect(commands(deleteImage(2053))[0]!.keys).toStrictEqual({ a: "d", d: "I", i: "2053" });
     expect(commands(deleteAll())[0]!.keys).toStrictEqual({ a: "d", d: "A" });

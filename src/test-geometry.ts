@@ -9,8 +9,6 @@ export const GEO: Geometry = {
   deviceScaleFactor: 0.625,
   renderScale: 1,
   tileHeightPx: alignedTileHeightPx(10, 50),
-  exceedsFrameLimit: false,
-  exceedsStorage: false,
   maxResident: 64,
   maxTotalResident: 128,
 };

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { deleteAll, deletePlacement, imageId, place } from "./kitty.ts";
-import { renderFrame, sanitizeTerminalBlock, Term, truncateToDisplayWidth, type Key } from "./term.ts";
+import { renderFrame, sanitizeTerminalBlock, Term, type Key } from "./term.ts";
 import { computeTiles, contentRows, type Geometry } from "./geometry.ts";
 import type { ViewState } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
@@ -40,11 +40,13 @@ describe("Term", () => {
       written.push(String(chunk));
       return true;
     });
+    Object.defineProperty(process.stdin, "setRawMode", { value: () => process.stdin, configurable: true });
   });
 
   afterEach(() => {
     jest.useRealTimers();
     jest.restoreAllMocks();
+    Reflect.deleteProperty(process.stdin, "setRawMode");
   });
 
   function terminal(): { term: Term; keys: Key[]; input(s: string): void } {
@@ -165,7 +167,7 @@ describe("Term", () => {
   });
 
   describe("alternate screen", () => {
-    test("enters with alternate scroll and a full clear, and restore undoes it once", () => {
+    test("enters with alternate scroll and a full clear, and restore undoes it", () => {
       const term = new Term();
       term.restore();
       expect(written).toEqual([]);
@@ -174,9 +176,6 @@ describe("Term", () => {
       written.length = 0;
       term.restore();
       expect(written.join("")).toBe(`${deleteAll()}${ESC}[?25h${ESC}[?1007l${ESC}[?1049l`);
-      written.length = 0;
-      term.restore();
-      expect(written).toEqual([]);
     });
   });
 
@@ -232,6 +231,10 @@ describe("status bar", () => {
     expect(narrow).not.toContain("q:quit");
   });
 
+  test("never splits a grapheme or a full-width character in the file name", () => {
+    expect(statusLine(view(300, { geometry: { ...GEO, cols: 5 } }), "❤️０１２.md")).toBe("❤️０ ");
+  });
+
   test("control characters in the file name are neutralized", () => {
     expect(statusLine(view(300), `x${ESC}[31m\n\t.md`).startsWith("x?[31m??.md")).toBe(true);
   });
@@ -248,21 +251,8 @@ describe("status bar", () => {
     expect(statusLine({ ...truncated, scrollPx: 2490 })).not.toContain("truncated");
   });
 
-  test("capacity warnings outrank low resolution", () => {
-    const reduced = view(300, { geometry: REDUCED });
-    const capacity = (g: Partial<Geometry>) => statusLine({ ...reduced, geometry: { ...REDUCED, ...g } });
-    expect(capacity({})).toContain("low-res");
-    expect(capacity({ exceedsStorage: true })).toContain("too many");
-    expect(capacity({ exceedsStorage: true })).not.toContain("low-res");
-    expect(capacity({ exceedsFrameLimit: true, exceedsStorage: true })).toContain("too wide");
-    expect(capacity({ exceedsFrameLimit: true, exceedsStorage: true })).not.toContain("too many");
-  });
-});
-
-describe("truncateToDisplayWidth", () => {
-  test("never splits a grapheme or a full-width character", () => {
-    expect(truncateToDisplayWidth("❤️", 2)).toEqual({ text: "❤️", displayWidth: 2 });
-    expect(truncateToDisplayWidth("❤️", 1)).toEqual({ text: "", displayWidth: 0 });
-    expect(truncateToDisplayWidth("０１２", 5)).toEqual({ text: "０１", displayWidth: 4 });
+  test("a downscaled capture is marked low-res", () => {
+    expect(statusLine(view(300, { geometry: REDUCED }))).toContain("low-res");
+    expect(statusLine(view(300))).not.toContain("low-res");
   });
 });

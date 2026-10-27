@@ -16,7 +16,6 @@ interface PageCall {
   reject(error: unknown): void;
 }
 
-/** Chrome whose page operations complete only when the test settles them. */
 function fakeChrome() {
   const unclaimed: PageCall[] = [];
   const waiting: ((call: PageCall) => void)[] = [];
@@ -58,10 +57,9 @@ async function setup() {
   const writes: string[] = [];
   const fatal: unknown[] = [];
   const state = { shuttingDown: false };
-  const scheduler = new Scheduler(GEO);
   const pipeline = new Pipeline({
     chrome: page.chrome,
-    scheduler,
+    scheduler: new Scheduler(GEO),
     term: { write: (s) => writes.push(s) },
     mdPath,
     htmlDir: dir,
@@ -74,45 +72,47 @@ async function setup() {
   });
   const send = (event: SchedulerEvent) => pipeline.dispatch(event);
   const html = (gen: number) => join(dir, `gen-${gen}.html`);
-  // A 250 CSS px document is one GEO tile, so one load and one shoot display a generation.
   const display = async () => {
     send({ type: "trigger" });
     (await page.next()).resolve(250);
     (await page.next()).resolve("");
     await flush();
   };
-  return { page, writes, fatal, state, scheduler, pipeline, send, html, display };
+  return { page, writes, fatal, state, pipeline, send, html, display };
 }
-
-const shootTile0 = { type: "shoot", gen: 1, tileIndex: 0, tile: { topPx: 0, heightPx: 500 } } as const;
 
 describe("Pipeline", () => {
   test("an unchanged frame is not written again", async () => {
     const t = await setup();
-    t.pipeline.execute([{ type: "redraw" }, { type: "redraw" }]);
+    t.send({ type: "trigger" });
     expect(t.writes).toHaveLength(1);
     t.send({ type: "trigger" });
-    expect(t.writes).toHaveLength(2);
+    expect(t.writes).toHaveLength(1);
     await t.page.next();
   });
 
   test("a tile is captured as its CSS-pixel band of the page", async () => {
     const t = await setup();
-    t.pipeline.execute([{ type: "shoot", gen: 1, tileIndex: 1, tile: { topPx: 500, heightPx: 500 } }]);
-    (await t.page.next()).resolve(250);
+    t.send({ type: "trigger" });
+    (await t.page.next()).resolve(1600);
+    (await t.page.next()).resolve("");
     expect((await t.page.next()).target).toEqual({ yCssPx: 800, heightCssPx: 800 });
   });
 
   test("a released document survives until the page work queued before its release is done", async () => {
     const t = await setup();
-    await t.display();
     t.send({ type: "trigger" });
-    const update = await t.page.next();
-    t.pipeline.execute([shootTile0]);
-    update.reject(new ContentError("load timed out"));
+    (await t.page.next()).resolve(2400);
+    (await t.page.next()).resolve("");
+    const backfill = await t.page.next();
+    t.send({ type: "key", delta: { kind: "bottom" } });
+    t.send({ type: "trigger" });
+    backfill.resolve("");
+    (await t.page.next()).reject(new ContentError("load timed out"));
     const reload = await t.page.next();
     expect(reload.target).toBe(t.html(1));
 
+    t.send({ type: "trigger" });
     t.send({ type: "resize", geometry: { ...GEO, rows: 31 } });
     await flush();
     expect(existsSync(t.html(1))).toBe(true);
@@ -132,7 +132,7 @@ describe("Pipeline", () => {
     expect(t.fatal).toEqual([error]);
   });
 
-  test("nothing is reported back once shutdown has begun", async () => {
+  test("nothing is drawn or reported back once shutdown has begun", async () => {
     const failed = await setup();
     failed.send({ type: "trigger" });
     const load = await failed.page.next();
@@ -148,6 +148,11 @@ describe("Pipeline", () => {
     done.resolve(250);
     await flush();
     expect(loaded.page.unclaimed).toEqual([]);
+
+    const idle = await setup();
+    idle.state.shuttingDown = true;
+    idle.send({ type: "trigger" });
+    expect(idle.writes).toEqual([]);
   });
 
   test("toggling the theme re-renders with the other theme", async () => {

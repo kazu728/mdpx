@@ -81,7 +81,6 @@ function sanitizeTerminalLine(s: string): string {
 }
 
 export class Term {
-  private raw = false;
   private alt = false;
   private buffer = Buffer.alloc(0);
   private resyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -90,8 +89,6 @@ export class Term {
   private reportHandler: ((params: number[]) => void) | null = null;
   private kittyGraphicsReplyHandler: (() => void) | null = null;
   private primaryDaReplyHandler: (() => void) | null = null;
-  private readonly onData = (chunk: Buffer) => this.feed(chunk);
-  private readonly onResize = () => this.resizeHandler?.();
 
   size(): ScreenSize {
     return { cols: process.stdout.columns, rows: process.stdout.rows };
@@ -103,10 +100,9 @@ export class Term {
 
   enableInput(): void {
     process.stdin.setRawMode(true);
-    this.raw = true;
     process.stdin.resume();
-    process.stdin.on("data", this.onData);
-    process.stdout.on("resize", this.onResize);
+    process.stdin.on("data", (chunk: Buffer) => this.feed(chunk));
+    process.stdout.on("resize", () => this.resizeHandler?.());
   }
 
   onKey(cb: (k: Key) => void): void {
@@ -141,22 +137,17 @@ export class Term {
     });
   }
 
-  /**
-   * 1x1 query (a=q) reports support without storing; Primary DA is the sync marker.
-   */
   queryKittyGraphics(timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
       const finish = (v: boolean) => {
-        if (this.kittyGraphicsReplyHandler === onGraphics) this.kittyGraphicsReplyHandler = null;
-        if (this.primaryDaReplyHandler === onDa) this.primaryDaReplyHandler = null;
+        this.kittyGraphicsReplyHandler = null;
+        this.primaryDaReplyHandler = null;
         clearTimeout(timer);
         resolve(v);
       };
-      const onGraphics = () => finish(true);
-      const onDa = () => finish(false);
       const timer = setTimeout(() => finish(false), timeoutMs);
-      this.kittyGraphicsReplyHandler = onGraphics;
-      this.primaryDaReplyHandler = onDa;
+      this.kittyGraphicsReplyHandler = () => finish(true);
+      this.primaryDaReplyHandler = () => finish(false);
       this.write(`${ESC}_Gi=${GFX_PROBE_ID},s=1,v=1,a=q,t=d,f=24;AAAA${ESC}\\${ESC}[c`);
     });
   }
@@ -207,7 +198,6 @@ export class Term {
         }
         i = end;
       } else {
-        // A lone ESC consumes one byte so ESC→Space / ESC→arrow keeps its follow-up.
         i += 1;
       }
     }
@@ -283,17 +273,10 @@ export class Term {
     this.write(ALT_ENTER + ALT_SCROLL_ENTER + HIDE_CURSOR + CLEAR_SCREEN);
   }
 
+  // Pausing still matters: keys typed while Chrome closes are left for the shell.
   restore(): void {
-    if (this.alt) {
-      this.write(deleteAll() + SHOW_CURSOR + ALT_SCROLL_EXIT + ALT_EXIT);
-      this.alt = false;
-    }
-    if (this.resyncTimer) clearTimeout(this.resyncTimer);
-    this.resyncTimer = null;
-    process.stdin.off("data", this.onData);
-    process.stdout.off("resize", this.onResize);
-    if (this.raw) process.stdin.setRawMode(false);
-    this.raw = false;
+    if (this.alt) this.write(deleteAll() + SHOW_CURSOR + ALT_SCROLL_EXIT + ALT_EXIT);
+    process.stdin.setRawMode(false);
     process.stdin.pause();
   }
 }
@@ -360,15 +343,8 @@ function statusBar(view: ViewState, filename: string): string {
         : shown && shown.truncated && scrollPx >= max
           ? "truncated"
           : "";
-  // Capacity outlives transient states so it survives at a truncated tail.
-  const capacity = geometry.exceedsFrameLimit
-    ? "too wide"
-    : geometry.exceedsStorage
-      ? "too many"
-      : geometry.renderScale < FULL_SCALE
-        ? "low-res"
-        : "";
-  const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, capacity].filter(Boolean).join("  ");
+  const resolution = geometry.renderScale < FULL_SCALE ? "low-res" : "";
+  const left = [`${sanitizeTerminalLine(filename)}  ${pct}%`, state, resolution].filter(Boolean).join("  ");
   const right = "q:quit";
   const cols = geometry.cols;
   const { text, displayWidth: leftW } = truncateToDisplayWidth(left, cols);
@@ -380,7 +356,7 @@ function statusBar(view: ViewState, filename: string): string {
   return `${ESC}[7m${line}${ESC}[0m`;
 }
 
-export function truncateToDisplayWidth(
+function truncateToDisplayWidth(
   text: string,
   maxDisplayWidth: number,
 ): { text: string; displayWidth: number } {

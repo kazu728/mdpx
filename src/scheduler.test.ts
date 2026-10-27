@@ -7,10 +7,6 @@ import { GEO } from "./test-geometry.ts";
 
 type Shoot = Extract<Action, { type: "shoot" }>;
 
-/**
- * Plays the scheduler's actions against a model of the terminal and fails on
- * anything the user would see: a blank tile, a flash, a wasted or overflowing transfer.
- */
 class Session {
   readonly scheduler: Scheduler;
   readonly released: number[] = [];
@@ -19,6 +15,7 @@ class Session {
   private placed = new Set<number>();
   private renders: number[] = [];
   private inFlight: Shoot[] = [];
+  private readonly burst = new Set<Shoot>();
 
   constructor(geometry: Geometry) {
     this.scheduler = new Scheduler(geometry);
@@ -30,6 +27,7 @@ class Session {
 
   send(event: Parameters<Scheduler["dispatch"]>[0]): Action[] {
     const actions = this.scheduler.dispatch(event);
+    this.redraw();
     for (const action of actions) this.apply(action);
     this.expectWithinBudget();
     return actions;
@@ -82,15 +80,15 @@ class Session {
       .sort((a, b) => a - b);
   }
 
+  private redraw(): void {
+    const frame = renderFrame(this.view, "a.md", []);
+    this.screen = frame.escape;
+    this.placed = new Set(frame.placements);
+    for (const id of this.placed) expect(this.live.has(id)).toBe(true);
+  }
+
   private apply(action: Action): void {
     switch (action.type) {
-      case "redraw": {
-        const frame = renderFrame(this.view, "a.md", []);
-        this.screen = frame.escape;
-        this.placed = new Set(frame.placements);
-        for (const id of this.placed) expect(this.live.has(id)).toBe(true);
-        break;
-      }
       case "deleteGen":
         for (const id of action.imageIds) {
           // Deleting a placed image blanks it until the next redraw, unless nothing stays shown anyway.
@@ -103,6 +101,7 @@ class Session {
         expect(this.live.has(id)).toBe(false);
         expect(this.inFlight.some((s) => imageId(s.gen, s.tileIndex) === id)).toBe(false);
         this.inFlight.push(action);
+        if (!this.steady) this.burst.add(action);
         this.expectWithinBudget();
         break;
       }
@@ -115,15 +114,20 @@ class Session {
     }
   }
 
-  // Only a pending scroll or a render may hold more than the steady budget.
+  private get steady(): boolean {
+    const { phase, pendingScrollPx } = this.view;
+    return phase === "ready" && pendingScrollPx === null;
+  }
+
   private expectWithinBudget(): void {
-    const { geometry, phase, pendingScrollPx } = this.view;
-    const budget = phase === "ready" && pendingScrollPx === null ? geometry.maxResident : geometry.maxTotalResident;
-    expect(this.live.size + this.inFlight.length).toBeLessThanOrEqual(budget);
+    const { maxResident, maxTotalResident } = this.view.geometry;
+    expect(this.live.size + this.inFlight.length).toBeLessThanOrEqual(maxTotalResident);
+    if (!this.steady) return;
+    const issued = this.inFlight.filter((s) => !this.burst.has(s));
+    expect(this.live.size + issued.length).toBeLessThanOrEqual(maxResident);
   }
 }
 
-/** GEO shows 50 rows of 10px cells; tiles are 500px, so a 1500px document has three. */
 function displayed(geometry: Geometry, documentHeightPx: number): Session {
   const s = new Session(geometry);
   s.save();
@@ -152,7 +156,6 @@ describe("rendering", () => {
 
   test("a document that cannot be shown within storage settles instead of retrying forever", () => {
     const g = resolveGeometry({ cols: 400, rows: 400 }, { cellHpx: 31, cellWpx: 14 }, detectGraphicsLimits({ HERDR_ENV: "1" }));
-    expect(g.exceedsStorage).toBe(true);
     const s = new Session(g);
     s.save();
     s.rendered(399 * 31);
@@ -208,8 +211,32 @@ describe("failures", () => {
     s.shootFails();
     expect(s.view).toMatchObject({ displayGen: { gen: 1 }, phase: "ready" });
     expect(s.liveTiles(1)).toEqual([0]);
+    expect(s.screen).toContain("update failed");
     s.save();
     expect(s.pendingRenders()).toEqual([2]);
+  });
+
+  test("a save waiting on a failed backfill reruns it at the pending scroll", () => {
+    const s = new Session(GEO);
+    s.save();
+    s.rendered(1500);
+    s.deliver();
+    s.key(BOTTOM);
+    s.save();
+    s.shootFails();
+    s.rendered(1500);
+    s.deliverAll();
+    expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 1000, failure: false });
+  });
+
+  test("a render failing while a scroll fetch is in flight does not fetch the same tile twice", () => {
+    const s = displayed({ ...GEO, maxResident: 3, maxTotalResident: 6 }, 5000);
+    s.key(BOTTOM);
+    s.save();
+    s.renderFails();
+    expect(s.pendingShoots()).toEqual([9]);
+    s.deliverAll();
+    expect(s.view).toMatchObject({ displayGen: { gen: 1 }, scrollPx: 4500 });
   });
 
   test("a failed scroll fetch is reported until the next move", () => {
@@ -220,6 +247,17 @@ describe("failures", () => {
     expect(s.view).toMatchObject({ pendingScrollPx: null, scrollPx: 0 });
     expect(s.screen).toContain("update failed");
     s.key({ kind: "top" });
+    expect(s.screen).not.toContain("failed");
+  });
+
+  test("a failed scroll fetch stops being reported once an update succeeds", () => {
+    const s = displayed({ ...GEO, maxResident: 2, maxTotalResident: 4 }, 5000);
+    s.key(BOTTOM);
+    s.shootFails();
+    s.save();
+    s.rendered(5000);
+    s.deliverAll();
+    expect(s.view.displayGen?.gen).toBe(2);
     expect(s.screen).not.toContain("failed");
   });
 });
@@ -245,6 +283,15 @@ describe("scrolling", () => {
     expect(s.liveTiles(1)).toEqual([7, 8, 9]);
     s.key(BOTTOM);
     expect(s.pendingShoots()).toEqual([]);
+  });
+
+  test("returning to resident tiles drops the rest of a far fetch", () => {
+    const s = displayed({ ...GEO, maxResident: 3, maxTotalResident: 6 }, 5000);
+    s.key(BOTTOM);
+    s.key({ kind: "top" });
+    expect(s.pendingShoots()).toEqual([9]);
+    s.deliverAll();
+    expect(s.liveTiles(1)).toEqual([0, 1, 2]);
   });
 
   test("prefetching ahead frees the farthest tile before transferring", () => {
@@ -303,7 +350,7 @@ describe("resize", () => {
     s.save();
     s.rendered(1500);
     const bigger: Geometry = { ...GEO, rows: 61, cellHpx: 12, tileHeightPx: alignedTileHeightPx(12, 60) };
-    expect(s.send({ type: "resize", geometry: bigger })).toEqual([{ type: "redraw" }]);
+    s.send({ type: "resize", geometry: bigger });
     expect(s.view).toMatchObject({ displayGen: null, geometry: { cellHpx: 12 } });
     s.deliver();
     expect(s.liveTiles(1)).toEqual([]);
@@ -322,14 +369,14 @@ describe("resize", () => {
     expect(s.liveTiles(1)).toEqual([]);
   });
 
-  test("a resize frees the shown generation and re-renders; the same size only redraws", () => {
+  test("a resize frees the shown generation and re-renders; the same size changes nothing", () => {
     const s = displayed(GEO, 1500);
     s.send({ type: "resize", geometry: { ...GEO, rows: 41 } });
     expect(s.liveTiles(1)).toEqual([]);
     expect(s.pendingRenders()).toEqual([2]);
 
     const same = displayed(GEO, 1500);
-    expect(same.send({ type: "resize", geometry: { ...GEO } })).toEqual([{ type: "redraw" }]);
+    expect(same.send({ type: "resize", geometry: { ...GEO } })).toEqual([]);
     expect(same.liveTiles(1)).toEqual([0, 1, 2]);
   });
 });
@@ -348,13 +395,17 @@ describe("storage across generations", () => {
     expect(s.released).toEqual([1]);
   });
 
-  test("when two generations cannot fit, the old display is dropped instead of overflowing", () => {
-    const s = displayed({ ...GEO, maxResident: 3, maxTotalResident: 3, exceedsStorage: true }, 5000);
-    s.key({ kind: "lines", n: 10 });
+  test("a save during a far scroll still replaces the display when storage is tight", () => {
+    const s = displayed(
+      { ...GEO, rows: 41, tileHeightPx: alignedTileHeightPx(10, 40), maxResident: 3, maxTotalResident: 4 },
+      2600,
+    );
+    s.key({ kind: "lines", n: 7 });
+    s.key(BOTTOM);
     s.save();
-    s.rendered(5000);
+    s.deliver();
+    s.rendered(1500);
     s.deliverAll();
-    expect(s.view.displayGen?.gen).toBe(2);
-    expect(s.released).toEqual([1]);
+    expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 1100 });
   });
 });

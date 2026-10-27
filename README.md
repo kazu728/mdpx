@@ -10,7 +10,7 @@ time you save.
 
 - A terminal that speaks the kitty graphics protocol (kitty, Ghostty, WezTerm)
 - Google Chrome or Chromium — set `PUPPETEER_EXECUTABLE_PATH` if it lives outside the default location
-- Node.js >= 22.12
+- Node.js >= 24
 
 ## Install
 

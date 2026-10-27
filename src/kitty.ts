@@ -2,7 +2,7 @@ const ESC = "\x1b";
 const APC_START = `${ESC}_G`;
 const APC_END = `${ESC}\\`;
 
-export const MAX_PAYLOAD_CHUNK_SIZE = 4096;
+const MAX_PAYLOAD_CHUNK_SIZE = 4096;
 
 export const IMAGE_ID_GENERATION_STRIDE = 1024;
 
@@ -10,9 +10,8 @@ export function imageId(gen: number, tileIndex: number): number {
   return gen * IMAGE_ID_GENERATION_STRIDE + tileIndex;
 }
 
-export const TILE_PLACEMENT_ID = 1;
+const TILE_PLACEMENT_ID = 1;
 
-/** q=1 suppresses the success reply. */
 export function transmit(id: number, pngBase64: string): string {
   let out = "";
   for (let i = 0; i < pngBase64.length; i += MAX_PAYLOAD_CHUNK_SIZE) {
@@ -23,7 +22,6 @@ export function transmit(id: number, pngBase64: string): string {
   return out;
 }
 
-// Bounds what transmit writes: base64 expansion, one control header per chunk, plus slack.
 export function transferSize(dataLenBytes: number): number {
   const base64Len = Math.ceil(dataLenBytes / 3) * 4;
   return base64Len + Math.ceil(base64Len / MAX_PAYLOAD_CHUNK_SIZE) * 16 + 1024;

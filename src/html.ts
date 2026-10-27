@@ -74,18 +74,10 @@ interface Renderer {
 
 let rendererPromise: Promise<Renderer> | null = null;
 function getRenderer(): Promise<Renderer> {
-  if (!rendererPromise) {
-    rendererPromise = createHighlighter({
-      themes: Object.values(SHIKI_THEME),
-      langs: [],
-    })
-      .then((highlighter) => ({ highlighter, md: createMarkdown(highlighter) }))
-      .catch((e) => {
-        rendererPromise = null;
-        throw e;
-      });
-  }
-  return rendererPromise;
+  return (rendererPromise ??= createHighlighter({
+    themes: Object.values(SHIKI_THEME),
+    langs: [],
+  }).then((highlighter) => ({ highlighter, md: createMarkdown(highlighter) })));
 }
 
 /** Escaping (not deleting) keeps `<<meta>meta ...>` from becoming a tag. */

@@ -22,7 +22,6 @@ if (!exe) {
 }
 
 const FIXTURE = resolve(import.meta.dir, "fixtures/sample.md");
-// Wide enough that the relay limits drop to the reduced scale.
 const SCREEN = { cols: 300, rows: 65 };
 const CELL_WPX = 14;
 const PNG_IHDR_WIDTH_OFFSET = 16;

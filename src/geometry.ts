@@ -1,6 +1,6 @@
 import { transferSize } from "./kitty.ts";
 
-export interface GraphicsLimits {
+interface GraphicsLimits {
   frameBytes: number | null;
   storageBytes: number;
 }
@@ -16,13 +16,9 @@ export interface ScreenSize {
 }
 
 interface CapturePlan {
-  /** Image px per terminal px. */
   renderScale: number;
   imgWidthPx: number;
   tileHeightPx: number;
-  exceedsFrameLimit: boolean;
-  /** One image fits transfer but old+new visible tiles do not fit storage. */
-  exceedsStorage: boolean;
   maxResident: number;
   maxTotalResident: number;
 }
@@ -30,7 +26,6 @@ interface CapturePlan {
 export interface Geometry extends ScreenSize, CapturePlan {
   cellHpx: number;
   viewportWidthCssPx: number;
-  /** Image px per CSS px. */
   deviceScaleFactor: number;
 }
 
@@ -93,11 +88,11 @@ export function detectGraphicsLimits(env: NodeJS.ProcessEnv = process.env): Grap
 }
 
 /** Worst case touches one extra boundary while straddling. */
-export function maxTilesInFrame(viewportHeightPx: number, tileHeightPx: number): number {
+function maxTilesInFrame(viewportHeightPx: number, tileHeightPx: number): number {
   return Math.ceil(viewportHeightPx / tileHeightPx) + 1;
 }
 
-export function fitsGraphicsFrame(
+function fitsGraphicsFrame(
   limits: GraphicsLimits,
   imageWidthPx: number,
   tileHeightPx: number,
@@ -117,7 +112,6 @@ function tileHeightCandidates(cellHpx: number): number[] {
   return candidates;
 }
 
-/** Working set stays below terminal eviction and never below the visible floor. */
 function cappedBudgets(
   tileBytes: number,
   minTiles: number,
@@ -135,7 +129,6 @@ function tileOptions(
   renderScale: number,
   limits: GraphicsLimits,
 ): TileOption[] {
-  // At 1:1 cropping 1px is sharper than resampling the whole image.
   const imgWidthPx = toImagePx(screenWidthPx, renderScale);
   return tileHeightCandidates(cellHpx).map((tileHeightPx) => {
     const imageTileHeightPx = toImagePx(tileHeightPx, renderScale);
@@ -156,8 +149,6 @@ function toPlan(option: TileOption, limits: GraphicsLimits): CapturePlan {
     renderScale,
     imgWidthPx,
     tileHeightPx,
-    exceedsFrameLimit: !option.fitsFrame,
-    exceedsStorage: 2 * tilesInFrame * tileBytes > limits.storageBytes,
     ...cappedBudgets(tileBytes, tilesInFrame + 1, limits),
   };
 }
@@ -178,9 +169,9 @@ function resolveCapturePlan(
   const fitting = options.map((atScale) => atScale.filter((o) => o.fitsFrame));
   const visibleBytes = (o: TileOption) => o.tilesInFrame * o.tileBytes;
   const chosen =
+    // An update holds the old and the new generation's visible tiles at once.
     fitting.flat().find((o) => 2 * visibleBytes(o) <= limits.storageBytes) ??
     fitting.flat().find((o) => visibleBytes(o) <= limits.storageBytes) ??
-    // Among transfer-fitting tiles, the smallest visible footprint overflows least.
     fitting
       .find((atScale) => atScale.length > 0)
       ?.reduce((best, o) => (visibleBytes(o) < visibleBytes(best) ? o : best)) ??
@@ -233,7 +224,6 @@ export function toScreenPx(cssPx: number, cellHpx: number): number {
   return (cssPx * cellHpx) / CELL_CSS_PX;
 }
 
-/** Odd-height downscaled cells need a two-cell scroll unit. */
 export function scrollUnitPx(cellHpx: number, renderScale: number): number {
   return Number.isInteger(cellHpx * renderScale) ? cellHpx : 2 * cellHpx;
 }

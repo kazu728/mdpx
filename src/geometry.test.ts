@@ -6,11 +6,11 @@ import {
   computeTiles,
   contentRows,
   detectGraphicsLimits,
-  fitsGraphicsFrame,
   maxScrollPx,
-  maxTilesInFrame,
   resolveGeometry,
+  scrollUnitPx,
   toImagePx,
+  visibleTiles,
   type Geometry,
 } from "./geometry.ts";
 
@@ -36,20 +36,18 @@ describe("detectGraphicsLimits", () => {
   });
 });
 
-describe("fitsGraphicsFrame", () => {
-  test("judges a tile by its base64 transfer size, not its raw size", () => {
-    expect(fitsGraphicsFrame(relayed, 1512, 2046)).toBe(true);
-    // 24MB of RGBA fits the 30MB frame raw, but not once base64 grows it by a third.
-    expect(fitsGraphicsFrame(relayed, 3024, 1984)).toBe(false);
-  });
-});
-
 describe("resolveGeometry", () => {
   function tileBytes(g: Geometry): number {
     return g.imgWidthPx * toImagePx(g.tileHeightPx, g.renderScale) * 4;
   }
   function visibleBytes(g: Geometry): number {
-    return maxTilesInFrame(contentRows(g.rows) * g.cellHpx, g.tileHeightPx) * tileBytes(g);
+    const rows = contentRows(g.rows);
+    const { tiles } = computeTiles(g.tileHeightPx + rows * g.cellHpx, g.cellHpx, rows, g.tileHeightPx);
+    let most = 0;
+    for (let scrollPx = 0; scrollPx < g.tileHeightPx; scrollPx += scrollUnitPx(g.cellHpx, g.renderScale)) {
+      most = Math.max(most, visibleTiles(scrollPx, rows, g.cellHpx, tiles).length);
+    }
+    return most * tileBytes(g);
   }
 
   test("picks the tallest tile that fits and keeps the working set below eviction", () => {
@@ -86,21 +84,24 @@ describe("resolveGeometry", () => {
     }
   });
 
-  test("screens too large for two generations report it and cap the budgets to storage", () => {
-    const tall = resolveGeometry({ cols: 400, rows: 200 }, CELL, relayed);
+  test("screens too large for two generations still show one and cap the budgets to storage", () => {
     for (const g of [
       resolveGeometry({ cols: 2000, rows: 65 }, CELL, relayed),
-      resolveGeometry({ cols: 24000, rows: 3 }, CELL, relayed),
-      tall,
+      resolveGeometry({ cols: 24000, rows: 4 }, CELL, relayed),
+      resolveGeometry({ cols: 400, rows: 200 }, CELL, relayed),
     ]) {
-      expect(g.exceedsFrameLimit).toBe(false);
-      expect(g.exceedsStorage).toBe(true);
+      expect(2 * visibleBytes(g)).toBeGreaterThan(relayed.storageBytes);
+      expect(visibleBytes(g)).toBeLessThanOrEqual(relayed.storageBytes);
       expect(g.maxResident).toBeLessThanOrEqual(g.maxTotalResident);
       expect(g.maxTotalResident * tileBytes(g)).toBeLessThanOrEqual(relayed.storageBytes);
     }
-    expect(visibleBytes(tall)).toBeLessThanOrEqual(relayed.storageBytes);
     const huge = resolveGeometry({ cols: 300, rows: 201 }, CELL, direct);
-    expect(huge.exceedsStorage).toBe(false);
+    expect(2 * visibleBytes(huge)).toBeLessThanOrEqual(direct.storageBytes);
+  });
+
+  test("sizes a tile by its base64 transfer, not its raw pixels", () => {
+    const g = resolveGeometry({ cols: 6800, rows: 65 }, CELL, relayed);
+    expect(Math.ceil(tileBytes(g) / 3) * 4).toBeLessThanOrEqual(relayed.frameBytes!);
   });
 
   test("a zero-column screen still captures a positive width", () => {
