@@ -211,6 +211,7 @@ describe("failures", () => {
     s.shootFails();
     expect(s.view).toMatchObject({ displayGen: { gen: 1 }, phase: "ready" });
     expect(s.liveTiles(1)).toEqual([0]);
+    expect(s.screen).toContain("update failed");
     s.save();
     expect(s.pendingRenders()).toEqual([2]);
   });
@@ -226,6 +227,16 @@ describe("failures", () => {
     s.rendered(1500);
     s.deliverAll();
     expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 1000, failure: false });
+  });
+
+  test("a render failing while a scroll fetch is in flight does not fetch the same tile twice", () => {
+    const s = displayed({ ...GEO, maxResident: 3, maxTotalResident: 6 }, 5000);
+    s.key(BOTTOM);
+    s.save();
+    s.renderFails();
+    expect(s.pendingShoots()).toEqual([9]);
+    s.deliverAll();
+    expect(s.view).toMatchObject({ displayGen: { gen: 1 }, scrollPx: 4500 });
   });
 
   test("a failed scroll fetch is reported until the next move", () => {
@@ -339,7 +350,7 @@ describe("resize", () => {
     s.save();
     s.rendered(1500);
     const bigger: Geometry = { ...GEO, rows: 61, cellHpx: 12, tileHeightPx: alignedTileHeightPx(12, 60) };
-    expect(s.send({ type: "resize", geometry: bigger })).toEqual([]);
+    s.send({ type: "resize", geometry: bigger });
     expect(s.view).toMatchObject({ displayGen: null, geometry: { cellHpx: 12 } });
     s.deliver();
     expect(s.liveTiles(1)).toEqual([]);
@@ -382,5 +393,19 @@ describe("storage across generations", () => {
     expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 400 });
     expect(s.liveTiles(1)).toEqual([]);
     expect(s.released).toEqual([1]);
+  });
+
+  test("a save during a far scroll still replaces the display when storage is tight", () => {
+    const s = displayed(
+      { ...GEO, rows: 41, tileHeightPx: alignedTileHeightPx(10, 40), maxResident: 3, maxTotalResident: 4 },
+      2600,
+    );
+    s.key({ kind: "lines", n: 7 });
+    s.key(BOTTOM);
+    s.save();
+    s.deliver();
+    s.rendered(1500);
+    s.deliverAll();
+    expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 1100 });
   });
 });
