@@ -19,6 +19,7 @@ class Session {
   private placed = new Set<number>();
   private renders: number[] = [];
   private inFlight: Shoot[] = [];
+  private readonly burst = new Set<Shoot>();
 
   constructor(geometry: Geometry) {
     this.scheduler = new Scheduler(geometry);
@@ -104,6 +105,7 @@ class Session {
         expect(this.live.has(id)).toBe(false);
         expect(this.inFlight.some((s) => imageId(s.gen, s.tileIndex) === id)).toBe(false);
         this.inFlight.push(action);
+        if (!this.steady) this.burst.add(action);
         this.expectWithinBudget();
         break;
       }
@@ -116,11 +118,18 @@ class Session {
     }
   }
 
-  // Only a pending scroll or a render may hold more than the steady budget.
+  private get steady(): boolean {
+    const { phase, pendingScrollPx } = this.view;
+    return phase === "ready" && pendingScrollPx === null;
+  }
+
+  // Only a pending scroll or a render may hold more than the steady budget; its transfers count once they land.
   private expectWithinBudget(): void {
-    const { geometry, phase, pendingScrollPx } = this.view;
-    const budget = phase === "ready" && pendingScrollPx === null ? geometry.maxResident : geometry.maxTotalResident;
-    expect(this.live.size + this.inFlight.length).toBeLessThanOrEqual(budget);
+    const { maxResident, maxTotalResident } = this.view.geometry;
+    expect(this.live.size + this.inFlight.length).toBeLessThanOrEqual(maxTotalResident);
+    if (!this.steady) return;
+    const issued = this.inFlight.filter((s) => !this.burst.has(s));
+    expect(this.live.size + issued.length).toBeLessThanOrEqual(maxResident);
   }
 }
 
@@ -269,6 +278,15 @@ describe("scrolling", () => {
     expect(s.liveTiles(1)).toEqual([7, 8, 9]);
     s.key(BOTTOM);
     expect(s.pendingShoots()).toEqual([]);
+  });
+
+  test("returning to resident tiles drops the rest of a far fetch", () => {
+    const s = displayed({ ...GEO, maxResident: 3, maxTotalResident: 6 }, 5000);
+    s.key(BOTTOM);
+    s.key({ kind: "top" });
+    expect(s.pendingShoots()).toEqual([9]);
+    s.deliverAll();
+    expect(s.liveTiles(1)).toEqual([0, 1, 2]);
   });
 
   test("prefetching ahead frees the farthest tile before transferring", () => {

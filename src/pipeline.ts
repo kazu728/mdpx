@@ -30,6 +30,7 @@ export class Pipeline {
   constructor(private readonly deps: PipelineDeps) {}
 
   dispatch(event: SchedulerEvent): void {
+    if (this.deps.isShuttingDown()) return;
     const actions = this.deps.scheduler.dispatch(event);
     // Drawn before the actions so that deleted images are no longer placed.
     this.redraw();
@@ -97,16 +98,15 @@ export class Pipeline {
 
   private async handleChromeError(e: unknown, gen: number): Promise<void> {
     const { isShuttingDown, onFatal } = this.deps;
-    if (isShuttingDown()) return;
     if (e instanceof ContentError) {
       this.dispatch({ type: "renderFailed", gen });
       return;
     }
-    await onFatal(e);
+    if (!isShuttingDown()) await onFatal(e);
   }
 
   private async runRender(gen: number): Promise<void> {
-    const { mdPath, assets, isShuttingDown } = this.deps;
+    const { mdPath, assets } = this.deps;
     try {
       const markdown = await readFile(mdPath, "utf8");
       const html = await buildHtml({
@@ -117,7 +117,7 @@ export class Pipeline {
       });
       await writeFile(this.htmlFor(gen), html);
     } catch {
-      if (!isShuttingDown()) this.dispatch({ type: "renderFailed", gen });
+      this.dispatch({ type: "renderFailed", gen });
       return;
     }
     let documentHeightPx: number;
@@ -127,9 +127,7 @@ export class Pipeline {
       await this.handleChromeError(e, gen);
       return;
     }
-    if (!isShuttingDown()) {
-      this.dispatch({ type: "renderDone", gen, documentHeightPx });
-    }
+    this.dispatch({ type: "renderDone", gen, documentHeightPx });
   }
 
   private async runShoot(action: ShootAction): Promise<void> {

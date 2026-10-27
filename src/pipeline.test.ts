@@ -138,7 +138,7 @@ describe("Pipeline", () => {
     expect(t.fatal).toEqual([error]);
   });
 
-  test("nothing is reported back once shutdown has begun", async () => {
+  test("nothing is drawn or reported back once shutdown has begun", async () => {
     const failed = await setup();
     failed.send({ type: "trigger" });
     const load = await failed.page.next();
@@ -154,6 +154,11 @@ describe("Pipeline", () => {
     done.resolve(250);
     await flush();
     expect(loaded.page.unclaimed).toEqual([]);
+
+    const idle = await setup();
+    idle.state.shuttingDown = true;
+    idle.send({ type: "trigger" });
+    expect(idle.writes).toEqual([]);
   });
 
   test("toggling the theme re-renders with the other theme", async () => {

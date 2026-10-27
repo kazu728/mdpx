@@ -79,7 +79,7 @@ async function runApp(mdPath: string): Promise<void> {
   let started: Pipeline | null = null;
   term.onKey((k) => {
     if (k.type === "quit") return void shutdown(0);
-    if (shuttingDown || !started) return;
+    if (!started) return;
     if (k.type === "theme") return started.toggleTheme();
     started.dispatch({ type: "key", delta: k.delta });
   });
@@ -117,20 +117,17 @@ async function runApp(mdPath: string): Promise<void> {
       void (async () => {
         if (shuttingDown) return;
         const c = await term.queryCellSize(CELL_QUERY_MS);
-        if (!c || shuttingDown) return;
-        pipeline.dispatch({ type: "resize", geometry: resolveGeometry(term.size(), c) });
+        if (c) pipeline.dispatch({ type: "resize", geometry: resolveGeometry(term.size(), c) });
       })();
     });
 
     let debounce: ReturnType<typeof setTimeout> | undefined;
     try {
-      // Not closed on shutdown: shutdown can run before the watcher exists, so the callback checks instead.
+      // Not closed on shutdown: shutdown can run before the watcher exists, so the pipeline checks instead.
       watch(mdDir, (_event, changed) => {
         if (changed !== null && changed.normalize("NFC").toLowerCase() !== watchTarget) return;
         clearTimeout(debounce);
-        debounce = setTimeout(() => {
-          if (!shuttingDown) pipeline.dispatch({ type: "trigger" });
-        }, WATCH_DEBOUNCE_MS);
+        debounce = setTimeout(() => pipeline.dispatch({ type: "trigger" }), WATCH_DEBOUNCE_MS);
       });
     } catch (e) {
       return shutdown(1, `cannot watch the directory: ${errorMessage(e)}`);
