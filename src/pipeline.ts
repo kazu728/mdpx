@@ -11,6 +11,7 @@ type ShootAction = Extract<Action, { type: "shoot" }>;
 
 interface PipelineDeps {
   chrome: Pick<Chrome, "load" | "shoot">;
+  chromeReady: Promise<void>;
   scheduler: Scheduler;
   term: Pick<Term, "write">;
   mdPath: string;
@@ -24,10 +25,12 @@ export class Pipeline {
   private lastPlacements: number[] = [];
   private lastEscape = "";
   private theme: Theme = "light";
-  private page: Promise<unknown> = Promise.resolve();
+  private page: Promise<unknown>;
   private loaded: { gen: number; geometry: Geometry } | null = null;
 
-  constructor(private readonly deps: PipelineDeps) {}
+  constructor(private readonly deps: PipelineDeps) {
+    this.page = deps.chromeReady;
+  }
 
   dispatch(event: SchedulerEvent): void {
     if (this.deps.isShuttingDown()) return;
