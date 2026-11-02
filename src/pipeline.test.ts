@@ -48,7 +48,7 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
-async function setup() {
+async function setup(chromeReady: Promise<void> = Promise.resolve()) {
   const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-"));
   dirs.push(dir);
   const mdPath = join(dir, "a.md");
@@ -59,6 +59,7 @@ async function setup() {
   const state = { shuttingDown: false };
   const pipeline = new Pipeline({
     chrome: page.chrome,
+    chromeReady,
     scheduler: new Scheduler(GEO),
     term: { write: (s) => writes.push(s) },
     mdPath,
@@ -89,6 +90,21 @@ describe("Pipeline", () => {
     t.send({ type: "trigger" });
     expect(t.writes).toHaveLength(1);
     await t.page.next();
+  });
+
+  test("the page is first used once Chrome is ready", async () => {
+    let ready = false;
+    const t = await setup(
+      new Promise((resolve) =>
+        setTimeout(() => {
+          ready = true;
+          resolve();
+        }, 200),
+      ),
+    );
+    t.send({ type: "trigger" });
+    expect((await t.page.next()).kind).toBe("load");
+    expect(ready).toBe(true);
   });
 
   test("a tile is captured as its CSS-pixel band of the page", async () => {

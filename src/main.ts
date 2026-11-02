@@ -95,14 +95,13 @@ async function runApp(mdPath: string): Promise<void> {
 
     const assets = resolveAssets();
     dir = await mkdtemp(join(tmpdir(), "mdpx-"));
-    try {
-      await chrome.launch();
-    } catch (e) {
-      return shutdown(1, `cannot launch Chrome (${chromeExecutable}): ${errorText(e)}`);
-    }
+    const chromeReady = chrome
+      .launch()
+      .catch((e) => shutdown(1, `cannot launch Chrome (${chromeExecutable}): ${errorText(e)}`));
 
     const pipeline = new Pipeline({
       chrome,
+      chromeReady,
       scheduler: new Scheduler(resolveGeometry(term.size(), cell)),
       term,
       mdPath,
