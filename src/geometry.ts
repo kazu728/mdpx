@@ -1,6 +1,6 @@
 import { transferSize } from "./kitty.ts";
 
-interface GraphicsLimits {
+export interface GraphicsLimits {
   frameBytes: number | null;
   storageBytes: number;
 }
@@ -15,61 +15,60 @@ export interface ScreenSize {
   rows: number;
 }
 
-interface CapturePlan {
-  renderScale: number;
-  imgWidthPx: number;
-  tileHeightPx: number;
-  maxResident: number;
-  maxTotalResident: number;
+/**
+ * Everything that decides the pixels of a captured image. Images captured under an equal
+ * RasterSpec stay valid, so a resize that changes only the row count captures nothing.
+ */
+export interface RasterSpec {
+  readonly contentCols: number;
+  readonly cellWpx: number;
+  readonly cellHpx: number;
+  readonly renderScale: number;
+  /** Rows of content in a full slice. Taller blocks are split. */
+  readonly sliceRows: number;
 }
 
-export interface Geometry extends ScreenSize, CapturePlan {
-  cellHpx: number;
-  viewportWidthCssPx: number;
-  deviceScaleFactor: number;
-}
-
-interface TileOption {
-  renderScale: number;
-  imgWidthPx: number;
-  tileHeightPx: number;
-  tilesInFrame: number;
-  tileBytes: number;
-  fitsFrame: boolean;
-}
-
-export type ScrollDirection = -1 | 0 | 1;
-
-export interface Tile {
-  topPx: number;
-  heightPx: number;
-}
-
-interface TileLayout {
-  tiles: Tile[];
-  truncated: boolean;
-  contentHeightPx: number;
-}
-
-interface Placement {
-  tileIndex: number;
-  sourceTopPx: number;
-  sourceHeightPx: number;
-  destinationRow: number;
-  destinationRows: number;
+export interface Geometry {
+  readonly raster: RasterSpec;
+  readonly cols: number;
+  readonly rows: number;
+  /** Rows above the status line. */
+  readonly viewRows: number;
+  readonly viewportWidthCssPx: number;
+  readonly deviceScaleFactor: number;
+  readonly imgWidthPx: number;
+  readonly storageBytes: number;
 }
 
 /**
  * CSS px spanned by one cell's height. GitHub's 16px body text then follows the terminal
- * font size, and a power of two keeps the device scale factor exact.
+ * font size. GitHub's block margins are at least this tall, which is what lets every block
+ * be captured with a one-row margin of blank page.
  */
-const CELL_CSS_PX = 16;
+export const CELL_CSS_PX = 16;
 
-/** Bounds capture cost and stays below IMAGE_ID_GENERATION_STRIDE. */
-const MAX_TILES = 128;
+/** Column left of the page for change marks. */
+export const GUTTER_COLS = 1;
 
-// Terminal rows are unbounded, so cap screenshot requests independently of kitty limits.
-const MAX_TILE_PX = 4096;
+/** Caps one screenshot independently of the terminal's limits. */
+const MAX_IMAGE_PX = 4096;
+
+/**
+ * Screenshots start and end on this CSS px grid. Puppeteer rounds a clip to whole CSS px, and
+ * a multiple of one cell (two when a downscaled cell is an odd number of px) is also a whole
+ * number of image px, so the image lands exactly where it was asked to.
+ */
+export function captureGridCss(deviceScaleFactor: number): number {
+  return CELL_CSS_PX * (Number.isInteger(CELL_CSS_PX * deviceScaleFactor) ? 1 : 2);
+}
+
+/**
+ * The tallest image a slice of `contentRows` rows can need: its rows rounded out to the grid
+ * on both ends, plus one more grid step of page above and below.
+ */
+export function sliceImageRows(contentRows: number, gridRows: number): number {
+  return (Math.ceil(contentRows / gridRows) + 3) * gridRows;
+}
 
 export const FULL_SCALE = 1;
 const REDUCED_SCALE = 0.5;
@@ -87,97 +86,60 @@ export function detectGraphicsLimits(env: NodeJS.ProcessEnv = process.env): Grap
   return v !== undefined && v !== "" && v !== "0" ? HERDR_RELAY : DIRECT;
 }
 
-/** Worst case touches one extra boundary while straddling. */
-function maxTilesInFrame(viewportHeightPx: number, tileHeightPx: number): number {
-  return Math.ceil(viewportHeightPx / tileHeightPx) + 1;
+interface Plan {
+  renderScale: number;
+  imgWidthPx: number;
+  sliceRows: number;
 }
 
-function fitsGraphicsFrame(
-  limits: GraphicsLimits,
-  imageWidthPx: number,
-  tileHeightPx: number,
-): boolean {
-  return (
-    limits.frameBytes === null ||
-    transferSize(imageWidthPx * tileHeightPx * 4) <= limits.frameBytes
-  );
-}
-
-function tileHeightCandidates(cellHpx: number): number[] {
-  const maximum = maximumTileHeightPx(cellHpx);
-  const candidates: number[] = [];
-  for (let rows = Math.floor(maximum / cellHpx); rows >= 1; rows -= 2) {
-    candidates.push(alignedTileHeightPx(cellHpx, rows));
-  }
-  return candidates;
-}
-
-function cappedBudgets(
-  tileBytes: number,
-  minTiles: number,
-  limits: GraphicsLimits,
-): { maxResident: number; maxTotalResident: number } {
-  const maxTotalResident = Math.floor(limits.storageBytes / tileBytes);
-  const workingSet = Math.max(minTiles, Math.floor((limits.storageBytes * 0.8) / tileBytes));
-  return { maxResident: Math.min(workingSet, maxTotalResident), maxTotalResident };
-}
-
-function tileOptions(
-  screenWidthPx: number,
-  viewportHeightPx: number,
+function planAt(
+  widthPx: number,
   cellHpx: number,
   renderScale: number,
   limits: GraphicsLimits,
-): TileOption[] {
-  const imgWidthPx = toImagePx(screenWidthPx, renderScale);
-  return tileHeightCandidates(cellHpx).map((tileHeightPx) => {
-    const imageTileHeightPx = toImagePx(tileHeightPx, renderScale);
-    return {
-      renderScale,
-      imgWidthPx,
-      tileHeightPx,
-      tilesInFrame: maxTilesInFrame(viewportHeightPx, tileHeightPx),
-      tileBytes: imgWidthPx * imageTileHeightPx * 4,
-      fitsFrame: fitsGraphicsFrame(limits, imgWidthPx, imageTileHeightPx),
-    };
-  });
-}
-
-function toPlan(option: TileOption, limits: GraphicsLimits): CapturePlan {
-  const { renderScale, imgWidthPx, tileHeightPx, tilesInFrame, tileBytes } = option;
-  return {
-    renderScale,
-    imgWidthPx,
-    tileHeightPx,
-    ...cappedBudgets(tileBytes, tilesInFrame + 1, limits),
+): Plan | null {
+  const imgWidthPx = Math.max(1, Math.round(widthPx * renderScale));
+  const cellImg = cellHpx * renderScale;
+  // Slice edges must land on the capture grid.
+  const quantum = captureGridCss((renderScale * cellHpx) / CELL_CSS_PX) / CELL_CSS_PX;
+  const fits = (rows: number) => {
+    const h = sliceImageRows(rows, quantum) * cellImg;
+    return (
+      h <= MAX_IMAGE_PX &&
+      (limits.frameBytes === null || transferSize(imgWidthPx * h * 4) <= limits.frameBytes)
+    );
   };
+  let rows = Math.floor(MAX_IMAGE_PX / cellImg / quantum) * quantum;
+  while (rows >= quantum && !fits(rows)) rows -= quantum;
+  if (rows < quantum) return null;
+  return { renderScale, imgWidthPx, sliceRows: rows };
 }
 
-function resolveCapturePlan(
-  screenWidthPx: number,
-  viewportHeightPx: number,
+function visibleBytes(plan: Plan, cellHpx: number, viewRows: number): number {
+  return plan.imgWidthPx * ((viewRows + 2) * cellHpx * plan.renderScale) * 4;
+}
+
+function resolvePlan(
+  widthPx: number,
   cellHpx: number,
+  viewRows: number,
   limits: GraphicsLimits,
-): CapturePlan {
-  const canReduce =
-    limits.frameBytes !== null &&
-    viewportHeightPx >= scrollUnitPx(cellHpx, REDUCED_SCALE);
-  const scales = canReduce ? [FULL_SCALE, REDUCED_SCALE] : [FULL_SCALE];
-  const options = scales.map((scale) =>
-    tileOptions(screenWidthPx, viewportHeightPx, cellHpx, scale, limits),
+): Plan {
+  const full = planAt(widthPx, cellHpx, FULL_SCALE, limits);
+  // Only the relay is tight enough to trade resolution for room; an update holds the old
+  // and the new screen at once.
+  if (full && (limits.frameBytes === null || 2 * visibleBytes(full, cellHpx, viewRows) <= limits.storageBytes)) {
+    return full;
+  }
+  return (
+    planAt(widthPx, cellHpx, REDUCED_SCALE, limits) ??
+    full ?? {
+      // Even one row overflows a transaction; keep the smallest capture to minimize it.
+      renderScale: REDUCED_SCALE,
+      imgWidthPx: Math.max(1, Math.round(widthPx * REDUCED_SCALE)),
+      sliceRows: 2,
+    }
   );
-  const fitting = options.map((atScale) => atScale.filter((o) => o.fitsFrame));
-  const visibleBytes = (o: TileOption) => o.tilesInFrame * o.tileBytes;
-  const chosen =
-    // An update holds the old and the new generation's visible tiles at once.
-    fitting.flat().find((o) => 2 * visibleBytes(o) <= limits.storageBytes) ??
-    fitting.flat().find((o) => visibleBytes(o) <= limits.storageBytes) ??
-    fitting
-      .find((atScale) => atScale.length > 0)
-      ?.reduce((best, o) => (visibleBytes(o) < visibleBytes(best) ? o : best)) ??
-    // Even the smallest tile overflows one transaction; keep it to minimize the overflow.
-    options.at(-1)!.at(-1)!;
-  return toPlan(chosen, limits);
 }
 
 export function resolveGeometry(
@@ -185,158 +147,31 @@ export function resolveGeometry(
   cell: CellSize,
   limits: GraphicsLimits = detectGraphicsLimits(),
 ): Geometry {
-  const { rows } = screen;
   const cols = Math.max(1, screen.cols);
-  const screenWidthPx = cols * cell.cellWpx;
-  // Chrome rounds the screenshot width, so rounding up keeps it no narrower than the 1:1 crop.
-  const viewportWidthCssPx = Math.ceil(toCssPx(screenWidthPx, cell.cellHpx));
-  const contentRowCount = contentRows(rows);
-  const viewportHeightPx = contentRowCount * cell.cellHpx;
-  const plan = resolveCapturePlan(
-    screenWidthPx,
-    viewportHeightPx,
-    cell.cellHpx,
-    limits,
-  );
+  const rows = Math.max(1, screen.rows);
+  const viewRows = rows - 1;
+  const contentCols = Math.max(1, cols - GUTTER_COLS);
+  const widthPx = contentCols * cell.cellWpx;
+  const plan = resolvePlan(widthPx, cell.cellHpx, viewRows, limits);
   return {
-    rows,
+    raster: {
+      contentCols,
+      cellWpx: cell.cellWpx,
+      cellHpx: cell.cellHpx,
+      renderScale: plan.renderScale,
+      sliceRows: plan.sliceRows,
+    },
     cols,
-    cellHpx: cell.cellHpx,
-    viewportWidthCssPx,
+    rows,
+    viewRows,
+    // Chrome rounds the screenshot width, so rounding up keeps it no narrower than the crop.
+    viewportWidthCssPx: Math.ceil((widthPx * CELL_CSS_PX) / cell.cellHpx),
     deviceScaleFactor: (plan.renderScale * cell.cellHpx) / CELL_CSS_PX,
-    ...plan,
+    imgWidthPx: plan.imgWidthPx,
+    storageBytes: limits.storageBytes,
   };
 }
 
-export function contentRows(rows: number): number {
-  return Math.max(0, rows - 1);
-}
-
-export function toImagePx(screenPx: number, renderScale: number): number {
-  return Math.round(screenPx * renderScale);
-}
-
-export function toCssPx(screenPx: number, cellHpx: number): number {
-  return (screenPx * CELL_CSS_PX) / cellHpx;
-}
-
-export function toScreenPx(cssPx: number, cellHpx: number): number {
-  return (cssPx * cellHpx) / CELL_CSS_PX;
-}
-
-export function scrollUnitPx(cellHpx: number, renderScale: number): number {
-  return Number.isInteger(cellHpx * renderScale) ? cellHpx : 2 * cellHpx;
-}
-
-/** Two cells keep tile edges on whole image px at the reduced scale. */
-function tileAlign(cellHpx: number): number {
-  return 2 * cellHpx;
-}
-
-function maximumTileHeightPx(cellHpx: number): number {
-  const unit = tileAlign(cellHpx);
-  return Math.floor(MAX_TILE_PX / unit) * unit;
-}
-
-export function alignedTileHeightPx(cellHpx: number, rows: number): number {
-  const unit = tileAlign(cellHpx);
-  const capped = maximumTileHeightPx(cellHpx);
-  const requested = Math.ceil((rows * cellHpx) / unit) * unit;
-  return Math.max(unit, Math.min(requested, capped));
-}
-
-export function computeTiles(
-  documentHeightPx: number,
-  cellHpx: number,
-  contentRows: number,
-  tileHeightPx: number,
-): TileLayout {
-  if (contentRows <= 0) {
-    return { tiles: [], truncated: false, contentHeightPx: 0 };
-  }
-  const unit = tileAlign(cellHpx);
-  const paddedH = Math.ceil(documentHeightPx / unit) * unit;
-  const tiles: Tile[] = [];
-  let y = 0;
-  while (y < paddedH && tiles.length < MAX_TILES) {
-    const height = Math.min(tileHeightPx, paddedH - y);
-    tiles.push({ topPx: y, heightPx: height });
-    y += height;
-  }
-  const cellPadded = Math.ceil(documentHeightPx / cellHpx) * cellHpx;
-  return {
-    tiles,
-    truncated: y < paddedH,
-    contentHeightPx: Math.min(cellPadded, y),
-  };
-}
-
-export function maxScrollPx(
-  contentHeightPx: number,
-  contentRows: number,
-  cellHpx: number,
-  renderScale: number,
-): number {
-  const unit = scrollUnitPx(cellHpx, renderScale);
-  const raw = Math.ceil(Math.max(0, contentHeightPx - contentRows * cellHpx) / unit) * unit;
-  // Keep at least one body image placed over the document.
-  const inside = Math.max(0, Math.ceil(contentHeightPx / unit) * unit - unit);
-  return Math.min(raw, inside);
-}
-
-export function clampScroll(
-  scrollPx: number,
-  contentHeightPx: number,
-  contentRows: number,
-  cellHpx: number,
-  renderScale: number,
-): number {
-  const unit = scrollUnitPx(cellHpx, renderScale);
-  const snapped = Math.round(scrollPx / unit) * unit;
-  return Math.max(
-    0,
-    Math.min(snapped, maxScrollPx(contentHeightPx, contentRows, cellHpx, renderScale)),
-  );
-}
-
-export function visibleTiles(
-  scrollPx: number,
-  contentRows: number,
-  cellHpx: number,
-  tiles: Tile[],
-): Placement[] {
-  const viewTop = scrollPx;
-  const viewBottom = scrollPx + contentRows * cellHpx;
-  const placements: Placement[] = [];
-  for (let i = 0; i < tiles.length; i++) {
-    const tile = tiles[i]!;
-    const overlapTop = Math.max(viewTop, tile.topPx);
-    const overlapBottom = Math.min(viewBottom, tile.topPx + tile.heightPx);
-    if (overlapBottom <= overlapTop) continue;
-    placements.push({
-      tileIndex: i,
-      sourceTopPx: overlapTop - tile.topPx,
-      sourceHeightPx: overlapBottom - overlapTop,
-      destinationRow: (overlapTop - viewTop) / cellHpx,
-      destinationRows: (overlapBottom - overlapTop) / cellHpx,
-    });
-  }
-  return placements;
-}
-
-export function backfillOrder(
-  scrollPx: number,
-  contentRows: number,
-  cellHpx: number,
-  tiles: Tile[],
-  direction: ScrollDirection = 0,
-): number[] {
-  const center = scrollPx + (contentRows * cellHpx) / 2;
-  return tiles
-    .map((tile, index) => ({
-      index,
-      dist: Math.abs(tile.topPx + tile.heightPx / 2 - center),
-    }))
-    .sort((a, b) => a.dist - b.dist || direction * (b.index - a.index) || a.index - b.index)
-    .map((t) => t.index);
+export function sameRaster(a: RasterSpec, b: RasterSpec): boolean {
+  return (Object.keys(a) as (keyof RasterSpec)[]).every((k) => a[k] === b[k]);
 }

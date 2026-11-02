@@ -4,14 +4,6 @@ const APC_END = `${ESC}\\`;
 
 const MAX_PAYLOAD_CHUNK_SIZE = 4096;
 
-export const IMAGE_ID_GENERATION_STRIDE = 1024;
-
-export function imageId(gen: number, tileIndex: number): number {
-  return gen * IMAGE_ID_GENERATION_STRIDE + tileIndex;
-}
-
-const TILE_PLACEMENT_ID = 1;
-
 export function transmit(id: number, pngBase64: string): string {
   let out = "";
   for (let i = 0; i < pngBase64.length; i += MAX_PAYLOAD_CHUNK_SIZE) {
@@ -29,6 +21,7 @@ export function transferSize(dataLenBytes: number): number {
 
 interface PlaceParams {
   id: number;
+  placementId: number;
   sourceXImagePx: number;
   sourceYImagePx: number;
   sourceWidthImagePx: number;
@@ -38,12 +31,12 @@ interface PlaceParams {
 }
 
 export function place(p: PlaceParams): string {
-  const control = `a=p,i=${p.id},p=${TILE_PLACEMENT_ID},x=${p.sourceXImagePx},y=${p.sourceYImagePx},w=${p.sourceWidthImagePx},h=${p.sourceHeightImagePx},c=${p.displayColumns},r=${p.displayRows},q=1`;
+  const control = `a=p,i=${p.id},p=${p.placementId},x=${p.sourceXImagePx},y=${p.sourceYImagePx},w=${p.sourceWidthImagePx},h=${p.sourceHeightImagePx},c=${p.displayColumns},r=${p.displayRows},q=1`;
   return `${APC_START}${control}${APC_END}`;
 }
 
-export function deletePlacement(id: number): string {
-  return `${APC_START}a=d,d=i,i=${id},p=${TILE_PLACEMENT_ID}${APC_END}`;
+export function deletePlacement(id: number, placementId: number): string {
+  return `${APC_START}a=d,d=i,i=${id},p=${placementId}${APC_END}`;
 }
 
 export function deleteImage(id: number): string {

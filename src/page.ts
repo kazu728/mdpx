@@ -1,0 +1,313 @@
+import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { TimeoutError, type Page as BrowserPage } from "puppeteer-core";
+import { captureGridCss, type Geometry } from "./geometry.ts";
+import type { CaptureRef, CapturedImage, SyncedLayout } from "./layout.ts";
+import { PAGE_BACKGROUND, type Doc, type Theme } from "./markdown.ts";
+
+const require = createRequire(import.meta.url);
+
+/** The document, not Chrome, failed: a load timed out. */
+export class ContentError extends Error {}
+
+/** The blocks to capture are no longer where the layout said: a later sync or a reflow moved them. */
+export class CaptureGone extends Error {}
+
+export interface Capture extends CapturedImage {
+  /** PNG, base64. */
+  readonly base64: string;
+}
+
+export interface Assets {
+  githubMarkdownCss: Record<Theme, string>;
+  katexCss: string;
+  mermaidJs: string;
+}
+
+export function resolveAssets(): Assets {
+  return {
+    githubMarkdownCss: {
+      light: require.resolve("github-markdown-css/github-markdown-light.css"),
+      dark: require.resolve("github-markdown-css/github-markdown-dark.css"),
+    },
+    katexCss: require.resolve("katex/dist/katex.min.css"),
+    mermaidJs: require.resolve("mermaid/dist/mermaid.min.js"),
+  };
+}
+
+const NAV_TIMEOUT_MS = 15000;
+const VIEWPORT_HEIGHT_CSS_PX = 900;
+const STABLE_FONTS_MS = 500;
+const STABLE_IMG_DECODE_MS = 1000;
+const STABLE_MERMAID_MS = 3000;
+const REFLOW_DEBOUNCE_MS = 50;
+
+interface SyncResult {
+  rects: [top: number, height: number][];
+  docHeight: number;
+}
+
+declare global {
+  interface Window {
+    __mdpx: {
+      sync(blocks: { key: string; html: string }[], theme: Theme): Promise<SyncResult>;
+      rect(first: [string, number], last: [string, number]): { top: number; bottom: number } | null;
+    };
+  }
+}
+
+function contentSecurityPolicy(nonce: string): string {
+  return [
+    "default-src 'none'",
+    `script-src 'nonce-${nonce}'`,
+    "style-src 'unsafe-inline' file:",
+    "img-src file: data: https: http:",
+    "font-src file:",
+    "connect-src 'none'",
+    "base-uri file:",
+  ].join("; ");
+}
+
+/**
+ * Runs in the page. Wrappers are plain blocks, so the margins of the elements inside them
+ * collapse exactly as they would without the wrapper; only GitHub's first/last-child rules
+ * need restating one level down.
+ */
+const RUNTIME = String.raw`
+(function (config) {
+  const article = document.querySelector("article.markdown-body");
+  const heights = new WeakMap();
+  let syncing = false;
+  let reflowTimer = 0;
+  const observer = new ResizeObserver((entries) => {
+    if (syncing) return;
+    for (const entry of entries) {
+      const h = entry.target.getBoundingClientRect().height;
+      if (Math.abs(h - (heights.get(entry.target) ?? h)) > 0.5) {
+        clearTimeout(reflowTimer);
+        reflowTimer = setTimeout(() => window.__mdpxReflow && window.__mdpxReflow(), config.reflowMs);
+        return;
+      }
+    }
+  });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let mermaidLoad = null;
+  let mermaidTheme = null;
+  function loadMermaid() {
+    return (mermaidLoad ??= new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = config.mermaidJs;
+      s.nonce = config.nonce;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("mermaid failed to load"));
+      document.head.appendChild(s);
+    }));
+  }
+  async function renderMermaid(nodes, theme) {
+    await loadMermaid();
+    if (mermaidTheme !== theme) {
+      mermaid.initialize({ startOnLoad: false, theme: theme === "dark" ? "dark" : "default" });
+      mermaidTheme = theme;
+    }
+    for (const node of nodes) {
+      try { await mermaid.run({ nodes: [node] }); } catch (e) {}
+    }
+  }
+  function applyTheme(theme) {
+    document.getElementById("mdpx-light").disabled = theme !== "light";
+    document.getElementById("mdpx-dark").disabled = theme !== "dark";
+    document.documentElement.style.background = config.background[theme];
+  }
+  async function settle(fresh, theme) {
+    await Promise.race([document.fonts.ready, sleep(config.fontsMs)]);
+    const images = fresh.flatMap((w) => Array.from(w.querySelectorAll("img")));
+    await Promise.race([Promise.all(images.map((i) => i.decode().catch(() => {}))), sleep(config.imagesMs)]);
+    const diagrams = fresh.flatMap((w) => Array.from(w.querySelectorAll("pre.mermaid")));
+    if (diagrams.length) await Promise.race([renderMermaid(diagrams, theme).catch(() => {}), sleep(config.mermaidMs)]);
+  }
+  const wrappers = () => Array.from(article.children);
+  window.__mdpx = {
+    async sync(blocks, theme) {
+      syncing = true;
+      try {
+        applyTheme(theme);
+        const pool = new Map();
+        for (const w of wrappers()) {
+          const list = pool.get(w.dataset.key);
+          if (list) list.push(w); else pool.set(w.dataset.key, [w]);
+        }
+        const ordered = [];
+        const fresh = [];
+        for (const b of blocks) {
+          let w = pool.get(b.key)?.shift();
+          if (!w) {
+            w = document.createElement("div");
+            w.className = "mdpx-block";
+            w.dataset.key = b.key;
+            // innerHTML never runs scripts, and the CSP still applies to everything else.
+            w.innerHTML = b.html;
+            fresh.push(w);
+          }
+          ordered.push(w);
+        }
+        for (const list of pool.values()) for (const w of list) { observer.unobserve(w); w.remove(); }
+        // insertBefore moves a node without re-creating it, so rendered diagrams survive a reorder.
+        let cursor = article.firstElementChild;
+        for (const w of ordered) {
+          if (w === cursor) cursor = cursor.nextElementSibling;
+          else article.insertBefore(w, cursor);
+        }
+        for (const w of fresh) observer.observe(w);
+        await settle(fresh, theme);
+        const rects = wrappers().map((w) => {
+          const r = w.getBoundingClientRect();
+          heights.set(w, r.height);
+          return [r.top + scrollY, r.height];
+        });
+        return { rects, docHeight: document.body.scrollHeight };
+      } finally {
+        syncing = false;
+      }
+    },
+    rect(first, last) {
+      const all = wrappers();
+      const nth = ([key, n]) => all.filter((w) => w.dataset.key === key)[n];
+      const a = nth(first);
+      const b = nth(last);
+      if (!a || !b) return null;
+      const from = all.indexOf(a);
+      const to = all.indexOf(b);
+      if (to < from) return null;
+      let bottom = -Infinity;
+      for (let i = from; i <= to; i++) bottom = Math.max(bottom, all[i].getBoundingClientRect().bottom);
+      return { top: a.getBoundingClientRect().top + scrollY, bottom: bottom + scrollY };
+    },
+  };
+})
+`;
+
+function shellHtml(mdDir: string, assets: Assets, nonce: string): string {
+  let base = pathToFileURL(mdDir).href;
+  if (!base.endsWith("/")) base += "/";
+  const href = (p: string) => pathToFileURL(p).href;
+  const config = {
+    mermaidJs: href(assets.mermaidJs),
+    nonce,
+    background: PAGE_BACKGROUND,
+    fontsMs: STABLE_FONTS_MS,
+    imagesMs: STABLE_IMG_DECODE_MS,
+    mermaidMs: STABLE_MERMAID_MS,
+    reflowMs: REFLOW_DEBOUNCE_MS,
+  };
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy(nonce)}">
+<base href="${base}">
+<link id="mdpx-light" rel="stylesheet" href="${href(assets.githubMarkdownCss.light)}">
+<link id="mdpx-dark" rel="stylesheet" href="${href(assets.githubMarkdownCss.dark)}" disabled>
+<link rel="stylesheet" href="${href(assets.katexCss)}">
+<style>
+  html, body { margin: 0; padding: 0; background: ${PAGE_BACKGROUND.light}; }
+  .markdown-body { box-sizing: border-box; min-width: 200px; max-width: 980px; margin: 0 auto; padding: 32px; }
+  .markdown-body > .mdpx-block:first-child > :first-child { margin-top: 0 !important; }
+  .markdown-body > .mdpx-block:last-child > :last-child { margin-bottom: 0 !important; }
+</style>
+</head>
+<body>
+<article class="markdown-body"></article>
+<script nonce="${nonce}">${RUNTIME}(${JSON.stringify(config)});</script>
+</body>
+</html>
+`;
+}
+
+/**
+ * One page for the whole session, patched in place. Callers hand it documents and get back
+ * where each block landed; they never see a file, a navigation or a wait.
+ */
+export class Page {
+  private viewport: { widthCssPx: number; deviceScaleFactor: number } | null = null;
+
+  private constructor(
+    private readonly page: BrowserPage,
+    private readonly shellPath: string,
+  ) {}
+
+  static async open(
+    page: BrowserPage,
+    options: { mdDir: string; assets: Assets; dir: string; onReflow: () => void },
+  ): Promise<Page> {
+    const shellPath = join(options.dir, "shell.html");
+    await writeFile(shellPath, shellHtml(options.mdDir, options.assets, randomUUID()));
+    await page.exposeFunction("__mdpxReflow", options.onReflow);
+    const opened = new Page(page, shellPath);
+    await opened.reset();
+    return opened;
+  }
+
+  /** Reloads the shell and forgets every block. */
+  async reset(): Promise<void> {
+    this.viewport = null;
+    try {
+      await this.page.goto(pathToFileURL(this.shellPath).href, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+    } catch (e) {
+      if (e instanceof TimeoutError) throw new ContentError(`load timed out: ${e.message}`);
+      throw e;
+    }
+  }
+
+  /** Makes the page show `doc` and reports where each block landed. Syncing the same doc twice changes nothing. */
+  async sync(doc: Doc, geometry: Geometry): Promise<SyncedLayout> {
+    const { viewportWidthCssPx: widthCssPx, deviceScaleFactor } = geometry;
+    if (this.viewport?.widthCssPx !== widthCssPx || this.viewport.deviceScaleFactor !== deviceScaleFactor) {
+      await this.page.setViewport({ width: widthCssPx, height: VIEWPORT_HEIGHT_CSS_PX, deviceScaleFactor });
+      this.viewport = { widthCssPx, deviceScaleFactor };
+    }
+    const blocks = doc.blocks.map((b) => ({ key: b.key, html: b.html }));
+    const result = await this.page.evaluate((b, theme) => window.__mdpx.sync(b, theme), blocks, doc.theme);
+    return {
+      raster: geometry.raster,
+      theme: doc.theme,
+      blocks: doc.blocks.map((b, i) => ({
+        key: b.key,
+        kind: b.kind,
+        topCss: result.rects[i]![0],
+        heightCss: result.rects[i]![1],
+      })),
+      docHeightCss: result.docHeight,
+    };
+  }
+
+  /**
+   * Screenshots the slice with at least one row of page around it, on the capture grid. The
+   * blocks are located when the shot is taken, never from an older layout.
+   */
+  async capture(ref: CaptureRef): Promise<Capture> {
+    const viewport = this.viewport;
+    if (!viewport) throw new CaptureGone("the page has not been synced");
+    const rect = await this.page.evaluate(
+      (first, last) => window.__mdpx.rect(first, last),
+      [ref.first.key, ref.first.occurrence] as [string, number],
+      [ref.last.key, ref.last.occurrence] as [string, number],
+    );
+    const dsf = viewport.deviceScaleFactor;
+    if (!rect || Math.round((rect.bottom - rect.top) * dsf) !== ref.heightImgPx) {
+      throw new CaptureGone("the blocks moved since they were laid out");
+    }
+    const grid = captureGridCss(dsf);
+    const contentTop = rect.top + ref.offsetCss;
+    const top = Math.floor(contentTop / grid) * grid - grid;
+    const bottom = Math.ceil((contentTop + ref.lengthCss) / grid) * grid + grid;
+    const base64 = await this.page.screenshot({
+      clip: { x: 0, y: top, width: viewport.widthCssPx, height: bottom - top },
+      optimizeForSpeed: true,
+      encoding: "base64",
+    });
+    return { base64, contentTopImgPx: (contentTop - top) * dsf, heightImgPx: Math.round((bottom - top) * dsf) };
+  }
+}

@@ -1,45 +1,56 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ContentError } from "./chrome.ts";
-import { resolveAssets } from "./html.ts";
-import { Pipeline } from "./pipeline.ts";
-import { Scheduler, type SchedulerEvent } from "./scheduler.ts";
+import type { Geometry } from "./geometry.ts";
+import type { CaptureRef, SyncedLayout } from "./layout.ts";
+import type { Doc } from "./markdown.ts";
+import { CaptureGone, ContentError, type Capture } from "./page.ts";
+import { Pipeline, type PageLike } from "./pipeline.ts";
+import { Scheduler } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
 
-interface PageCall {
-  kind: "load" | "shoot";
-  target: unknown;
-  resolve(value: unknown): void;
-  reject(error: unknown): void;
+type Call =
+  | { kind: "sync"; doc: Doc; geometry: Geometry; resolve(v: SyncedLayout): void; reject(e: unknown): void }
+  | { kind: "capture"; ref: CaptureRef; resolve(v: Capture): void; reject(e: unknown): void }
+  | { kind: "reset"; resolve(v: void): void; reject(e: unknown): void };
+
+/** A page whose every call waits until the test answers it. */
+function fakePage() {
+  const unclaimed: Call[] = [];
+  const waiting: ((c: Call) => void)[] = [];
+  const push = (c: Call) => {
+    const take = waiting.shift();
+    if (take) take(c);
+    else unclaimed.push(c);
+  };
+  const page: PageLike = {
+    sync: (doc, geometry) => new Promise((resolve, reject) => push({ kind: "sync", doc, geometry, resolve, reject })),
+    capture: (ref) => new Promise((resolve, reject) => push({ kind: "capture", ref, resolve, reject })),
+    reset: () => new Promise((resolve, reject) => push({ kind: "reset", resolve, reject })),
+  };
+  const next = () =>
+    new Promise<Call>((resolve) => {
+      const c = unclaimed.shift();
+      if (c) resolve(c);
+      else waiting.push(resolve);
+    });
+  return { page, next, unclaimed };
 }
 
-function fakeChrome() {
-  const unclaimed: PageCall[] = [];
-  const waiting: ((call: PageCall) => void)[] = [];
-  const call = (kind: PageCall["kind"], target: unknown) =>
-    new Promise((resolve, reject) => {
-      const c = { kind, target, resolve, reject };
-      const take = waiting.shift();
-      if (take) take(c);
-      else unclaimed.push(c);
-    });
-  return {
-    chrome: {
-      load: (htmlPath: string) => call("load", htmlPath) as Promise<number>,
-      shoot: (yCssPx: number, heightCssPx: number) => call("shoot", { yCssPx, heightCssPx }) as Promise<string>,
-    },
-    next: () =>
-      new Promise<PageCall>((resolve) => {
-        const c = unclaimed.shift();
-        if (c) resolve(c);
-        else waiting.push(resolve);
-      }),
-    unclaimed,
-  };
+/** What the page would report for `doc`: blocks stacked 60 CSS px tall with 16 px gaps. */
+function layoutFor(doc: Doc, geometry: Geometry): SyncedLayout {
+  let y = 32;
+  const blocks = doc.blocks.map((b, i) => {
+    if (i > 0) y += 16;
+    const placed = { key: b.key, kind: b.kind, topCss: y, heightCss: 60 };
+    y += 60;
+    return placed;
+  });
+  return { raster: geometry.raster, theme: doc.theme, blocks, docHeightCss: y + 32 };
 }
+
+const SHOT: Capture = { base64: "UE5H", contentTopImgPx: 30, heightImgPx: 200 };
 
 const flush = () => new Promise((r) => setImmediate(r));
 const dirs: string[] = [];
@@ -48,134 +59,142 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
-async function setup(chromeReady: Promise<void> = Promise.resolve()) {
+async function setup(page?: Promise<PageLike>) {
   const dir = await mkdtemp(join(tmpdir(), "mdpx-pipeline-"));
   dirs.push(dir);
   const mdPath = join(dir, "a.md");
-  await writeFile(mdPath, "# a\n");
-  const page = fakeChrome();
+  await writeFile(mdPath, "# a\n\nb\n");
+  const fake = fakePage();
   const writes: string[] = [];
   const fatal: unknown[] = [];
   const state = { shuttingDown: false };
+  let clock = 0;
   const pipeline = new Pipeline({
-    chrome: page.chrome,
-    chromeReady,
+    page: page ?? Promise.resolve(fake.page),
     scheduler: new Scheduler(GEO),
     term: { write: (s) => writes.push(s) },
     mdPath,
-    htmlDir: dir,
-    assets: resolveAssets(),
+    theme: "light",
     isShuttingDown: () => state.shuttingDown,
     onFatal: (error) => {
       fatal.push(error);
       return new Promise<never>(() => {});
     },
+    now: () => (clock += 1),
   });
-  const send = (event: SchedulerEvent) => pipeline.dispatch(event);
-  const html = (gen: number) => join(dir, `gen-${gen}.html`);
+  /** Answers the page until the document is on screen. */
   const display = async () => {
-    send({ type: "trigger" });
-    (await page.next()).resolve(250);
-    (await page.next()).resolve("");
+    pipeline.dispatch({ type: "fileChanged" });
+    const sync = await fake.next();
+    if (sync.kind !== "sync") throw new Error(`expected a sync, got ${sync.kind}`);
+    sync.resolve(layoutFor(sync.doc, sync.geometry));
+    for (let i = 0; i < sync.doc.blocks.length; i++) {
+      const c = await fake.next();
+      if (c.kind !== "capture") throw new Error(`expected a capture, got ${c.kind}`);
+      c.resolve(SHOT);
+    }
     await flush();
   };
-  return { page, writes, fatal, state, pipeline, send, html, display };
+  return { pipeline, fake, writes, fatal, state, mdPath, display };
 }
 
 describe("Pipeline", () => {
+  test("a save renders the file, syncs the page, transmits each visible slice once and places it", async () => {
+    const { pipeline, fake, writes } = await setup();
+    pipeline.dispatch({ type: "fileChanged" });
+    const sync = await fake.next();
+    expect(sync.kind).toBe("sync");
+    if (sync.kind !== "sync") return;
+    expect(sync.doc.blocks.map((b) => b.kind)).toEqual(["heading", "other"]);
+    expect(sync.geometry).toBe(GEO);
+    sync.resolve(layoutFor(sync.doc, sync.geometry));
+    for (let i = 0; i < 2; i++) {
+      const c = await fake.next();
+      expect(c.kind).toBe("capture");
+      if (c.kind === "capture") c.resolve(SHOT);
+    }
+    await flush();
+    const out = writes.join("");
+    expect(out.match(/a=t,f=100/g)).toHaveLength(2);
+    expect(out.match(/a=p,/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
   test("an unchanged frame is not written again", async () => {
-    const t = await setup();
-    t.send({ type: "trigger" });
-    expect(t.writes).toHaveLength(1);
-    t.send({ type: "trigger" });
-    expect(t.writes).toHaveLength(1);
-    await t.page.next();
+    const { pipeline, writes, display } = await setup();
+    await display();
+    const before = writes.length;
+    pipeline.dispatch({ type: "tick" });
+    expect(writes.length).toBe(before);
   });
 
-  test("the page is first used once Chrome is ready", async () => {
-    let ready = false;
-    const t = await setup(
-      new Promise((resolve) =>
-        setTimeout(() => {
-          ready = true;
-          resolve();
-        }, 200),
-      ),
-    );
-    t.send({ type: "trigger" });
-    expect((await t.page.next()).kind).toBe("load");
-    expect(ready).toBe(true);
-  });
-
-  test("a tile is captured as its CSS-pixel band of the page", async () => {
-    const t = await setup();
-    t.send({ type: "trigger" });
-    (await t.page.next()).resolve(1600);
-    (await t.page.next()).resolve("");
-    expect((await t.page.next()).target).toEqual({ yCssPx: 800, heightCssPx: 800 });
-  });
-
-  test("a released document survives until the page work queued before its release is done", async () => {
-    const t = await setup();
-    t.send({ type: "trigger" });
-    (await t.page.next()).resolve(2400);
-    (await t.page.next()).resolve("");
-    const backfill = await t.page.next();
-    t.send({ type: "key", delta: { kind: "bottom" } });
-    t.send({ type: "trigger" });
-    backfill.resolve("");
-    (await t.page.next()).reject(new ContentError("load timed out"));
-    const reload = await t.page.next();
-    expect(reload.target).toBe(t.html(1));
-
-    t.send({ type: "trigger" });
-    t.send({ type: "resize", geometry: { ...GEO, rows: 31 } });
+  test("page work waits until Chrome is ready, then runs in order", async () => {
+    let ready!: (p: PageLike) => void;
+    const { pipeline, fake } = await setup(new Promise<PageLike>((r) => (ready = r)));
+    pipeline.dispatch({ type: "fileChanged" });
     await flush();
-    expect(existsSync(t.html(1))).toBe(true);
-
-    reload.resolve(250);
-    (await t.page.next()).resolve("");
-    expect((await t.page.next()).target).toBe(t.html(3));
-    expect(existsSync(t.html(1))).toBe(false);
+    expect(fake.unclaimed).toHaveLength(0);
+    ready(fake.page);
+    expect((await fake.next()).kind).toBe("sync");
   });
 
-  test("a Chrome failure that the content did not cause is fatal", async () => {
-    const t = await setup();
-    t.send({ type: "trigger" });
-    const error = new Error("Target closed");
-    (await t.page.next()).reject(error);
-    await flush();
-    expect(t.fatal).toEqual([error]);
+  test("a capture refused because the blocks moved re-syncs", async () => {
+    const { pipeline, fake } = await setup();
+    pipeline.dispatch({ type: "fileChanged" });
+    const sync = await fake.next();
+    if (sync.kind !== "sync") throw new Error("expected a sync");
+    sync.resolve(layoutFor(sync.doc, sync.geometry));
+    const capture = await fake.next();
+    capture.reject(new CaptureGone());
+    expect((await fake.next()).kind).toBe("sync");
   });
 
-  test("nothing is drawn or reported back once shutdown has begun", async () => {
-    const failed = await setup();
-    failed.send({ type: "trigger" });
-    const load = await failed.page.next();
-    failed.state.shuttingDown = true;
-    load.reject(new Error("Target closed"));
+  test("a content failure is reported; any other Chrome failure is fatal", async () => {
+    const content = await setup();
+    content.pipeline.dispatch({ type: "fileChanged" });
+    (await content.fake.next()).reject(new ContentError("timed out"));
     await flush();
-    expect(failed.fatal).toEqual([]);
+    expect(content.fatal).toEqual([]);
+    expect(content.writes.join("")).toContain("render failed");
 
-    const loaded = await setup();
-    loaded.send({ type: "trigger" });
-    const done = await loaded.page.next();
-    loaded.state.shuttingDown = true;
-    done.resolve(250);
+    const crash = await setup();
+    crash.pipeline.dispatch({ type: "fileChanged" });
+    const boom = new Error("Target closed");
+    (await crash.fake.next()).reject(boom);
     await flush();
-    expect(loaded.page.unclaimed).toEqual([]);
+    expect(crash.fatal).toEqual([boom]);
+  });
 
-    const idle = await setup();
-    idle.state.shuttingDown = true;
-    idle.send({ type: "trigger" });
-    expect(idle.writes).toEqual([]);
+  test("nothing is drawn or transmitted once shutdown has begun", async () => {
+    const { pipeline, fake, writes, state } = await setup();
+    pipeline.dispatch({ type: "fileChanged" });
+    const sync = await fake.next();
+    if (sync.kind !== "sync") throw new Error("expected a sync");
+    sync.resolve(layoutFor(sync.doc, sync.geometry));
+    const capture = await fake.next();
+    if (capture.kind !== "capture") throw new Error("expected a capture");
+    state.shuttingDown = true;
+    const before = writes.length;
+    capture.resolve(SHOT);
+    await flush();
+    pipeline.dispatch({ type: "fileChanged" });
+    expect(writes.length).toBe(before);
   });
 
   test("toggling the theme re-renders with the other theme", async () => {
-    const t = await setup();
-    await t.display();
-    t.pipeline.toggleTheme();
-    expect((await t.page.next()).target).toBe(t.html(2));
-    expect(readFileSync(t.html(2), "utf8")).toContain("github-markdown-dark.css");
+    const { pipeline, fake, display } = await setup();
+    await display();
+    pipeline.toggleTheme();
+    const sync = await fake.next();
+    expect(sync.kind === "sync" && sync.doc.theme).toBe("dark");
+  });
+
+  test("an evicted image is deleted in the terminal after the frame that stops placing it", async () => {
+    const { pipeline, writes, display } = await setup();
+    await display();
+    writes.length = 0;
+    pipeline.dispatch({ type: "hardRefresh" });
+    const out = writes.join("");
+    expect(out).toContain("a=d,d=I");
+    expect(out.indexOf("a=d,d=I")).toBeGreaterThan(out.indexOf("\x1b[?2026l"));
   });
 });

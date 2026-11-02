@@ -4,16 +4,17 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { resolveAssets } from "./html.ts";
 import { Chrome, resolveExecutable } from "./chrome.ts";
+import { resolveGeometry } from "./geometry.ts";
+import { Page, resolveAssets } from "./page.ts";
 import { Pipeline } from "./pipeline.ts";
 import { Scheduler } from "./scheduler.ts";
 import { sanitizeTerminalBlock, Term } from "./term.ts";
-import { resolveGeometry } from "./geometry.ts";
 
 const CELL_QUERY_MS = 200;
 const GRAPHICS_QUERY_TIMEOUT_MS = 200;
-const WATCH_DEBOUNCE_MS = 100;
+// Short, because a save now redraws only the blocks that changed.
+const WATCH_DEBOUNCE_MS = 20;
 const CHROME_CLOSE_TIMEOUT_MS = 1500;
 const UNSUPPORTED_TERMINAL = "run this in a terminal that supports the kitty graphics protocol";
 
@@ -81,6 +82,7 @@ async function runApp(mdPath: string): Promise<void> {
     if (k.type === "quit") return void shutdown(0);
     if (!started) return;
     if (k.type === "theme") return started.toggleTheme();
+    if (k.type === "refresh") return started.dispatch({ type: "hardRefresh" });
     started.dispatch({ type: "key", delta: k.delta });
   });
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => void shutdown(0));
@@ -94,19 +96,26 @@ async function runApp(mdPath: string): Promise<void> {
     }
 
     const assets = resolveAssets();
-    dir = await mkdtemp(join(tmpdir(), "mdpx-"));
-    const chromeReady = chrome
+    const tmp = await mkdtemp(join(tmpdir(), "mdpx-"));
+    dir = tmp;
+    const page = chrome
       .launch()
+      .then(() =>
+        Page.open(chrome.page!, {
+          mdDir,
+          assets,
+          dir: tmp,
+          onReflow: () => started?.dispatch({ type: "fileChanged" }),
+        }),
+      )
       .catch((e) => shutdown(1, `cannot launch Chrome (${chromeExecutable}): ${errorText(e)}`));
 
     const pipeline = new Pipeline({
-      chrome,
-      chromeReady,
+      page,
       scheduler: new Scheduler(resolveGeometry(term.size(), cell)),
       term,
       mdPath,
-      htmlDir: dir,
-      assets,
+      theme: "light",
       isShuttingDown: () => shuttingDown,
       onFatal: (e) => shutdown(1, `Chrome failed: ${errorMessage(e)}`),
     });
@@ -125,14 +134,14 @@ async function runApp(mdPath: string): Promise<void> {
       watch(mdDir, (_event, changed) => {
         if (changed !== null && changed.normalize("NFC").toLowerCase() !== watchTarget) return;
         clearTimeout(debounce);
-        debounce = setTimeout(() => pipeline.dispatch({ type: "trigger" }), WATCH_DEBOUNCE_MS);
+        debounce = setTimeout(() => pipeline.dispatch({ type: "fileChanged" }), WATCH_DEBOUNCE_MS);
       });
     } catch (e) {
       return shutdown(1, `cannot watch the directory: ${errorMessage(e)}`);
     }
 
     term.enterAltScreen();
-    pipeline.dispatch({ type: "trigger" });
+    pipeline.dispatch({ type: "fileChanged" });
   } catch (e) {
     return shutdown(1, errorText(e));
   }
