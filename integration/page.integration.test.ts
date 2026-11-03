@@ -110,6 +110,8 @@ function inkedRows(base64: string): Promise<number[]> {
 }
 
 describe.skipIf(!exe)("page", () => {
+  const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
+
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "mdpx-it-"));
     markdown = await readFile(FIXTURE, "utf8");
@@ -124,7 +126,6 @@ describe.skipIf(!exe)("page", () => {
   });
 
   test("wrapping each block leaves GitHub's layout exactly as it was", async () => {
-    const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
     await sync(markdown, g);
     const drift = await browserPage.evaluate(() => {
       const wrapped = document.querySelector("article.markdown-body")!;
@@ -143,7 +144,6 @@ describe.skipIf(!exe)("page", () => {
   }, 30000);
 
   test("Mermaid becomes SVG, and every slice is a row of blank page, the block, and another row of blank page", async () => {
-    const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
     const layout = await sync(markdown, g);
     expect(await browserPage.evaluate(() => document.querySelectorAll(".mermaid svg").length)).toBe(1);
     expect(layout.units.length).toBeGreaterThan(10);
@@ -187,7 +187,6 @@ describe.skipIf(!exe)("page", () => {
   }
 
   test("syncing the same document keeps every node, and a reorder keeps the rendered diagram", async () => {
-    const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
     const md = "intro\n\n```mermaid\ngraph TD; A-->B\n```\n\noutro\n";
     const first = await page.sync(await render(md), g);
     await browserPage.evaluate(() => {
@@ -204,8 +203,23 @@ describe.skipIf(!exe)("page", () => {
     expect(await browserPage.evaluate(() => (document.querySelector(".mermaid svg") as unknown as { mark?: boolean })?.mark)).toBe(true);
   }, 30000);
 
+  test("the page's KaTeX stylesheet applies to the math it renders", async () => {
+    await sync("$E = mc^2$\n", g);
+    const position = await browserPage.evaluate(
+      () => getComputedStyle(document.querySelector(".katex-html > *")!).position,
+    );
+    expect(position).toBe("relative");
+  });
+
+  test("the page's GitHub stylesheet applies to alerts", async () => {
+    await sync("> [!NOTE]\n> body\n", g);
+    const border = await browserPage.evaluate(
+      () => getComputedStyle(document.querySelector(".markdown-alert")!).borderLeftStyle,
+    );
+    expect(border).toBe("solid");
+  });
+
   test("a floated README logo is captured whole, with the blocks it overlaps", async () => {
-    const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
     const logo = (h: number) => `<img align="right" src="red.png" width="120" height="${h}">\n\n# Project\n\nOne line about it.\n\nMore text.\n`;
     const layout = await sync(logo(240), g);
     const img = await browserPage.evaluate(() => {
@@ -245,7 +259,6 @@ describe.skipIf(!exe)("page", () => {
   }, 30000);
 
   test("a block that vanished from the page is sent again on the next sync", async () => {
-    const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
     const md = "one\n\ntwo\n\nthree\n";
     const first = await page.sync(await render(md), g);
     await browserPage.evaluate(() => document.querySelectorAll(".mdpx-block")[1]!.remove());
@@ -259,7 +272,6 @@ describe.skipIf(!exe)("page", () => {
   }, 30000);
 
   test("a capture from a layout the page has moved on from is refused", async () => {
-    const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
     const layout = await sync("one\n\ntwo\n", g);
     const slice = [...layout.slices.values()][0]!;
     await page.sync(await render("one\nlonger now\n\ntwo\n"), g);
