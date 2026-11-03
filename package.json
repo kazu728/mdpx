@@ -35,6 +35,7 @@
     "test:integration": "bun test integration/",
     "test:node": "node integration/node-runtime.mjs",
     "typecheck": "tsc",
+    "verify": "bun verification/scheduler.check.ts",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
