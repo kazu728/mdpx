@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import MarkdownIt from "markdown-it";
 import type { Theme } from "./theme.ts";
 import taskLists from "markdown-it-task-lists";
@@ -177,12 +176,16 @@ function imageSources(html: string): string[] {
 async function imageVersions(html: string, mdDir: string): Promise<string> {
   const versions = await Promise.all(
     imageSources(html).map(async (src) => {
-      let path: string;
-      if (/^file:/i.test(src)) path = fileURLToPath(src);
-      else if (/^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith("//")) return "";
-      else path = resolve(mdDir, decodeURI(src.split(/[?#]/)[0]!));
+      // Resolved the way the page resolves it; a URL the browser cannot parse shows no image.
+      let url: URL;
       try {
-        const s = await stat(path);
+        url = new URL(src, pathToFileURL(`${mdDir}/`));
+      } catch {
+        return "";
+      }
+      if (url.protocol !== "file:") return "";
+      try {
+        const s = await stat(fileURLToPath(url));
         return `${s.mtimeMs}:${s.size}`;
       } catch {
         return "missing";

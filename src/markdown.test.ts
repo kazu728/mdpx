@@ -67,6 +67,13 @@ describe("renderDocument", () => {
     expect(b[1]).toBe(a[1]);
   });
 
+  test("an image URL Node cannot turn into a path still renders, as the browser would", async () => {
+    for (const src of ["100%.png", "file://otherhost/x.png", "http://[broken"]) {
+      const doc = await render(`<img src="${src}">\n\nafter\n`);
+      expect(doc.blocks.map((b) => b.html.trim())).toEqual([`<img src="${src}">`, "<p>after</p>"]);
+    }
+  });
+
   test("Mermaid fences become escaped diagram sources; math renders with KaTeX", async () => {
     const doc = await render("```mermaid\ngraph TD; A-->B\n```\n\n$E = mc^2$\n");
     expect(doc.blocks[0]!.html).toBe('<pre class="mermaid">graph TD; A--&gt;B\n</pre>\n');
