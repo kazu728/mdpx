@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CELL_CSS_PX, captureClipCss, resolveGeometry, type Geometry } from "./geometry.ts";
+import { CELL_CSS_PX, captureClipCss, resolveGeometry, screenImageBytes, type Geometry } from "./geometry.ts";
 import {
   anchorAt,
   buildLayout,
@@ -163,6 +163,26 @@ describe("visiblePlacements", () => {
           const shownBottomCss = image.topCss + (crop.y + crop.h) / g.deviceScaleFactor;
           expect(shownTopCss).toBeGreaterThanOrEqual(image.contentTopCss - CELL_CSS_PX - 1);
           expect(shownBottomCss).toBeLessThanOrEqual(image.contentTopCss + oldSlice.capture.lengthCss + CELL_CSS_PX + 1);
+        }
+      }
+    }
+  });
+});
+
+describe("screenImageBytes", () => {
+  test("no screen of blocks at least a row tall needs more image bytes than the bound", () => {
+    const sliced = (g: Geometry, sliceRows: number): Geometry => ({ ...g, raster: { ...g.raster, sliceRows } });
+    const screens = [...GEOMETRIES, sliced(GEO, 3), sliced(GEOMETRIES[1]!, 7)];
+    for (const [seed, g] of screens.entries()) {
+      const random = rng(500 + seed);
+      const bound = screenImageBytes(g.imgWidthPx, g.raster, g.viewRows);
+      for (let round = 0; round < 60; round++) {
+        const specs = randomSpecs(random, 40).map((s) => ({ ...s, height: Math.max(CELL_CSS_PX, s.height) }));
+        const l = layoutOf(specs, g);
+        for (let top = 0; top < l.totalRows; top += 1 + Math.floor(random() * 5)) {
+          const keys = new Set(visiblePlacements(l, top, g.viewRows).map((p) => p.imageKey));
+          const bytes = [...keys].reduce((sum, k) => sum + l.slices.get(k)!.maxBytes, 0);
+          expect(bytes).toBeLessThanOrEqual(bound);
         }
       }
     }

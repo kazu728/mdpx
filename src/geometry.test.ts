@@ -10,6 +10,7 @@ import {
   detectGraphicsLimits,
   resolveGeometry,
   sameRaster,
+  screenImageBytes,
   type Geometry,
 } from "./geometry.ts";
 
@@ -55,6 +56,29 @@ describe("resolveGeometry", () => {
     for (const g of [small, large]) {
       expect(transferSize(g.imgWidthPx * sliceImageHeight(g) * 4)).toBeLessThanOrEqual(relayed.frameBytes!);
     }
+  });
+
+  test("the chosen slices leave room for an update, tallest first and at full scale when it can", () => {
+    const need = (g: Geometry) => 2 * screenImageBytes(g.imgWidthPx, g.raster, g.viewRows);
+    const direct50 = resolveGeometry({ cols: 120, rows: 50 }, { cellHpx: 28, cellWpx: 14 }, direct);
+    expect(direct50.raster.renderScale).toBe(FULL_SCALE);
+    expect(need(direct50)).toBeLessThanOrEqual(direct.storageBytes);
+    for (const [cols, rows, scale] of [[120, 40, FULL_SCALE], [200, 60, 0.5]] as const) {
+      const g = resolveGeometry({ cols, rows }, { cellHpx: 28, cellWpx: 14 }, relayed);
+      expect(g.raster.renderScale).toBe(scale);
+      expect(need(g)).toBeLessThanOrEqual(relayed.storageBytes);
+      // Two rows taller would not leave room, or would not fit one screenshot or one frame.
+      const taller = { ...g, raster: { ...g.raster, sliceRows: g.raster.sliceRows + 2 } };
+      const tallerFits =
+        need(taller) <= relayed.storageBytes &&
+        sliceImageHeight(taller) <= 4096 &&
+        transferSize(g.imgWidthPx * sliceImageHeight(taller) * 4) <= relayed.frameBytes!;
+      expect(tallerFits).toBe(false);
+    }
+    // A 5K screen cannot hold two worst-case screens even at half resolution: best effort.
+    const huge = resolveGeometry({ cols: 300, rows: 80 }, { cellHpx: 32, cellWpx: 16 }, relayed);
+    expect(huge.raster.renderScale).toBe(0.5);
+    expect(need(huge)).toBeGreaterThan(relayed.storageBytes);
   });
 
   test("downscaled odd cells capture on a two-row grid so image edges stay on whole px", () => {
