@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Geometry } from "./geometry.ts";
 import type { CaptureRef, SyncedLayout } from "./layout.ts";
 import type { Doc } from "./markdown.ts";
-import { CaptureGone, ContentError, type Capture } from "./page.ts";
+import { CaptureFailed, CaptureGone, type Capture } from "./page.ts";
 import { Pipeline, type PageLike } from "./pipeline.ts";
 import { Scheduler } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
@@ -145,20 +145,32 @@ describe("Pipeline", () => {
     expect((await fake.next()).kind).toBe("sync");
   });
 
-  test("a content failure is reported; any other Chrome failure is fatal", async () => {
-    const content = await setup();
-    content.pipeline.dispatch({ type: "fileChanged" });
-    (await content.fake.next()).reject(new ContentError("timed out"));
+  test("a screenshot Chrome could not take is reported and retried on the next save; a Chrome failure is fatal", async () => {
+    const shot = await setup();
+    shot.pipeline.dispatch({ type: "fileChanged" });
+    const sync = await shot.fake.next();
+    if (sync.kind !== "sync") throw new Error("expected a sync");
+    sync.resolve(layoutFor(sync.doc, sync.geometry));
+    (await shot.fake.next()).reject(new CaptureFailed("Unable to capture screenshot"));
     await flush();
-    expect(content.fatal).toEqual([]);
-    expect(content.writes.join("")).toContain("render failed");
+    expect(shot.fatal).toEqual([]);
+    expect(shot.writes.join("")).toContain("render failed");
+    shot.pipeline.dispatch({ type: "fileChanged" });
+    expect((await shot.fake.next()).kind).toBe("sync");
 
-    const crash = await setup();
-    crash.pipeline.dispatch({ type: "fileChanged" });
-    const boom = new Error("Target closed");
-    (await crash.fake.next()).reject(boom);
-    await flush();
-    expect(crash.fatal).toEqual([boom]);
+    for (const failing of ["sync", "capture"] as const) {
+      const crash = await setup();
+      crash.pipeline.dispatch({ type: "fileChanged" });
+      const boom = new Error("Target closed");
+      const first = await crash.fake.next();
+      if (failing === "capture") {
+        if (first.kind !== "sync") throw new Error("expected a sync");
+        first.resolve(layoutFor(first.doc, first.geometry));
+        (await crash.fake.next()).reject(boom);
+      } else first.reject(boom);
+      await flush();
+      expect(crash.fatal).toEqual([boom]);
+    }
   });
 
   test("nothing is drawn or transmitted once shutdown has begun", async () => {

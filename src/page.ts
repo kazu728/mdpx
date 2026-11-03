@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { TimeoutError, type Page as BrowserPage } from "puppeteer-core";
+import type { Page as BrowserPage } from "puppeteer-core";
 import { captureClipCss, type Geometry } from "./geometry.ts";
 import type { CaptureRef, CapturedImage, SyncedLayout } from "./layout.ts";
 import type { Doc } from "./markdown.ts";
@@ -11,9 +11,11 @@ import { PAGE_BACKGROUND, type Theme } from "./theme.ts";
 
 const require = createRequire(import.meta.url);
 
-export class ContentError extends Error {}
 
 export class CaptureGone extends Error {}
+
+/** Chrome is alive but could not take this screenshot; another may well succeed. */
+export class CaptureFailed extends Error {}
 
 export interface Capture extends CapturedImage {
   readonly pngBase64: string;
@@ -246,12 +248,7 @@ export class Page {
 
   async reset(): Promise<void> {
     this.viewport = null;
-    try {
-      await this.page.goto(pathToFileURL(this.shellPath).href, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
-    } catch (e) {
-      if (e instanceof TimeoutError) throw new ContentError(`load timed out: ${e.message}`);
-      throw e;
-    }
+    await this.page.goto(pathToFileURL(this.shellPath).href, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
   }
 
   /** Makes the page show `doc` and reports where each block landed. Syncing the same doc twice changes nothing. */
@@ -294,11 +291,17 @@ export class Page {
     }
     const contentTop = rect.top + ref.offsetCss;
     const { topCss: top, bottomCss: bottom } = captureClipCss(contentTop, ref.lengthCss, dsf);
-    const pngBase64 = await this.page.screenshot({
-      clip: { x: 0, y: top, width: viewport.widthCssPx, height: bottom - top },
-      optimizeForSpeed: true,
-      encoding: "base64",
-    });
+    let pngBase64: string;
+    try {
+      pngBase64 = await this.page.screenshot({
+        clip: { x: 0, y: top, width: viewport.widthCssPx, height: bottom - top },
+        optimizeForSpeed: true,
+        encoding: "base64",
+      });
+    } catch (e) {
+      if (this.page.isClosed() || !this.page.browser().connected) throw e;
+      throw new CaptureFailed(e instanceof Error ? e.message : String(e), { cause: e });
+    }
     return { pngBase64, contentTopImgPx: (contentTop - top) * dsf, heightImgPx: Math.round((bottom - top) * dsf) };
   }
 }

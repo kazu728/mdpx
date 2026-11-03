@@ -210,6 +210,6 @@ describe.skipIf(!exe)("page", () => {
     const layout = await sync("one\n\ntwo\n", g);
     const slice = [...layout.slices.values()][0]!;
     await page.sync(await render("one\nlonger now\n\ntwo\n"), g);
-    expect(page.capture(slice.capture)).rejects.toBeInstanceOf(CaptureGone);
+    await expect(page.capture(slice.capture)).rejects.toBeInstanceOf(CaptureGone);
   }, 30000);
 });

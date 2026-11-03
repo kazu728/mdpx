@@ -4,7 +4,7 @@ import { deleteImage, transmit } from "./kitty.ts";
 import type { CaptureRef, SyncedLayout } from "./layout.ts";
 import { renderDocument, type Doc } from "./markdown.ts";
 import type { Theme } from "./theme.ts";
-import { CaptureGone, ContentError, type Capture } from "./page.ts";
+import { CaptureFailed, CaptureGone, type Capture } from "./page.ts";
 import type { Geometry } from "./geometry.ts";
 import { Scheduler, type Action, type SchedulerEvent } from "./scheduler.ts";
 import { renderFrame, type PlacementId } from "./screen.ts";
@@ -75,7 +75,7 @@ export class Pipeline {
         this.deps.term.write(action.ids.map(deleteImage).join(""));
         break;
       case "resetPage":
-        void this.onPage((page) => page.reset()).catch((e) => this.handleChromeError(e, () => {}));
+        void this.onPage((page) => page.reset()).catch((e) => this.fatal(e));
         break;
     }
   }
@@ -95,8 +95,7 @@ export class Pipeline {
     return turn;
   }
 
-  private async handleChromeError(e: unknown, onContentError: () => void): Promise<void> {
-    if (e instanceof ContentError) return onContentError();
+  private async fatal(e: unknown): Promise<void> {
     if (!this.deps.isShuttingDown()) await this.deps.onFatal(e);
   }
 
@@ -114,7 +113,7 @@ export class Pipeline {
       // The geometry is read when the page is free, so a resize while queued is honored.
       layout = await this.onPage((page) => page.sync(doc, scheduler.view().geometry));
     } catch (e) {
-      await this.handleChromeError(e, () => this.dispatch({ type: "syncFailed" }));
+      await this.fatal(e);
       return;
     }
     this.dispatch({ type: "synced", layout });
@@ -125,13 +124,11 @@ export class Pipeline {
     try {
       shot = await this.onPage((page) => page.capture(ref));
     } catch (e) {
-      if (e instanceof CaptureGone) {
-        this.dispatch({ type: "captureFailed", imageKey, id, gone: true });
+      if (e instanceof CaptureGone || e instanceof CaptureFailed) {
+        this.dispatch({ type: "captureFailed", imageKey, id, gone: e instanceof CaptureGone });
         return;
       }
-      await this.handleChromeError(e, () =>
-        this.dispatch({ type: "captureFailed", imageKey, id, gone: false }),
-      );
+      await this.fatal(e);
       return;
     }
     if (this.deps.isShuttingDown()) return;
