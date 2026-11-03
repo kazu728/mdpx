@@ -354,6 +354,8 @@ export class Scheduler {
         this.capture(slice);
       } else {
         this.giveUp(target.layout);
+        // Giving up the update leaves a pending scroll, and giving that up leaves prefetching.
+        this.fetch();
       }
       return;
     }

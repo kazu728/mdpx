@@ -83,6 +83,8 @@ class Session {
     const v = this.view;
     expect(this.syncs).toBeLessThanOrEqual(1);
     expect(this.captures.length).toBeLessThanOrEqual(1);
+    // With nothing in flight, no update or scroll may be left waiting for work that never comes.
+    if (!this.syncs && !this.captures.length) expect(["scrolling", "updating", "rendering"]).not.toContain(v.status);
     for (const { id } of v.images.values()) expect(this.terminal.has(id)).toBe(true);
     const inflight = this.captures.reduce((n, a) => n + imageHeight(a.ref, v.geometry) * v.geometry.imgWidthPx * 4, 0);
     let held = 0;
@@ -425,11 +427,12 @@ describe("random interleavings", () => {
   }
 
   test("invariants hold under any order of edits, scrolls, resizes and failures, and the view converges", () => {
-    for (let seed = 1; seed <= 60; seed++) {
+    for (let seed = 1; seed <= 90; seed++) {
       const random = rng(seed);
       const pick = <T,>(xs: readonly T[]) => xs[Math.floor(random() * xs.length)]!;
-      // Enough storage for two screens, the least an update needs; 12MB still forces eviction.
-      const s = new Session(withStorage(pick([12_000_000, 320_000_000])));
+      // 4MB cannot hold two screens, so updates may give up; 12MB can, and still forces eviction.
+      const storage = seed % 3 === 0 ? 4_000_000 : pick([12_000_000, 320_000_000]);
+      const s = new Session(withStorage(storage));
       let doc = paragraphs(20 + Math.floor(random() * 40), "p", 40);
       let serial = 0;
       s.save(doc);
@@ -464,6 +467,7 @@ describe("random interleavings", () => {
       // Quiet down: one more save, then let everything finish.
       s.save(doc);
       s.deliverAll();
+      if (storage < 12_000_000) continue;
       expect(s.view.shown?.blockKeys ?? []).toEqual(doc.map((d) => d.key));
       expect(s.covered()).toBe(true);
       expect(s.view.status).toBe("idle");
