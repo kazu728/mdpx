@@ -32,8 +32,8 @@ as "blocks moved" or as a content error. It runs twice: storage for 4 slices, wh
 constantly and must stay safe, and storage for 9, which must also let every update through.
 
 Assumptions: each event is atomic, as it is in `src/pipeline.ts` (a capture is transmitted
-right before `captured` is dispatched); the clock, change marks and latency are left out because
-they only feed the status line and the wake-up time; image ids are compared up to renaming.
+right before `captured` is dispatched). The clock and change marks are left out because
+they only affect the gutter and the wake-up time. Image ids are compared up to renaming.
 
 Not covered: `src/pipeline.ts` itself, the page (`src/page.ts`), what the screen draws
 (`src/screen.ts`, `cropOf`), documents or screens outside the world above, and orders longer
@@ -98,6 +98,6 @@ against the copy, confirm it reports the violation, and discard the copy.
 | visibility and anchors | `buildLayout`, `visibleImageKeys`, `maxTop`, `clampTop`, `anchorAt`, `topFor`, `prefetchOrder` in `src/layout.ts` |
 | screens | `resolveGeometry`, `sameRaster`, `maxSliceImagePx`, `maxSliceImageRows`, `captureGridCss` in `src/geometry.ts` (and `Theme` in `src/theme.ts`, by type only) |
 
-Last confirmed against the code at commit `4eae94b`. When any covered code has changed since
+Last confirmed against the code at commit `729ee54`. When any covered code has changed since
 that commit, run the check. Once it passes and you have confirmed that the world and the
 properties above still describe the code, move this commit forward. Do not move it otherwise.

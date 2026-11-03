@@ -1,7 +1,7 @@
 import stringWidth from "string-width";
 import { FULL_SCALE, GUTTER_COLS } from "./geometry.ts";
 import { deletePlacement, place } from "./kitty.ts";
-import { cropOf, maxTop, visiblePlacements } from "./layout.ts";
+import { cropOf, visiblePlacements } from "./layout.ts";
 import { PAGE_BACKGROUND } from "./theme.ts";
 import type { ViewState } from "./scheduler.ts";
 
@@ -103,14 +103,11 @@ function statusText(view: ViewState): string {
 }
 
 function statusBar(view: ViewState, filename: string): string {
-  const { geometry, shown, top } = view;
-  const max = shown ? maxTop(shown, geometry.viewRows) : 0;
-  const pct = !shown ? "--" : max > 0 ? String(Math.round((top / max) * 100)) : "100";
+  const { geometry } = view;
   const left = [
-    `${sanitizeTerminalLine(filename)}  ${pct}%`,
+    sanitizeTerminalLine(filename),
     view.follow ? "follow" : "",
     statusText(view),
-    view.latencyMs !== null ? `${Math.round(view.latencyMs)}ms` : "",
     geometry.raster.renderScale < FULL_SCALE ? "low-res" : "",
   ]
     .filter(Boolean)

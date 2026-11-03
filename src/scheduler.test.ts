@@ -212,14 +212,6 @@ describe("rendering", () => {
     expect(s.view.marks.size).toBe(0);
     expect(s.last.wakeAt).toBeNull();
   });
-
-  test("latency runs from the first save to the frame that shows its content", () => {
-    const s = new Session();
-    s.save(paragraphs(2));
-    const start = s.t;
-    s.deliverAll();
-    expect(s.view.latencyMs).toBe(s.t - start);
-  });
 });
 
 describe("scrolling", () => {

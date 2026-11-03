@@ -30,9 +30,8 @@ mdpx <file.md>
 | `g` `G` | top / bottom (`G` follows the end as the file grows) |
 | `t` | toggle theme |
 
-The status line shows how long the last save took to reach the screen. Blocks that
-changed in the last save are marked in the left column for a moment, and text added
-above the view does not move what you are reading.
+Blocks that changed in the last save are marked in the left column for a moment,
+and text added above the view does not move what you are reading.
 
 ## Architecture
 

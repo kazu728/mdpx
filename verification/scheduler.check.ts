@@ -66,8 +66,8 @@ interface World {
 }
 
 const FIELDS = [
-  "actions", "awaitingFreshSync", "capturing", "dirty", "direction", "editStartedAt", "failedKeys", "failure", "follow",
-  "geometry", "images", "latencyMs", "marks", "next", "nextId", "pendingTop", "shown",
+  "actions", "awaitingFreshSync", "capturing", "dirty", "direction", "failedKeys", "failure", "follow",
+  "geometry", "images", "marks", "next", "nextId", "pendingTop", "shown",
   "syncing", "top",
 ].sort();
 
