@@ -1,154 +1,136 @@
-import { readFile, unlink, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
-import { Chrome, ContentError } from "./chrome.ts";
-import { buildHtml, type Assets, type Theme } from "./html.ts";
-import { deleteImage, imageId, transmit } from "./kitty.ts";
+import { readFile } from "node:fs/promises";
+import { basename, dirname } from "node:path";
+import { deleteImage, transmit } from "./kitty.ts";
+import type { CaptureRef, SyncedLayout } from "./layout.ts";
+import { renderDocument, type Doc } from "./markdown.ts";
+import type { Theme } from "./theme.ts";
+import { CaptureFailed, CaptureGone, type Capture } from "./page.ts";
+import type { Geometry } from "./geometry.ts";
 import { Scheduler, type Action, type SchedulerEvent } from "./scheduler.ts";
-import { renderFrame, Term } from "./term.ts";
-import { toCssPx, toScreenPx, type Geometry } from "./geometry.ts";
+import { renderFrame, type PlacementId } from "./screen.ts";
+import type { Term } from "./term.ts";
 
-type ShootAction = Extract<Action, { type: "shoot" }>;
+export interface PageLike {
+  sync(doc: Doc, geometry: Geometry): Promise<SyncedLayout>;
+  capture(ref: CaptureRef): Promise<Capture>;
+}
+
+type CaptureAction = Extract<Action, { type: "capture" }>;
+
+export type Input = SchedulerEvent extends infer E ? (E extends unknown ? Omit<E, "at"> : never) : never;
 
 interface PipelineDeps {
-  chrome: Pick<Chrome, "load" | "shoot">;
-  chromeReady: Promise<void>;
+  page: Promise<PageLike>;
   scheduler: Scheduler;
   term: Pick<Term, "write">;
   mdPath: string;
-  htmlDir: string;
-  assets: Assets;
+  theme: Theme;
   isShuttingDown: () => boolean;
   onFatal: (error: unknown) => Promise<never>;
+  now?: () => number;
 }
 
 export class Pipeline {
-  private lastPlacements: number[] = [];
-  private lastEscape = "";
-  private theme: Theme = "light";
-  private page: Promise<unknown>;
-  private loaded: { gen: number; geometry: Geometry } | null = null;
+  private lastPlacements: PlacementId[] = [];
+  private lastContent = "";
+  private theme: Theme;
+  private queue: Promise<unknown> = Promise.resolve();
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly now: () => number;
 
   constructor(private readonly deps: PipelineDeps) {
-    this.page = deps.chromeReady;
+    this.theme = deps.theme;
+    this.now = deps.now ?? (() => performance.now());
   }
 
-  dispatch(event: SchedulerEvent): void {
+  dispatch(input: Input): void {
     if (this.deps.isShuttingDown()) return;
-    const actions = this.deps.scheduler.dispatch(event);
-    // Drawn before the actions so that deleted images are no longer placed.
+    const step = this.deps.scheduler.dispatch({ ...input, at: this.now() } as SchedulerEvent);
     this.redraw();
-    this.execute(actions);
-  }
-
-  private execute(actions: Action[]): void {
-    const { term } = this.deps;
-    for (const a of actions) {
-      switch (a.type) {
-        case "deleteGen":
-          term.write(a.imageIds.map(deleteImage).join(""));
-          break;
-        case "releaseGen":
-          this.releaseGen(a.gen);
-          break;
-        case "render":
-          void this.runRender(a.gen);
-          break;
-        case "shoot":
-          void this.runShoot(a);
-          break;
-      }
+    for (const action of step.actions) this.execute(action);
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (step.wakeAt !== null) {
+      this.timer = setTimeout(() => this.dispatch({ type: "tick" }), Math.max(0, step.wakeAt - this.now()));
     }
   }
 
   toggleTheme(): void {
     this.theme = this.theme === "light" ? "dark" : "light";
-    this.dispatch({ type: "trigger" });
+    this.dispatch({ type: "fileChanged" });
+  }
+
+  private execute(action: Action): void {
+    switch (action.type) {
+      case "sync":
+        void this.runSync();
+        break;
+      case "capture":
+        void this.runCapture(action);
+        break;
+      case "evict":
+        this.deps.term.write(action.ids.map(deleteImage).join(""));
+        break;
+    }
   }
 
   private redraw(): void {
     const { scheduler, term, mdPath } = this.deps;
-    const frame = renderFrame(scheduler.viewState(), basename(mdPath), this.lastPlacements);
-    if (frame.escape !== this.lastEscape) {
-      term.write(frame.escape);
-      this.lastEscape = frame.escape;
-    }
+    const frame = renderFrame(scheduler.view(), basename(mdPath), this.lastPlacements);
+    if (frame.content === this.lastContent) return;
+    term.write(frame.escape);
+    this.lastContent = frame.content;
     this.lastPlacements = frame.placements;
   }
 
-  private onPage<T>(work: () => Promise<T>): Promise<T> {
-    const turn = this.page.then(work);
-    this.page = turn.catch(() => {});
+  private onPage<T>(work: (page: PageLike) => Promise<T>): Promise<T> {
+    const turn = this.queue.then(() => this.deps.page).then(work);
+    this.queue = turn.catch(() => {});
     return turn;
   }
 
-  private htmlFor(gen: number): string {
-    return join(this.deps.htmlDir, `gen-${gen}.html`);
+  private async fatal(e: unknown): Promise<void> {
+    if (!this.deps.isShuttingDown()) await this.deps.onFatal(e);
   }
 
-  private async loadGenDocument(gen: number): Promise<number> {
-    const { chrome, scheduler } = this.deps;
-    const g = scheduler.viewState().geometry;
-    this.loaded = null;
-    const h = await chrome.load(this.htmlFor(gen), g.viewportWidthCssPx, g.deviceScaleFactor);
-    this.loaded = { gen, geometry: g };
-    return toScreenPx(h, g.cellHpx);
-  }
-
-  private releaseGen(gen: number): void {
-    // A queued or in-flight load may still need this generation's file.
-    void this.onPage(() => unlink(this.htmlFor(gen)).catch(() => {}));
-  }
-
-  private async handleChromeError(e: unknown, gen: number): Promise<void> {
-    const { isShuttingDown, onFatal } = this.deps;
-    if (e instanceof ContentError) {
-      this.dispatch({ type: "renderFailed", gen });
-      return;
-    }
-    if (!isShuttingDown()) await onFatal(e);
-  }
-
-  private async runRender(gen: number): Promise<void> {
-    const { mdPath, assets } = this.deps;
+  private async runSync(): Promise<void> {
+    const { mdPath, scheduler } = this.deps;
+    let doc: Doc;
     try {
-      const markdown = await readFile(mdPath, "utf8");
-      const html = await buildHtml({
-        markdown,
-        mdDir: dirname(mdPath),
-        assets,
-        theme: this.theme,
-      });
-      await writeFile(this.htmlFor(gen), html);
+      doc = await renderDocument(await readFile(mdPath, "utf8"), { theme: this.theme, mdDir: dirname(mdPath) });
     } catch {
-      this.dispatch({ type: "renderFailed", gen });
+      this.dispatch({ type: "syncFailed" });
       return;
     }
-    let documentHeightPx: number;
+    let layout: SyncedLayout;
     try {
-      documentHeightPx = await this.onPage(() => this.loadGenDocument(gen));
+      layout = await this.onPage((page) => page.sync(doc, scheduler.view().geometry));
     } catch (e) {
-      await this.handleChromeError(e, gen);
+      await this.fatal(e);
       return;
     }
-    this.dispatch({ type: "renderDone", gen, documentHeightPx });
+    this.dispatch({ type: "synced", layout });
   }
 
-  private async runShoot(action: ShootAction): Promise<void> {
-    const { chrome, term, isShuttingDown } = this.deps;
-    const { gen, tileIndex, tile } = action;
-    let base64: string;
+  private async runCapture({ imageKey, id, ref }: CaptureAction): Promise<void> {
+    let shot: Capture;
     try {
-      base64 = await this.onPage(async () => {
-        if (this.loaded?.gen !== gen) await this.loadGenDocument(gen);
-        const { cellHpx } = this.loaded!.geometry;
-        return chrome.shoot(toCssPx(tile.topPx, cellHpx), toCssPx(tile.heightPx, cellHpx));
-      });
+      shot = await this.onPage((page) => page.capture(ref));
     } catch (e) {
-      await this.handleChromeError(e, gen);
+      if (e instanceof CaptureGone || e instanceof CaptureFailed) {
+        this.dispatch({ type: "captureFailed", imageKey, id, gone: e instanceof CaptureGone });
+        return;
+      }
+      await this.fatal(e);
       return;
     }
-    if (isShuttingDown()) return;
-    term.write(transmit(imageId(gen, tileIndex), base64));
-    this.dispatch({ type: "tileReady", gen, tileIndex });
+    if (this.deps.isShuttingDown()) return;
+    this.deps.term.write(transmit(id, shot.pngBase64));
+    this.dispatch({
+      type: "captured",
+      imageKey,
+      id,
+      image: { contentTopImgPx: shot.contentTopImgPx, heightImgPx: shot.heightImgPx },
+    });
   }
 }

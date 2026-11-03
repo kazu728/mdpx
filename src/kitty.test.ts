@@ -5,6 +5,7 @@ const PROTOCOL_CHUNK_LIMIT = 4096;
 
 const TILE = {
   id: 2053,
+  placementId: 2,
   sourceXImagePx: 3,
   sourceYImagePx: 120,
   sourceWidthImagePx: 3024,
@@ -42,7 +43,7 @@ describe("place", () => {
     expect(commands(place(TILE))[0]!.keys).toStrictEqual({
       a: "p",
       i: "2053",
-      p: expect.any(String),
+      p: "2",
       x: "3",
       y: "120",
       w: "3024",
@@ -55,13 +56,12 @@ describe("place", () => {
 });
 
 describe("delete", () => {
-  test("a placement delete removes the placed tile but keeps the image data; image and full deletes free it", () => {
-    const placed = commands(place(TILE))[0]!.keys;
-    expect(commands(deletePlacement(2053))[0]!.keys).toStrictEqual({
+  test("a placement delete removes one placement but keeps the image data; image and full deletes free it", () => {
+    expect(commands(deletePlacement(2053, 2))[0]!.keys).toStrictEqual({
       a: "d",
       d: "i",
       i: "2053",
-      p: placed.p!,
+      p: "2",
     });
     expect(commands(deleteImage(2053))[0]!.keys).toStrictEqual({ a: "d", d: "I", i: "2053" });
     expect(commands(deleteAll())[0]!.keys).toStrictEqual({ a: "d", d: "A" });

@@ -1,12 +1,6 @@
 import { accessSync, closeSync, constants, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, delimiter, isAbsolute, join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
-import puppeteer, { TimeoutError, type Browser, type Page } from "puppeteer-core";
-
-export class ContentError extends Error {}
-
-const NAV_TIMEOUT_MS = 15000;
+import puppeteer, { type Browser, type Page } from "puppeteer-core";
 
 const PATH_EXECUTABLES = ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"];
 
@@ -53,17 +47,12 @@ function isSnap(executable: string): boolean {
   return text.startsWith("#!") && text.includes("/snap/bin/");
 }
 
-const STABLE_FONTS_MS = 500;
-const STABLE_IMG_DECODE_MS = 1000;
-const STABLE_MERMAID_MS = 3000;
-
 export class Chrome {
   private browser: Browser | null = null;
-  page: Page | null = null;
 
   constructor(private readonly executablePath: string) {}
 
-  async launch(): Promise<void> {
+  async launch(): Promise<Page> {
     // No --allow-file-access-from-files: body scripts could read local files over XHR.
     this.browser = await puppeteer.launch({
       executablePath: this.executablePath,
@@ -74,54 +63,7 @@ export class Chrome {
       handleSIGTERM: false,
       handleSIGHUP: false,
     });
-    this.page = (await this.browser.pages())[0] ?? (await this.browser.newPage());
-  }
-
-  async load(
-    htmlPath: string,
-    viewportWidthCssPx: number,
-    deviceScaleFactor: number,
-  ): Promise<number> {
-    const page = this.page!;
-    await page.setViewport({
-      width: viewportWidthCssPx,
-      height: 900,
-      deviceScaleFactor,
-    });
-    try {
-      await page.goto(pathToFileURL(htmlPath).href, {
-        waitUntil: "domcontentloaded",
-        timeout: NAV_TIMEOUT_MS,
-      });
-    } catch (e) {
-      if (e instanceof TimeoutError) {
-        throw new ContentError(`load timed out: ${e.message}`);
-      }
-      throw e;
-    }
-    await Promise.race([page.evaluate(() => document.fonts.ready), sleep(STABLE_FONTS_MS)]);
-    await Promise.race([this.decodeAllImages(), sleep(STABLE_IMG_DECODE_MS)]);
-    await page
-      .waitForFunction("window.__mermaidDone === true", { timeout: STABLE_MERMAID_MS })
-      .catch(() => {});
-    return page.evaluate(() => document.body.scrollHeight);
-  }
-
-  private decodeAllImages(): Promise<void> {
-    return this.page!.evaluate(() =>
-      Promise.all(Array.from(document.images).map((img) => img.decode().catch(() => {}))).then(
-        () => {},
-      ),
-    );
-  }
-
-  async shoot(yCssPx: number, heightCssPx: number): Promise<string> {
-    const page = this.page!;
-    return page.screenshot({
-      clip: { x: 0, y: yCssPx, width: page.viewport()!.width, height: heightCssPx },
-      optimizeForSpeed: true,
-      encoding: "base64",
-    });
+    return (await this.browser.pages())[0] ?? (await this.browser.newPage());
   }
 
   async close(): Promise<void> {
@@ -129,6 +71,5 @@ export class Chrome {
       await this.browser?.close();
     } catch {}
     this.browser = null;
-    this.page = null;
   }
 }

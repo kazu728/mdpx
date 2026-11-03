@@ -1,16 +1,19 @@
+import { sameRaster, type Geometry } from "./geometry.ts";
 import {
-  backfillOrder,
-  clampScroll,
-  computeTiles,
-  contentRows,
-  maxScrollPx,
-  scrollUnitPx,
-  visibleTiles,
-  type Geometry,
+  anchorAt,
+  buildLayout,
+  clampTop,
+  maxTop,
+  prefetchOrder,
+  topFor,
+  visibleImageKeys,
+  type CaptureRef,
+  type CapturedImage,
+  type Layout,
   type ScrollDirection,
-  type Tile,
-} from "./geometry.ts";
-import { imageId } from "./kitty.ts";
+  type Slice,
+  type SyncedLayout,
+} from "./layout.ts";
 
 export type ScrollDelta =
   | { kind: "lines"; n: number }
@@ -19,69 +22,92 @@ export type ScrollDelta =
   | { kind: "bottom" };
 
 export type SchedulerEvent =
-  | { type: "trigger" }
-  | { type: "resize"; geometry: Geometry }
-  | { type: "key"; delta: ScrollDelta }
-  | { type: "renderDone"; gen: number; documentHeightPx: number }
-  | { type: "renderFailed"; gen: number }
-  | { type: "tileReady"; gen: number; tileIndex: number };
+  | { type: "fileChanged"; at: number }
+  | { type: "resize"; geometry: Geometry; at: number }
+  | { type: "key"; delta: ScrollDelta; at: number }
+  | { type: "synced"; layout: SyncedLayout; at: number }
+  | { type: "syncFailed"; at: number }
+  | { type: "captured"; imageKey: string; id: number; image: CapturedImage; at: number }
+  | { type: "captureFailed"; imageKey: string; id: number; gone: boolean; at: number }
+  | { type: "tick"; at: number };
 
 export type Action =
-  | { type: "render"; gen: number }
-  | { type: "shoot"; gen: number; tileIndex: number; tile: Tile }
-  | { type: "deleteGen"; imageIds: number[] }
-  | { type: "releaseGen"; gen: number };
+  | { type: "sync" }
+  | { type: "capture"; imageKey: string; id: number; ref: CaptureRef }
+  | { type: "evict"; ids: number[] };
 
-type Phase = "rendering" | "ready";
+export interface Step {
+  readonly actions: Action[];
+  readonly wakeAt: number | null;
+}
 
-interface GenState {
-  gen: number;
-  tiles: Tile[];
-  contentHeightPx: number;
-  resident: Set<number>;
-  truncated: boolean;
+export type Status = "idle" | "rendering" | "updating" | "scrolling" | "render failed" | "update failed" | "scroll failed";
+
+export interface ResidentImage extends CapturedImage {
+  readonly id: number;
+}
+
+export interface Target {
+  readonly layout: Layout;
+  readonly top: number;
 }
 
 export interface ViewState {
-  geometry: Geometry;
-  scrollPx: number;
-  phase: Phase;
-  failure: boolean;
-  pendingScrollPx: number | null;
-  displayGen: Readonly<GenState> | null;
+  readonly geometry: Geometry;
+  readonly shown: Layout | null;
+  readonly top: number;
+  readonly images: ReadonlyMap<string, ResidentImage>;
+  readonly marks: ReadonlySet<string>;
+  readonly follow: boolean;
+  readonly status: Status;
+  readonly latencyMs: number | null;
+  readonly target: Target | null;
 }
 
-function sameGeometry(a: Geometry, b: Geometry): boolean {
-  return (Object.keys(a) as (keyof Geometry)[]).every((k) => a[k] === b[k]);
+export const MARK_MS = 1500;
+const PREFETCH_SHARE = 0.8;
+
+interface ImageEntry {
+  readonly id: number;
+  readonly bytes: number;
+  image: CapturedImage | null;
 }
 
 export class Scheduler {
   private geometry: Geometry;
-  private genCounter = 0;
-  private shown: GenState | null = null;
-  private scrollPx = 0;
-  private pendingScrollPx: number | null = null;
+  private shown: Layout | null = null;
+  private next: Layout | null = null;
+  private top = 0;
+  private pendingTop: number | null = null;
+  private follow = false;
   private direction: ScrollDirection = 0;
   private dirty = false;
-  private rendering: number | null = null;
-  private next: GenState | null = null;
-  private shooting = false;
-  private renderFailed = false;
-  private scrollFailed = false;
+  private syncing = false;
+  private capturing = false;
+  private awaitingFreshSync = false;
+  private images = new Map<string, ImageEntry>();
+  private failedKeys = new Set<string>();
+  private nextId = 1;
+  private marks = new Map<string, number>();
+  private failure: "render" | "update" | "scroll" | null = null;
+  private editStartedAt: number | null = null;
+  private latencyMs: number | null = null;
   private actions: Action[] = [];
 
   constructor(geometry: Geometry) {
     this.geometry = geometry;
   }
 
-  private get contentRows(): number {
-    return contentRows(this.geometry.rows);
+  private get viewRows(): number {
+    return this.geometry.viewRows;
   }
 
-  dispatch(event: SchedulerEvent): Action[] {
+  dispatch(event: SchedulerEvent): Step {
     switch (event.type) {
-      case "trigger":
+      case "fileChanged":
         this.dirty = true;
+        this.failedKeys.clear();
+        this.editStartedAt ??= event.at;
         break;
       case "resize":
         this.onResize(event.geometry);
@@ -89,224 +115,291 @@ export class Scheduler {
       case "key":
         this.onKey(event.delta);
         break;
-      case "renderDone":
-        this.onRenderDone(event.gen, event.documentHeightPx);
+      case "synced":
+        this.onSynced(event.layout);
         break;
-      case "renderFailed":
-        this.onFailed(event.gen);
+      case "syncFailed":
+        this.syncing = false;
+        this.awaitingFreshSync = false;
+        this.failure = this.shown ? "update" : "render";
         break;
-      case "tileReady":
-        this.onTileReady(event.gen, event.tileIndex);
+      case "captured":
+        this.onCaptured(event.imageKey, event.id, event.image);
+        break;
+      case "captureFailed":
+        this.onCaptureFailed(event.imageKey, event.id, event.gone);
+        break;
+      case "tick":
         break;
     }
-    this.reconcile();
+    for (const [key, expires] of this.marks) if (expires <= event.at) this.marks.delete(key);
+    this.reconcile(event.at);
     const actions = this.actions;
     this.actions = [];
-    return actions;
+    const expiries = [...this.marks.values()];
+    return { actions, wakeAt: expiries.length ? Math.min(...expiries) : null };
   }
 
-  viewState(): ViewState {
+  view(): ViewState {
+    const images = new Map<string, ResidentImage>();
+    for (const [key, e] of this.images) if (e.image) images.set(key, { id: e.id, ...e.image });
     return {
       geometry: this.geometry,
-      scrollPx: this.scrollPx,
-      phase: this.rendering !== null || this.next ? "rendering" : "ready",
-      failure: this.renderFailed || this.scrollFailed,
-      pendingScrollPx: this.pendingScrollPx,
-      displayGen: this.shown,
+      shown: this.shown,
+      top: this.top,
+      images,
+      marks: new Set(this.marks.keys()),
+      follow: this.follow,
+      status: this.status(),
+      latencyMs: this.latencyMs,
+      target: this.target(),
     };
   }
 
+  private status(): Status {
+    if (this.pendingTop !== null) return "scrolling";
+    if (this.dirty || this.syncing || this.next) return this.shown ? "updating" : "rendering";
+    if (this.failure) return `${this.failure} failed`;
+    return "idle";
+  }
+
   private onResize(geometry: Geometry): void {
-    if (sameGeometry(this.geometry, geometry)) return;
+    const rasterChanged = !sameRaster(this.geometry.raster, geometry.raster);
     this.geometry = geometry;
-    this.pendingScrollPx = null;
-    if (this.shown) this.release(this.shown);
-    if (this.next) this.release(this.next);
-    this.shown = null;
-    this.next = null;
-    this.dirty = true;
+    if (rasterChanged) {
+      const ids = [...this.images.values()].filter((e) => e.image).map((e) => e.id);
+      if (ids.length) this.actions.push({ type: "evict", ids });
+      this.images.clear();
+      this.failedKeys.clear();
+      this.shown = null;
+      this.next = null;
+      this.pendingTop = null;
+      this.dirty = true;
+      return;
+    }
+    if (this.shown) {
+      this.top = this.follow ? maxTop(this.shown, this.viewRows) : clampTop(this.shown, this.top, this.viewRows);
+    }
+    this.pendingTop = null;
   }
 
   private onKey(delta: ScrollDelta): void {
     const shown = this.shown;
     if (!shown) return;
-    const { cellHpx, renderScale } = this.geometry;
-    const unit = scrollUnitPx(cellHpx, renderScale);
-    let px = this.pendingScrollPx ?? this.scrollPx;
+    const from = this.pendingTop ?? this.top;
+    const max = maxTop(shown, this.viewRows);
+    let to = from;
     switch (delta.kind) {
       case "lines":
-        px += delta.n * unit;
+        to = from + delta.n;
         this.direction = Math.sign(delta.n) as ScrollDirection;
         break;
-      case "halfpage": {
-        const half = Math.floor(this.contentRows / 2) * cellHpx;
-        px += delta.dir * Math.max(unit, Math.round(half / unit) * unit);
+      case "halfpage":
+        to = from + delta.dir * Math.max(1, Math.floor(this.viewRows / 2));
         this.direction = delta.dir;
         break;
-      }
       case "top":
-        px = 0;
+        to = 0;
         this.direction = -1;
         break;
       case "bottom":
-        px = maxScrollPx(shown.contentHeightPx, this.contentRows, cellHpx, renderScale);
+        to = max;
         this.direction = 1;
         break;
     }
-    this.pendingScrollPx = this.clampTo(shown, px);
-    this.scrollFailed = false;
+    to = clampTop(shown, to, this.viewRows);
+    this.follow = this.direction > 0 && to === max;
+    this.pendingTop = to === this.top ? null : to;
+    if (this.failure === "scroll") this.failure = null;
   }
 
-  private onRenderDone(gen: number, documentHeightPx: number): void {
-    this.rendering = null;
-    const { cellHpx, tileHeightPx } = this.geometry;
-    const layout = computeTiles(documentHeightPx, cellHpx, this.contentRows, tileHeightPx);
-    this.next = { gen, ...layout, resident: new Set() };
-  }
-
-  private onFailed(gen: number): void {
-    if (gen === this.rendering) {
-      this.rendering = null;
-      this.renderFailed = true;
-      this.actions.push({ type: "releaseGen", gen });
+  private onSynced(synced: SyncedLayout): void {
+    this.syncing = false;
+    this.awaitingFreshSync = false;
+    if (!sameRaster(synced.raster, this.geometry.raster)) {
+      this.dirty = true;
       return;
     }
-    this.shooting = false;
-    const g = this.target();
-    if (g?.gen === gen) this.giveUp(g);
+    this.next = buildLayout(synced, this.geometry);
   }
 
-  private onTileReady(gen: number, tileIndex: number): void {
-    this.shooting = false;
-    const g = [this.next, this.shown].find((s) => s?.gen === gen);
-    if (g) g.resident.add(tileIndex);
-    else this.actions.push({ type: "deleteGen", imageIds: [imageId(gen, tileIndex)] });
+  private onCaptured(imageKey: string, id: number, image: CapturedImage): void {
+    this.capturing = false;
+    const entry = this.images.get(imageKey);
+    if (entry?.id === id) entry.image = image;
+    else this.actions.push({ type: "evict", ids: [id] });
   }
 
-  private reconcile(): void {
-    if (this.dirty && this.rendering === null) this.startRender();
-    this.settle();
+  private onCaptureFailed(imageKey: string, id: number, gone: boolean): void {
+    this.capturing = false;
+    if (this.images.get(imageKey)?.id === id) this.images.delete(imageKey);
+    if (gone) {
+      this.dirty = true;
+      this.awaitingFreshSync = true;
+      this.next = null;
+      return;
+    }
+    this.failedKeys.add(imageKey);
+  }
+
+  private reconcile(at: number): void {
+    if (this.dirty && !this.syncing) {
+      this.dirty = false;
+      this.syncing = true;
+      this.actions.push({ type: "sync" });
+    }
+    this.settle(at);
     this.fetch();
   }
 
-  private startRender(): void {
-    if (this.next) this.release(this.next);
-    this.next = null;
-    this.dirty = false;
-    this.rendering = ++this.genCounter;
-    this.actions.push({ type: "render", gen: this.rendering });
-  }
-
-  private settle(): void {
-    const { shown, next, pendingScrollPx } = this;
-    if (pendingScrollPx !== null && this.covers(shown!, pendingScrollPx)) {
-      this.scrollPx = pendingScrollPx;
-      this.pendingScrollPx = null;
+  private covers(layout: Layout, top: number): boolean {
+    for (const key of visibleImageKeys(layout, top, this.viewRows)) {
+      if (!this.images.get(key)?.image) return false;
     }
-    if (next && this.covers(next, this.scrollFor(next))) {
-      this.scrollPx = this.scrollFor(next);
-      this.pendingScrollPx = null;
-      this.shown = next;
-      this.next = null;
-      this.renderFailed = false;
-      this.scrollFailed = false;
-      if (shown) this.release(shown);
-    }
-  }
-
-  private target(): GenState | null {
-    return this.next ?? (this.rendering === null ? this.shown : null);
-  }
-
-  private fetch(): void {
-    const g = this.target();
-    if (!g) return;
-    if (g === this.shown && this.pendingScrollPx === null) return this.prefetch(g);
-    if (this.shooting || this.shootVisible(g)) return;
-    this.giveUp(g);
-    this.fetch();
-  }
-
-  private giveUp(g: GenState): void {
-    if (g === this.next) {
-      this.release(g);
-      this.next = null;
-      this.renderFailed = true;
-    } else {
-      this.pendingScrollPx = null;
-      this.scrollFailed = true;
-    }
-  }
-
-  private prefetch(g: GenState): void {
-    const keep = this.order(g, this.scrollPx).slice(0, this.geometry.maxResident);
-    this.evict(g, this.scrollPx, new Set(keep), 0);
-    const missing = keep.find((i) => !g.resident.has(i));
-    if (this.shooting || this.scrollFailed || missing === undefined) return;
-    this.shoot(g, missing);
-  }
-
-  private shootVisible(g: GenState): boolean {
-    const scroll = this.scrollFor(g);
-    const need = this.visibleSet(g, scroll);
-    const missing = [...need].find((i) => !g.resident.has(i))!;
-    const budget = this.geometry.maxTotalResident - 1;
-    const shown = this.shown;
-    const placed = shown ? this.visibleSet(shown, this.scrollPx) : new Set<number>();
-    const other = g === shown ? null : shown;
-    if (other) this.evict(other, this.scrollPx, placed, budget - g.resident.size);
-    const otherSize = other?.resident.size ?? 0;
-    this.evict(g, scroll, g === shown ? need.union(placed) : need, budget - otherSize);
-    if (g.resident.size + otherSize > budget) return false;
-    this.shoot(g, missing);
     return true;
   }
 
-  private shoot(g: GenState, tileIndex: number): void {
-    this.shooting = true;
-    this.actions.push({ type: "shoot", gen: g.gen, tileIndex, tile: g.tiles[tileIndex]! });
+  private topForNext(next: Layout): number {
+    if (this.follow) return maxTop(next, this.viewRows);
+    const from = this.pendingTop ?? this.top;
+    if (!this.shown || from === 0) return clampTop(next, from, this.viewRows);
+    return topFor(next, anchorAt(this.shown, from), this.viewRows, from);
   }
 
-  private evict(g: GenState, scroll: number, keep: Set<number>, maxSize: number): void {
-    const order = this.order(g, scroll);
-    const freed: number[] = [];
-    for (let i = order.length - 1; i >= 0 && g.resident.size > maxSize; i--) {
-      const tileIndex = order[i]!;
-      if (!g.resident.has(tileIndex) || keep.has(tileIndex)) continue;
-      g.resident.delete(tileIndex);
-      freed.push(imageId(g.gen, tileIndex));
+  private settle(at: number): void {
+    if (this.pendingTop !== null && this.shown && this.covers(this.shown, this.pendingTop)) {
+      this.top = this.pendingTop;
+      this.pendingTop = null;
     }
-    if (freed.length) this.actions.push({ type: "deleteGen", imageIds: freed });
+    const next = this.next;
+    if (!next) return;
+    const top = this.topForNext(next);
+    if (!this.covers(next, top)) return;
+    if (this.shown) {
+      const before = new Set(this.shown.blockKeys);
+      for (const key of next.blockKeys) if (!before.has(key)) this.marks.set(key, at + MARK_MS);
+    }
+    this.shown = next;
+    this.next = null;
+    this.top = top;
+    this.pendingTop = null;
+    this.failure = null;
+    if (!this.dirty && !this.syncing && this.editStartedAt !== null) {
+      this.latencyMs = at - this.editStartedAt;
+      this.editStartedAt = null;
+    }
   }
 
-  private release(g: GenState): void {
-    const ids = Array.from(g.resident, (i) => imageId(g.gen, i));
-    if (ids.length) this.actions.push({ type: "deleteGen", imageIds: ids });
-    this.actions.push({ type: "releaseGen", gen: g.gen });
+  private target(): Target | null {
+    if (this.next) return { layout: this.next, top: this.topForNext(this.next) };
+    if (this.shown && this.pendingTop !== null) return { layout: this.shown, top: this.pendingTop };
+    return null;
   }
 
-  private scrollFor(g: GenState): number {
-    return this.clampTo(g, this.pendingScrollPx ?? this.scrollPx);
+  private missingVisible(target: Target): string | undefined {
+    return [...visibleImageKeys(target.layout, target.top, this.viewRows)].find((key) => !this.images.get(key)?.image);
   }
 
-  private clampTo(g: GenState, px: number): number {
-    const { cellHpx, renderScale } = this.geometry;
-    return clampScroll(px, g.contentHeightPx, this.contentRows, cellHpx, renderScale);
+  private fetch(): void {
+    if (this.capturing || this.awaitingFreshSync) return;
+    const target = this.target();
+    if (target) {
+      const missing = this.missingVisible(target);
+      if (missing === undefined) return;
+      const slice = target.layout.slices.get(missing)!;
+      if (!this.failedKeys.has(missing) && (this.makeRoom(slice.maxBytes, this.protectedKeys(target)) || this.giveWay(target, slice))) {
+        this.capture(slice);
+      } else {
+        this.giveUp(target.layout);
+        this.fetch();
+      }
+      return;
+    }
+    if (this.shown) this.prefetch(this.shown);
   }
 
-  private order(g: GenState, scroll: number): number[] {
-    const visible = this.visibleSet(g, scroll);
-    const nearby = backfillOrder(scroll, this.contentRows, this.geometry.cellHpx, g.tiles, this.direction);
-    return [...visible, ...nearby.filter((i) => !visible.has(i))];
+  private protectedKeys(target: Target | null): Set<string> {
+    const keep = this.shown ? visibleImageKeys(this.shown, this.top, this.viewRows) : new Set<string>();
+    if (target) for (const key of visibleImageKeys(target.layout, target.top, this.viewRows)) keep.add(key);
+    return keep;
   }
 
-  private visibleSet(g: GenState, scroll: number): Set<number> {
-    return new Set(
-      visibleTiles(scroll, this.contentRows, this.geometry.cellHpx, g.tiles).map((p) => p.tileIndex),
-    );
+  private giveUp(layout: Layout): void {
+    if (layout === this.next) {
+      this.next = null;
+      this.failure = this.shown ? "update" : "render";
+    } else {
+      this.pendingTop = null;
+      this.failure = "scroll";
+    }
   }
 
-  private covers(g: GenState, scroll: number): boolean {
-    return this.visibleSet(g, scroll).isSubsetOf(g.resident);
+  private giveWay(target: Target, slice: Slice): boolean {
+    const keys = visibleImageKeys(target.layout, target.top, this.viewRows);
+    let bytes = 0;
+    for (const key of keys) bytes += target.layout.slices.get(key)!.maxBytes;
+    return bytes <= this.geometry.storageBytes && this.makeRoom(slice.maxBytes, keys);
+  }
+
+  private prefetch(shown: Layout): void {
+    const hole = this.missingVisible({ layout: shown, top: this.top });
+    if (hole !== undefined && !this.failedKeys.has(hole)) {
+      const slice = shown.slices.get(hole)!;
+      if (this.makeRoom(slice.maxBytes, this.protectedKeys(null))) this.capture(slice);
+      return;
+    }
+    if (this.failure === "scroll") return;
+    const budget = Math.floor(this.geometry.storageBytes * PREFETCH_SHARE);
+    const keep = new Set<string>();
+    let bytes = 0;
+    for (const slice of prefetchOrder(shown, this.top, this.viewRows, this.direction)) {
+      if (bytes + slice.maxBytes > budget && keep.size > 0) break;
+      bytes += slice.maxBytes;
+      keep.add(slice.imageKey);
+    }
+    for (const key of keep) {
+      if (this.images.has(key) || this.failedKeys.has(key)) continue;
+      const slice = shown.slices.get(key)!;
+      const protect = this.protectedKeys(null);
+      for (const k of keep) protect.add(k);
+      if (this.makeRoom(slice.maxBytes, protect)) this.capture(slice);
+      return;
+    }
+  }
+
+  private usedBytes(): number {
+    let total = 0;
+    for (const e of this.images.values()) total += e.bytes;
+    return total;
+  }
+
+  private makeRoom(bytes: number, keep: Set<string>): boolean {
+    let free = this.geometry.storageBytes - this.usedBytes();
+    if (free >= bytes) return true;
+    const shown = this.shown;
+    const distance = (key: string): number => {
+      const slice = shown?.slices.get(key);
+      if (!slice) return Infinity;
+      return slice.rowEnd <= this.top ? this.top - slice.rowEnd : Math.max(0, slice.rowStart - this.top);
+    };
+    const candidates = [...this.images.entries()]
+      .filter(([key, e]) => e.image && !keep.has(key))
+      .sort((a, b) => distance(b[0]) - distance(a[0]));
+    const ids: number[] = [];
+    for (const [key, e] of candidates) {
+      if (free >= bytes) break;
+      this.images.delete(key);
+      ids.push(e.id);
+      free += e.bytes;
+    }
+    if (ids.length) this.actions.push({ type: "evict", ids });
+    return free >= bytes;
+  }
+
+  private capture(slice: Slice): void {
+    const id = this.nextId++;
+    this.images.set(slice.imageKey, { id, bytes: slice.maxBytes, image: null });
+    this.capturing = true;
+    this.actions.push({ type: "capture", imageKey: slice.imageKey, id, ref: slice.capture });
   }
 }

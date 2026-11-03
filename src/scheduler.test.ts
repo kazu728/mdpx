@@ -1,411 +1,449 @@
 import { describe, expect, test } from "bun:test";
-import { renderFrame } from "./term.ts";
-import { alignedTileHeightPx, detectGraphicsLimits, resolveGeometry, type Geometry } from "./geometry.ts";
-import { IMAGE_ID_GENERATION_STRIDE, imageId } from "./kitty.ts";
-import { Scheduler, type Action, type ScrollDelta } from "./scheduler.ts";
+import { maxSliceImagePx, resolveGeometry, type Geometry } from "./geometry.ts";
+import { maxTop, visibleImageKeys, type SyncedLayout } from "./layout.ts";
+import { MARK_MS, Scheduler, type Action, type ScrollDelta, type SchedulerEvent, type Step } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
 
-type Shoot = Extract<Action, { type: "shoot" }>;
+interface Spec {
+  key: string;
+  height: number;
+}
+
+function synced(specs: readonly Spec[], g: Geometry): SyncedLayout {
+  let y = 32;
+  const blocks = specs.map((s, i) => {
+    if (i > 0) y += 16;
+    const block = { key: s.key, topCss: y, heightCss: s.height };
+    y += s.height;
+    return block;
+  });
+  return { raster: g.raster, theme: "light", blocks, docHeightCss: y + 32 };
+}
+
+const paragraphs = (n: number, prefix = "p", height = 60): Spec[] =>
+  Array.from({ length: n }, (_, i) => ({ key: `${prefix}${i}`, height }));
+
+type CaptureAction = Extract<Action, { type: "capture" }>;
 
 class Session {
-  readonly scheduler: Scheduler;
-  readonly released: number[] = [];
-  screen = "";
-  private readonly live = new Set<number>();
-  private placed = new Set<number>();
-  private renders: number[] = [];
-  private inFlight: Shoot[] = [];
-  private readonly burst = new Set<Shoot>();
+  readonly s: Scheduler;
+  geometry: Geometry;
+  doc: Spec[] = [];
+  t = 0;
+  syncs = 0;
+  captures: CaptureAction[] = [];
+  captured: string[] = [];
+  terminal = new Map<number, number>();
+  usedIds = new Set<number>();
+  last: Step = { actions: [], wakeAt: null };
 
-  constructor(geometry: Geometry) {
-    this.scheduler = new Scheduler(geometry);
+  constructor(geometry: Geometry = GEO) {
+    this.geometry = geometry;
+    this.s = new Scheduler(geometry);
   }
 
   get view() {
-    return this.scheduler.viewState();
+    return this.s.view();
   }
 
-  send(event: Parameters<Scheduler["dispatch"]>[0]): Action[] {
-    const actions = this.scheduler.dispatch(event);
-    this.redraw();
-    for (const action of actions) this.apply(action);
-    this.expectWithinBudget();
-    return actions;
-  }
-
-  save(): Action[] {
-    return this.send({ type: "trigger" });
-  }
-
-  key(delta: ScrollDelta): Action[] {
-    return this.send({ type: "key", delta });
-  }
-
-  rendered(documentHeightPx: number): Action[] {
-    return this.send({ type: "renderDone", gen: this.renders.shift()!, documentHeightPx });
-  }
-
-  renderFails(): Action[] {
-    return this.send({ type: "renderFailed", gen: this.renders.shift()! });
-  }
-
-  shootFails(): Action[] {
-    const shot = this.inFlight.shift()!;
-    return this.send({ type: "renderFailed", gen: shot.gen });
-  }
-
-  deliver(): Action[] {
-    const shot = this.inFlight.shift()!;
-    this.live.add(imageId(shot.gen, shot.tileIndex));
-    return this.send({ type: "tileReady", gen: shot.gen, tileIndex: shot.tileIndex });
-  }
-
-  deliverAll(): void {
-    for (let i = 0; i < 500 && this.inFlight.length > 0; i++) this.deliver();
-    expect(this.inFlight).toEqual([]);
-  }
-
-  pendingRenders(): number[] {
-    return [...this.renders];
-  }
-
-  pendingShoots(): number[] {
-    return this.inFlight.map((s) => s.tileIndex);
-  }
-
-  liveTiles(gen: number): number[] {
-    return [...this.live]
-      .filter((id) => Math.floor(id / IMAGE_ID_GENERATION_STRIDE) === gen)
-      .map((id) => id % IMAGE_ID_GENERATION_STRIDE)
-      .sort((a, b) => a - b);
-  }
-
-  private redraw(): void {
-    const frame = renderFrame(this.view, "a.md", []);
-    this.screen = frame.escape;
-    this.placed = new Set(frame.placements);
-    for (const id of this.placed) expect(this.live.has(id)).toBe(true);
-  }
-
-  private apply(action: Action): void {
-    switch (action.type) {
-      case "deleteGen":
-        for (const id of action.imageIds) {
-          // Deleting a placed image blanks it until the next redraw, unless nothing stays shown anyway.
-          if (this.view.displayGen) expect(this.placed.has(id)).toBe(false);
-          this.live.delete(id);
-        }
-        break;
-      case "shoot": {
-        const id = imageId(action.gen, action.tileIndex);
-        expect(this.live.has(id)).toBe(false);
-        expect(this.inFlight.some((s) => imageId(s.gen, s.tileIndex) === id)).toBe(false);
-        this.inFlight.push(action);
-        if (!this.steady) this.burst.add(action);
-        this.expectWithinBudget();
-        break;
+  send(event: SchedulerEvent): Step {
+    this.t = Math.max(this.t, event.at);
+    const step = this.s.dispatch(event);
+    for (const a of step.actions) {
+      if (a.type === "sync") this.syncs++;
+      else if (a.type === "evict") for (const id of a.ids) this.terminal.delete(id);
+      else {
+        expect(this.usedIds.has(a.id)).toBe(false);
+        this.usedIds.add(a.id);
+        this.captures.push(a);
       }
-      case "render":
-        this.renders.push(action.gen);
-        break;
-      case "releaseGen":
-        this.released.push(action.gen);
-        break;
+    }
+    this.check();
+    this.last = step;
+    return step;
+  }
+
+  private check(): void {
+    const v = this.view;
+    expect(this.syncs).toBeLessThanOrEqual(1);
+    expect(this.captures.length).toBeLessThanOrEqual(1);
+    if (!this.syncs && !this.captures.length) expect(["scrolling", "updating", "rendering"]).not.toContain(v.status);
+    for (const { id } of v.images.values()) expect(this.terminal.has(id)).toBe(true);
+    expect(this.terminal.size).toBe(v.images.size);
+    const inflight = this.captures.reduce((n, a) => n + maxSliceImagePx(a.ref.lengthCss, v.geometry.raster) * v.geometry.imgWidthPx * 4, 0);
+    let held = 0;
+    for (const { id } of v.images.values()) held += this.terminal.get(id)!;
+    expect(held + inflight).toBeLessThanOrEqual(v.geometry.storageBytes);
+  }
+
+  tick(ms = 1): number {
+    return (this.t += ms);
+  }
+
+  save(doc?: Spec[]): Step {
+    if (doc) this.doc = doc;
+    return this.send({ type: "fileChanged", at: this.tick() });
+  }
+
+  sync(): Step {
+    expect(this.syncs).toBe(1);
+    this.syncs--;
+    return this.send({ type: "synced", layout: synced(this.doc, this.geometry), at: this.tick() });
+  }
+
+  deliver(): Step {
+    const a = this.captures.shift()!;
+    const heightImgPx = maxSliceImagePx(a.ref.lengthCss, this.geometry.raster);
+    this.terminal.set(a.id, heightImgPx * this.geometry.imgWidthPx * 4);
+    this.captured.push(a.imageKey);
+    const image = { contentTopImgPx: this.geometry.raster.cellHpx * 1.5, heightImgPx };
+    return this.send({ type: "captured", imageKey: a.imageKey, id: a.id, image, at: this.tick() });
+  }
+
+  fail(gone: boolean): Step {
+    const a = this.captures.shift()!;
+    return this.send({ type: "captureFailed", imageKey: a.imageKey, id: a.id, gone, at: this.tick() });
+  }
+
+  deliverAll(limit = 10_000): void {
+    for (let i = 0; i < limit && (this.captures.length || this.syncs); i++) {
+      if (this.syncs) this.sync();
+      else this.deliver();
     }
   }
 
-  private get steady(): boolean {
-    const { phase, pendingScrollPx } = this.view;
-    return phase === "ready" && pendingScrollPx === null;
+  key(delta: ScrollDelta): Step {
+    return this.send({ type: "key", delta, at: this.tick() });
   }
 
-  private expectWithinBudget(): void {
-    const { maxResident, maxTotalResident } = this.view.geometry;
-    expect(this.live.size + this.inFlight.length).toBeLessThanOrEqual(maxTotalResident);
-    if (!this.steady) return;
-    const issued = this.inFlight.filter((s) => !this.burst.has(s));
-    expect(this.live.size + issued.length).toBeLessThanOrEqual(maxResident);
+  resize(screen: { cols: number; rows: number }, cell = { cellHpx: 20, cellWpx: 10 }): Step {
+    this.geometry = resolveGeometry(screen, cell, { frameBytes: null, storageBytes: this.geometry.storageBytes });
+    return this.send({ type: "resize", geometry: this.geometry, at: this.tick() });
+  }
+
+  covered(): boolean {
+    const v = this.view;
+    if (!v.shown) return false;
+    return [...visibleImageKeys(v.shown, v.top, v.geometry.viewRows)].every((k) => v.images.has(k));
+  }
+
+  topBlock(): string | undefined {
+    const v = this.view;
+    return v.shown?.units.find((u) => u.rowEnd > v.top)?.members[0]?.key;
   }
 }
 
-function displayed(geometry: Geometry, documentHeightPx: number): Session {
-  const s = new Session(geometry);
-  s.save();
-  s.rendered(documentHeightPx);
-  s.deliverAll();
-  expect(s.view).toMatchObject({ displayGen: { gen: 1 }, failure: false });
-  return s;
+function withStorage(bytes: number): Geometry {
+  return resolveGeometry({ cols: 80, rows: 51 }, { cellHpx: 20, cellWpx: 10 }, { frameBytes: null, storageBytes: bytes });
 }
-
-const BOTTOM: ScrollDelta = { kind: "bottom" };
 
 describe("rendering", () => {
-  test("saves during a render coalesce into one rerun", () => {
-    const s = new Session(GEO);
-    s.save();
-    s.save();
-    s.save();
-    expect(s.pendingRenders()).toEqual([1]);
-    s.rendered(1500);
-    expect(s.pendingRenders()).toEqual([2]);
-    expect(s.pendingShoots()).toEqual([]);
-    s.rendered(1500);
+  test("the first save syncs, captures what is visible, then shows it", () => {
+    const s = new Session();
+    expect(s.save(paragraphs(3)).actions).toEqual([{ type: "sync" }]);
+    expect(s.view.status).toBe("rendering");
+    s.sync();
+    expect(s.view.shown).toBeNull();
     s.deliverAll();
-    expect(s.view.displayGen?.gen).toBe(2);
+    expect(s.view.shown!.blockKeys).toEqual(["p0", "p1", "p2"]);
+    expect(s.covered()).toBe(true);
+    expect(s.view.status).toBe("idle");
   });
 
-  test("a document that cannot be shown within storage settles instead of retrying forever", () => {
-    const g = resolveGeometry({ cols: 400, rows: 400 }, { cellHpx: 31, cellWpx: 14 }, detectGraphicsLimits({ HERDR_ENV: "1" }));
-    const s = new Session(g);
-    s.save();
-    s.rendered(399 * 31);
+  test("an edit captures only the changed block; the rest keep their images", () => {
+    const s = new Session();
+    s.save(paragraphs(5));
     s.deliverAll();
-    expect(s.view).toMatchObject({ displayGen: null, phase: "ready" });
-    s.save();
-    expect(s.pendingRenders()).toEqual([2]);
+    const before = s.captured.length;
+    const edited = paragraphs(5);
+    edited[2] = { key: "p2-edited", height: 60 };
+    s.save(edited);
+    s.deliverAll();
+    expect(s.captured.slice(before)).toEqual([expect.stringMatching(/^p2-edited\//)]);
+    expect(s.view.shown!.blockKeys[2]).toBe("p2-edited");
   });
-});
 
-describe("failures", () => {
-  test("a failed update keeps the display and stays reported until an update succeeds", () => {
-    const s = displayed(GEO, 1500);
-    s.key({ kind: "lines", n: 10 });
-    s.save();
-    s.rendered(1500);
+  test("undoing an edit finds the old pixels without capturing", () => {
+    const s = new Session();
+    s.save(paragraphs(3));
+    s.deliverAll();
+    s.save([{ key: "x", height: 60 }, ...paragraphs(3).slice(1)]);
+    s.deliverAll();
+    const before = s.captured.length;
+    s.save(paragraphs(3));
+    s.deliverAll();
+    expect(s.captured.length).toBe(before);
+    expect(s.view.shown!.blockKeys).toEqual(["p0", "p1", "p2"]);
+  });
+
+  test("saves during a sync coalesce into one more sync of the latest text", () => {
+    const s = new Session();
+    s.save(paragraphs(2));
+    expect(s.save(paragraphs(3)).actions).toEqual([]);
+    expect(s.save(paragraphs(4)).actions).toEqual([]);
+    expect(s.sync().actions.filter((a) => a.type === "sync")).toHaveLength(1);
+    s.deliverAll();
+    expect(s.view.shown!.blockKeys).toHaveLength(4);
+  });
+
+  test("the old display stays until every visible slice of the update is in the terminal", () => {
+    const s = new Session();
+    s.save(paragraphs(3));
+    s.deliverAll();
+    s.save([{ key: "a", height: 60 }, { key: "b", height: 60 }, ...paragraphs(3)]);
+    s.sync();
     s.deliver();
-    s.shootFails();
-    expect(s.view.displayGen?.gen).toBe(1);
-    expect(s.screen).toContain("update failed");
-    expect(s.liveTiles(2)).toEqual([]);
-    expect(s.released).toEqual([2]);
-    s.key({ kind: "lines", n: 1 });
-    expect(s.screen).toContain("update failed");
-
-    s.save();
-    s.rendered(1500);
-    s.deliverAll();
-    expect(s.view.displayGen?.gen).toBe(3);
-    expect(s.screen).not.toContain("failed");
-  });
-
-  test("a save during a failing update reruns it; without one nothing restarts", () => {
-    const rerun = displayed(GEO, 1500);
-    rerun.save();
-    rerun.save();
-    rerun.renderFails();
-    expect(rerun.pendingRenders()).toEqual([3]);
-
-    const idle = displayed(GEO, 1500);
-    idle.save();
-    idle.renderFails();
-    expect(idle.pendingRenders()).toEqual([]);
-    idle.save();
-    expect(idle.pendingRenders()).toEqual([3]);
-  });
-
-  test("a failed backfill keeps the tiles already shown and accepts the next save", () => {
-    const s = new Session(GEO);
-    s.save();
-    s.rendered(1500);
+    expect(s.view.shown!.blockKeys).toEqual(["p0", "p1", "p2"]);
     s.deliver();
-    s.shootFails();
-    expect(s.view).toMatchObject({ displayGen: { gen: 1 }, phase: "ready" });
-    expect(s.liveTiles(1)).toEqual([0]);
-    expect(s.screen).toContain("update failed");
-    s.save();
-    expect(s.pendingRenders()).toEqual([2]);
+    expect(s.view.shown!.blockKeys[0]).toBe("a");
   });
 
-  test("a save waiting on a failed backfill reruns it at the pending scroll", () => {
-    const s = new Session(GEO);
-    s.save();
-    s.rendered(1500);
-    s.deliver();
-    s.key(BOTTOM);
-    s.save();
-    s.shootFails();
-    s.rendered(1500);
+  test("changed blocks are marked, the scheduler asks to be woken, and the mark expires", () => {
+    const s = new Session();
+    s.save(paragraphs(3));
     s.deliverAll();
-    expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 1000, failure: false });
-  });
-
-  test("a render failing while a scroll fetch is in flight does not fetch the same tile twice", () => {
-    const s = displayed({ ...GEO, maxResident: 3, maxTotalResident: 6 }, 5000);
-    s.key(BOTTOM);
-    s.save();
-    s.renderFails();
-    expect(s.pendingShoots()).toEqual([9]);
+    expect(s.view.marks.size).toBe(0);
+    s.save([...paragraphs(3), { key: "new", height: 60 }]);
     s.deliverAll();
-    expect(s.view).toMatchObject({ displayGen: { gen: 1 }, scrollPx: 4500 });
+    expect([...s.view.marks]).toEqual(["new"]);
+    const wakeAt = s.last.wakeAt!;
+    expect(wakeAt).toBe(s.t + MARK_MS - 0);
+    s.send({ type: "tick", at: wakeAt });
+    expect(s.view.marks.size).toBe(0);
+    expect(s.last.wakeAt).toBeNull();
   });
 
-  test("a failed scroll fetch is reported until the next move", () => {
-    const s = displayed({ ...GEO, maxResident: 2, maxTotalResident: 4 }, 5000);
-    s.key(BOTTOM);
-    expect(s.view.pendingScrollPx).not.toBeNull();
-    s.shootFails();
-    expect(s.view).toMatchObject({ pendingScrollPx: null, scrollPx: 0 });
-    expect(s.screen).toContain("update failed");
-    s.key({ kind: "top" });
-    expect(s.screen).not.toContain("failed");
-  });
-
-  test("a failed scroll fetch stops being reported once an update succeeds", () => {
-    const s = displayed({ ...GEO, maxResident: 2, maxTotalResident: 4 }, 5000);
-    s.key(BOTTOM);
-    s.shootFails();
-    s.save();
-    s.rendered(5000);
+  test("latency runs from the first save to the frame that shows its content", () => {
+    const s = new Session();
+    s.save(paragraphs(2));
+    const start = s.t;
     s.deliverAll();
-    expect(s.view.displayGen?.gen).toBe(2);
-    expect(s.screen).not.toContain("failed");
+    expect(s.view.latencyMs).toBe(s.t - start);
   });
 });
 
 describe("scrolling", () => {
-  test("a move the budget cannot hold is abandoned without dropping the display", () => {
-    const s = new Session({ ...GEO, maxResident: 1, maxTotalResident: 1 });
-    s.save();
-    s.rendered(5000);
-    s.deliver();
-    s.key(BOTTOM);
-    expect(s.view).toMatchObject({ displayGen: { gen: 1 }, scrollPx: 0 });
-    expect(s.screen).toContain("update failed");
-    expect(s.liveTiles(1)).toEqual([0]);
-    expect(s.released).toEqual([]);
-  });
-
-  test("scrolling far stays within the resident budget and settles without refetching", () => {
-    const s = displayed({ ...GEO, maxResident: 3, maxTotalResident: 4 }, 5000);
-    s.key(BOTTOM);
+  test("text inserted above the view keeps the reader's rows", () => {
+    const s = new Session();
+    s.save(paragraphs(60));
     s.deliverAll();
-    expect(s.view.scrollPx).toBe(4500);
-    expect(s.liveTiles(1)).toEqual([7, 8, 9]);
-    s.key(BOTTOM);
-    expect(s.pendingShoots()).toEqual([]);
-  });
-
-  test("returning to resident tiles drops the rest of a far fetch", () => {
-    const s = displayed({ ...GEO, maxResident: 3, maxTotalResident: 6 }, 5000);
-    s.key(BOTTOM);
-    s.key({ kind: "top" });
-    expect(s.pendingShoots()).toEqual([9]);
+    s.key({ kind: "lines", n: 100 });
     s.deliverAll();
-    expect(s.liveTiles(1)).toEqual([0, 1, 2]);
-  });
-
-  test("prefetching ahead frees the farthest tile before transferring", () => {
-    const s = displayed({ ...GEO, maxResident: 2 }, 1500);
-    s.key({ kind: "halfpage", dir: 1 });
-    expect(s.pendingShoots()).toEqual([]);
-    s.key({ kind: "halfpage", dir: 1 });
-    expect(s.pendingShoots()).toEqual([2]);
-    expect(s.liveTiles(1)).toEqual([1]);
-  });
-
-  test("a tile that arrives after a save still completes the scroll on the shown generation", () => {
-    const s = displayed({ ...GEO, maxResident: 3 }, 5000);
-    s.key(BOTTOM);
-    s.save();
-    expect(s.pendingRenders()).toEqual([2]);
-    s.deliver();
-    expect(s.view).toMatchObject({ displayGen: { gen: 1 }, scrollPx: 4500 });
-    s.rendered(5000);
+    const anchored = s.topBlock();
+    const offset = s.view.top - s.view.shown!.units.find((u) => u.members[0]!.key === anchored)!.rowStart;
+    s.save([{ key: "inserted", height: 400 }, ...paragraphs(60)]);
     s.deliverAll();
-    expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 4500 });
+    expect(s.topBlock()).toBe(anchored);
+    const unit = s.view.shown!.units.find((u) => u.members[0]!.key === anchored)!;
+    expect(s.view.top - unit.rowStart).toBe(offset);
   });
 
-  test("scrolling during an update fetches the newly visible tiles first", () => {
-    const s = displayed(GEO, 1500);
-    s.save();
-    s.rendered(1500);
-    s.key(BOTTOM);
-    s.deliver();
-    expect(s.pendingShoots()).toEqual([2]);
-    s.deliver();
-    expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 1000 });
+  test("at the very top, text inserted above shows instead of being scrolled past", () => {
+    const s = new Session();
+    s.save(paragraphs(60));
+    s.deliverAll();
+    s.save([{ key: "title", height: 40 }, ...paragraphs(60)]);
+    s.deliverAll();
+    expect(s.view.top).toBe(0);
+    expect(s.topBlock()).toBe("title");
   });
 
-  test("downscaled scrolling moves in two-cell steps and returns to where it started", () => {
-    const reduced: Geometry = {
-      ...GEO,
-      rows: 65,
-      cols: 216,
-      cellHpx: 31,
-      imgWidthPx: 1512,
-      renderScale: 0.5,
-      tileHeightPx: alignedTileHeightPx(31, 64),
-    };
-    const s = displayed(reduced, 100000);
-    s.key({ kind: "lines", n: 1 });
-    expect(s.view.scrollPx).toBe(62);
+  test("a scroll waits for the new rows' images, then moves", () => {
+    const g = withStorage(12_000_000);
+    const t = new Session(g);
+    t.save(paragraphs(80));
+    t.deliverAll();
+    t.key({ kind: "bottom" });
+    expect(t.captures.length).toBe(1);
+    expect(t.view.status).toBe("scrolling");
+    expect(t.view.top).toBe(0);
+    t.deliverAll();
+    expect(t.view.top).toBe(maxTop(t.view.shown!, g.viewRows));
+    expect(t.covered()).toBe(true);
+  });
+
+  test("G follows the end of a growing document; scrolling up stops following", () => {
+    const s = new Session();
+    s.save(paragraphs(60));
+    s.deliverAll();
+    s.key({ kind: "bottom" });
+    s.deliverAll();
+    expect(s.view.follow).toBe(true);
+    s.save(paragraphs(70));
+    s.deliverAll();
+    expect(s.view.top).toBe(maxTop(s.view.shown!, GEO.viewRows));
     s.key({ kind: "lines", n: -1 });
-    expect(s.view.scrollPx).toBe(0);
+    expect(s.view.follow).toBe(false);
+  });
+
+  test("storage holds across a long scroll: far images are evicted, the visible ones never", () => {
+    const g = withStorage(8_000_000);
+    const s = new Session(g);
+    s.save(paragraphs(300));
+    s.deliverAll();
+    for (let i = 0; i < 40; i++) {
+      s.key({ kind: "halfpage", dir: 1 });
+      s.deliverAll();
+      expect(s.covered()).toBe(true);
+    }
+  });
+
+  test("when the old and the new screen do not fit together, the old one gives way and the update lands", () => {
+    const g = withStorage(5_000_000);
+    const s = new Session(g);
+    s.save(paragraphs(40, "old-"));
+    s.deliverAll();
+    s.save(paragraphs(40, "new-"));
+    s.deliverAll();
+    expect(s.view.shown!.blockKeys[0]).toBe("new-0");
+    expect(s.view.status).toBe("idle");
+    expect(s.covered()).toBe(true);
+  });
+
+  test("an update that does not fit even alone keeps the old screen whole", () => {
+    const g = withStorage(3_000_000);
+    const s = new Session(g);
+    s.save(paragraphs(3, "p", 30));
+    s.deliverAll();
+    const held = [...s.view.images.values()].map((i) => i.id);
+    s.save([{ key: "huge", height: 3000 }]);
+    s.deliverAll();
+    const ids = [...s.view.images.values()].map((i) => i.id);
+    expect(held.every((id) => ids.includes(id))).toBe(true);
+    expect(s.covered()).toBe(true);
+    expect(s.view.status).toBe("update failed");
+  });
+
+  test("a move the storage cannot hold is abandoned without dropping the display", () => {
+    const g = withStorage(3_000_000);
+    const s = new Session(g);
+    s.save(paragraphs(3, "p", 30));
+    s.deliverAll();
+    s.save([{ key: "huge", height: 3000 }]);
+    s.deliverAll();
+    expect(s.view.shown!.blockKeys).toEqual(["p0", "p1", "p2"]);
+    expect(s.view.status).toBe("update failed");
   });
 });
 
-describe("resize", () => {
-  test("a resize during a render restarts it with the new geometry and drops late tiles", () => {
-    const s = new Session(GEO);
-    s.save();
-    s.rendered(1500);
-    const bigger: Geometry = { ...GEO, rows: 61, cellHpx: 12, tileHeightPx: alignedTileHeightPx(12, 60) };
-    s.send({ type: "resize", geometry: bigger });
-    expect(s.view).toMatchObject({ displayGen: null, geometry: { cellHpx: 12 } });
-    s.deliver();
-    expect(s.liveTiles(1)).toEqual([]);
-    expect(s.pendingRenders()).toEqual([2]);
+describe("resizes and failures", () => {
+  test("a resize that only changes the rows keeps every image", () => {
+    const s = new Session();
+    s.save(paragraphs(10));
+    s.deliverAll();
+    const before = s.captured.length;
+    s.resize({ cols: 80, rows: 30 });
+    s.deliverAll();
+    expect(s.captured.length).toBe(before);
+    expect(s.covered()).toBe(true);
   });
 
-  test("a tile of a released generation that lands during another render is deleted", () => {
-    const tight: Geometry = { ...GEO, maxResident: 2, maxTotalResident: 4 };
-    const s = displayed(tight, 5000);
-    s.key(BOTTOM);
-    expect(s.pendingShoots()).not.toEqual([]);
-    s.save();
-    s.send({ type: "resize", geometry: { ...tight, rows: 41 } });
-    expect(s.released).toEqual([1]);
+  test("a new width re-syncs, and a layout or capture from the old width is thrown away", () => {
+    const s = new Session();
+    s.save(paragraphs(10));
+    s.sync();
+    expect(s.captures).toHaveLength(1);
+    const stale = synced(s.doc, s.geometry);
+    s.resize({ cols: 100, rows: 51 });
+    const landed = s.captures[0]!.id;
     s.deliver();
-    expect(s.liveTiles(1)).toEqual([]);
+    expect(s.terminal.has(landed)).toBe(false);
+    expect(s.syncs).toBe(1);
+    s.syncs--;
+    s.send({ type: "synced", layout: stale, at: s.tick() });
+    expect(s.syncs).toBe(1);
+    s.deliverAll();
+    expect(s.view.shown!.raster.contentCols).toBe(99);
+    expect(s.covered()).toBe(true);
   });
 
-  test("a resize frees the shown generation and re-renders; the same size changes nothing", () => {
-    const s = displayed(GEO, 1500);
-    s.send({ type: "resize", geometry: { ...GEO, rows: 41 } });
-    expect(s.liveTiles(1)).toEqual([]);
-    expect(s.pendingRenders()).toEqual([2]);
+  test("a capture whose blocks moved re-syncs instead of retrying the stale layout", () => {
+    const s = new Session();
+    s.save(paragraphs(3));
+    s.sync();
+    s.fail(true);
+    expect(s.syncs).toBe(1);
+    s.deliverAll();
+    expect(s.covered()).toBe(true);
+  });
 
-    const same = displayed(GEO, 1500);
-    expect(same.send({ type: "resize", geometry: { ...GEO } })).toEqual([]);
-    expect(same.liveTiles(1)).toEqual([0, 1, 2]);
+  test("a failed capture keeps the display, reports the failure, and the next save recovers", () => {
+    const s = new Session();
+    s.save(paragraphs(3));
+    s.deliverAll();
+    s.save([{ key: "bad", height: 60 }, ...paragraphs(3)]);
+    s.sync();
+    s.fail(false);
+    expect(s.view.shown!.blockKeys).toEqual(["p0", "p1", "p2"]);
+    expect(s.view.status).toBe("update failed");
+    s.save([{ key: "good", height: 60 }, ...paragraphs(3)]);
+    s.deliverAll();
+    expect(s.view.shown!.blockKeys[0]).toBe("good");
+    expect(s.view.status).toBe("idle");
+  });
+
+  test("a failed render is reported and the next save retries", () => {
+    const s = new Session();
+    s.save(paragraphs(3));
+    s.syncs--;
+    s.send({ type: "syncFailed", at: s.tick() });
+    expect(s.view.status).toBe("render failed");
+    s.save();
+    s.deliverAll();
+    expect(s.view.status).toBe("idle");
   });
 });
 
-describe("storage across generations", () => {
-  test("a shorter update trims read-ahead to fit beside the display and clamps the scroll", () => {
-    const s = displayed({ ...GEO, maxResident: 3, maxTotalResident: 4 }, 5000);
-    s.key(BOTTOM);
-    s.deliverAll();
-    expect(s.view.scrollPx).toBe(4500);
-    s.save();
-    s.rendered(900);
-    s.deliverAll();
-    expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 400 });
-    expect(s.liveTiles(1)).toEqual([]);
-    expect(s.released).toEqual([1]);
-  });
+describe("random interleavings", () => {
+  function rng(seed: number): () => number {
+    let x = seed >>> 0;
+    return () => {
+      x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+      return x / 2 ** 32;
+    };
+  }
 
-  test("a save during a far scroll still replaces the display when storage is tight", () => {
-    const s = displayed(
-      { ...GEO, rows: 41, tileHeightPx: alignedTileHeightPx(10, 40), maxResident: 3, maxTotalResident: 4 },
-      2600,
-    );
-    s.key({ kind: "lines", n: 7 });
-    s.key(BOTTOM);
-    s.save();
-    s.deliver();
-    s.rendered(1500);
-    s.deliverAll();
-    expect(s.view).toMatchObject({ displayGen: { gen: 2 }, scrollPx: 1100 });
+  test("invariants hold under any order of edits, scrolls, resizes and failures, and the view converges", () => {
+    for (let seed = 1; seed <= 90; seed++) {
+      const random = rng(seed);
+      const pick = <T,>(xs: readonly T[]) => xs[Math.floor(random() * xs.length)]!;
+      const storage = seed % 3 === 0 ? 4_000_000 : pick([12_000_000, 320_000_000]);
+      const s = new Session(withStorage(storage));
+      let doc = paragraphs(20 + Math.floor(random() * 40), "p", 40);
+      let serial = 0;
+      s.save(doc);
+      for (let step = 0; step < 200; step++) {
+        const r = random();
+        if (r < 0.15) {
+          doc = [...doc];
+          const i = Math.floor(random() * (doc.length + 1));
+          const op = random();
+          if (op < 0.4 || doc.length < 3) doc.splice(i, 0, { key: `n${serial++}`, height: 20 + random() * 200 });
+          else if (op < 0.7) doc.splice(Math.min(i, doc.length - 1), 1);
+          else doc[Math.min(i, doc.length - 1)] = { key: `e${serial++}`, height: 20 + random() * 200 };
+          s.save(doc);
+        } else if (r < 0.3 && s.syncs) s.sync();
+        else if (r < 0.65 && s.captures.length) s.deliver();
+        else if (r < 0.68 && s.captures.length) s.fail(random() < 0.5);
+        else if (r < 0.85) {
+          s.key(pick<ScrollDelta>([
+            { kind: "lines", n: 3 },
+            { kind: "lines", n: -3 },
+            { kind: "halfpage", dir: 1 },
+            { kind: "halfpage", dir: -1 },
+            { kind: "top" },
+            { kind: "bottom" },
+          ]));
+        } else if (r < 0.9) s.resize({ cols: 80, rows: 20 + Math.floor(random() * 40) });
+        else if (r < 0.92) s.resize({ cols: pick([70, 80, 90]), rows: 51 });
+        else s.send({ type: "tick", at: s.tick(500) });
+      }
+      s.save(doc);
+      s.deliverAll();
+      if (storage < 12_000_000) continue;
+      expect(s.view.shown?.blockKeys ?? []).toEqual(doc.map((d) => d.key));
+      expect(s.covered()).toBe(true);
+      expect(s.view.status).toBe("idle");
+    }
   });
 });

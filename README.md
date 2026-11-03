@@ -27,13 +27,20 @@ mdpx <file.md>
 | Key | Action |
 | --- | --- |
 | Space `Ctrl-D` `Ctrl-U` | half page |
-| `g` `G` | top / bottom |
+| `g` `G` | top / bottom (`G` follows the end as the file grows) |
 | `t` | toggle theme |
+
+The status line shows how long the last save took to reach the screen. Blocks that
+changed in the last save are marked in the left column for a moment, and text added
+above the view does not move what you are reading.
 
 ## Architecture
 
-Markdown is compiled to HTML, rendered by headless Chrome, and transferred to the
-terminal as screenshots.
+Markdown is compiled to HTML one top-level block at a time, and each block is keyed by
+a hash of its rendered HTML. One headless Chrome page stays open for the whole session:
+a save patches only the blocks whose keys changed, and only those are captured and sent
+to the terminal. Every other block keeps the image the terminal already has, wherever
+it moves to.
 
 ```mermaid
 sequenceDiagram
@@ -43,14 +50,13 @@ sequenceDiagram
     participant T as terminal
 
     U->>P: save file.md
-    P->>P: build HTML
-    P->>C: load file://, wait until rendered
-    C-->>P: document height
-    P->>P: split into tiles
-    loop tiles
-        P->>C: screenshot tile
+    P->>P: render blocks, hash each one
+    P->>C: replace the blocks whose keys changed
+    C-->>P: where every block landed
+    loop blocks with new keys, nearest the view first
+        P->>C: screenshot the block with a row of page around it
         C-->>P: PNG
-        P->>T: upload tile
+        P->>T: upload it once
     end
-    P->>T: place visible tiles
+    P->>T: place the visible blocks, cropped to their rows
 ```

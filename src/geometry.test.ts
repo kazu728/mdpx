@@ -1,29 +1,23 @@
 import { describe, expect, test } from "bun:test";
+import { transferSize } from "./kitty.ts";
 import {
-  alignedTileHeightPx,
-  backfillOrder,
-  clampScroll,
-  computeTiles,
-  contentRows,
+  CELL_CSS_PX,
+  FULL_SCALE,
+  captureGridCss,
+  maxSliceImagePx,
+  GUTTER_COLS,
   detectGraphicsLimits,
-  maxScrollPx,
   resolveGeometry,
-  scrollUnitPx,
-  toImagePx,
-  visibleTiles,
+  sameRaster,
+  screenImageBytes,
   type Geometry,
 } from "./geometry.ts";
 
-const CELL = { cellHpx: 31, cellWpx: 14 };
 const direct = detectGraphicsLimits({});
 const relayed = detectGraphicsLimits({ HERDR_ENV: "1" });
 
-const CELL_HPX = 10;
-const ROWS = 50;
-const UNIT = 2 * CELL_HPX;
-
-function layout(documentHeightPx: number, cellHpx = CELL_HPX, rows = ROWS) {
-  return computeTiles(documentHeightPx, cellHpx, rows, alignedTileHeightPx(cellHpx, rows));
+function sliceImageHeight(g: Geometry): number {
+  return maxSliceImagePx(g.raster.sliceRows * CELL_CSS_PX, g.raster);
 }
 
 describe("detectGraphicsLimits", () => {
@@ -37,117 +31,71 @@ describe("detectGraphicsLimits", () => {
 });
 
 describe("resolveGeometry", () => {
-  function tileBytes(g: Geometry): number {
-    return g.imgWidthPx * toImagePx(g.tileHeightPx, g.renderScale) * 4;
-  }
-  function visibleBytes(g: Geometry): number {
-    const rows = contentRows(g.rows);
-    const { tiles } = computeTiles(g.tileHeightPx + rows * g.cellHpx, g.cellHpx, rows, g.tileHeightPx);
-    let most = 0;
-    for (let scrollPx = 0; scrollPx < g.tileHeightPx; scrollPx += scrollUnitPx(g.cellHpx, g.renderScale)) {
-      most = Math.max(most, visibleTiles(scrollPx, rows, g.cellHpx, tiles).length);
-    }
-    return most * tileBytes(g);
-  }
-
-  test("picks the tallest tile that fits and keeps the working set below eviction", () => {
-    for (const [limits, tileHeightPx] of [[direct, 4092], [relayed, 682]] as const) {
-      const g = resolveGeometry({ cols: 216, rows: 65 }, CELL, limits);
-      expect(g.tileHeightPx).toBe(tileHeightPx);
-      expect(g.maxResident * tileBytes(g)).toBeGreaterThanOrEqual(visibleBytes(g));
-      expect(g.maxResident).toBeLessThanOrEqual(g.maxTotalResident);
-      expect(g.maxTotalResident * tileBytes(g)).toBeLessThanOrEqual(limits.storageBytes);
-    }
+  test("16 CSS px span one cell, and the page fills every column right of the gutter", () => {
+    const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, direct);
+    expect(g.raster.renderScale).toBe(FULL_SCALE);
+    expect(g.deviceScaleFactor).toBe(28 / CELL_CSS_PX);
+    expect(g.raster.contentCols).toBe(120 - GUTTER_COLS);
+    expect(g.imgWidthPx).toBe((120 - GUTTER_COLS) * 14);
+    expect(g.viewportWidthCssPx * g.deviceScaleFactor).toBeGreaterThanOrEqual(g.imgWidthPx);
+    expect(g.viewRows).toBe(39);
   });
 
-  test("downscales only on the relay and only when full resolution cannot fit", () => {
-    expect(resolveGeometry({ cols: 216, rows: 65 }, CELL, relayed).renderScale).toBe(1);
-    const full = resolveGeometry({ cols: 300, rows: 65 }, CELL, direct);
-    expect(full.renderScale).toBe(1);
-    expect(full.imgWidthPx).toBe(300 * 14);
-    const reduced = resolveGeometry({ cols: 300, rows: 65 }, CELL, relayed);
-    expect(reduced.renderScale).toBe(0.5);
-    expect(reduced.imgWidthPx).toBe((300 * 14) / 2);
-    expect(reduced.deviceScaleFactor).toBe(full.deviceScaleFactor / 2);
-    expect(reduced.viewportWidthCssPx).toBe(full.viewportWidthCssPx);
+  test("the tallest slice that still fits one screenshot with its page around it", () => {
+    const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, direct);
+    expect(sliceImageHeight(g)).toBeLessThanOrEqual(4096);
+    expect(maxSliceImagePx((g.raster.sliceRows + 1) * CELL_CSS_PX, g.raster)).toBeGreaterThan(4096);
   });
 
-  test("a larger terminal font enlarges the page while the image keeps the window width", () => {
-    const before = resolveGeometry({ cols: 216, rows: 65 }, CELL, direct);
-    const after = resolveGeometry({ cols: 189, rows: 56 }, { cellHpx: 35, cellWpx: 16 }, direct);
-    expect(after.imgWidthPx).toBe(before.imgWidthPx);
-    expect(before.deviceScaleFactor).toBe(31 / 16);
-    expect(after.deviceScaleFactor).toBe(35 / 16);
-    expect(after.viewportWidthCssPx).toBeLessThan(before.viewportWidthCssPx);
-    for (const g of [before, after]) {
-      expect(g.viewportWidthCssPx * g.deviceScaleFactor).toBeGreaterThanOrEqual(g.imgWidthPx);
+  test("on the relay, a slice fits one frame and only a screen too large for full resolution drops it", () => {
+    const small = resolveGeometry({ cols: 80, rows: 24 }, { cellHpx: 20, cellWpx: 10 }, relayed);
+    expect(small.raster.renderScale).toBe(FULL_SCALE);
+    const large = resolveGeometry({ cols: 400, rows: 120 }, { cellHpx: 40, cellWpx: 20 }, relayed);
+    expect(large.raster.renderScale).toBeLessThan(FULL_SCALE);
+    for (const g of [small, large]) {
+      expect(transferSize(g.imgWidthPx * sliceImageHeight(g) * 4)).toBeLessThanOrEqual(relayed.frameBytes!);
     }
   });
 
-  test("screens too large for two generations still show one and cap the budgets to storage", () => {
-    for (const g of [
-      resolveGeometry({ cols: 2000, rows: 65 }, CELL, relayed),
-      resolveGeometry({ cols: 24000, rows: 4 }, CELL, relayed),
-      resolveGeometry({ cols: 400, rows: 200 }, CELL, relayed),
-    ]) {
-      expect(2 * visibleBytes(g)).toBeGreaterThan(relayed.storageBytes);
-      expect(visibleBytes(g)).toBeLessThanOrEqual(relayed.storageBytes);
-      expect(g.maxResident).toBeLessThanOrEqual(g.maxTotalResident);
-      expect(g.maxTotalResident * tileBytes(g)).toBeLessThanOrEqual(relayed.storageBytes);
+  test("full resolution whenever a screen fits, with the tallest slices that let it", () => {
+    const need = (g: Geometry) => screenImageBytes(g.imgWidthPx, g.raster, g.viewRows);
+    for (const [cols, rows, limits] of [[120, 50, direct], [300, 80, direct], [120, 40, relayed], [160, 50, relayed], [200, 60, relayed]] as const) {
+      const g = resolveGeometry({ cols, rows }, { cellHpx: 28, cellWpx: 14 }, limits);
+      expect(g.raster.renderScale).toBe(FULL_SCALE);
+      expect(need(g)).toBeLessThanOrEqual(limits.storageBytes);
+      const taller = { ...g, raster: { ...g.raster, sliceRows: g.raster.sliceRows + 2 } };
+      const tallerFits =
+        need(taller) <= limits.storageBytes &&
+        sliceImageHeight(taller) <= 4096 &&
+        (limits.frameBytes === null || transferSize(g.imgWidthPx * sliceImageHeight(taller) * 4) <= limits.frameBytes);
+      expect(tallerFits).toBe(false);
     }
-    const huge = resolveGeometry({ cols: 300, rows: 201 }, CELL, direct);
-    expect(2 * visibleBytes(huge)).toBeLessThanOrEqual(direct.storageBytes);
+    const huge = resolveGeometry({ cols: 300, rows: 80 }, { cellHpx: 32, cellWpx: 16 }, relayed);
+    expect(huge.raster.renderScale).toBe(0.5);
+    expect(need(huge)).toBeLessThanOrEqual(relayed.storageBytes);
   });
 
-  test("sizes a tile by its base64 transfer, not its raw pixels", () => {
-    const g = resolveGeometry({ cols: 6800, rows: 65 }, CELL, relayed);
-    expect(Math.ceil(tileBytes(g) / 3) * 4).toBeLessThanOrEqual(relayed.frameBytes!);
+  test("downscaled odd cells capture on a two-row grid so image edges stay on whole px", () => {
+    const g = resolveGeometry({ cols: 400, rows: 120 }, { cellHpx: 41, cellWpx: 20 }, relayed);
+    expect(g.raster.renderScale).toBe(0.5);
+    expect(g.raster.sliceRows % 2).toBe(0);
+    expect(Number.isInteger(g.raster.sliceRows * 41 * 0.5)).toBe(true);
+    expect(captureGridCss(g.deviceScaleFactor)).toBe(2 * CELL_CSS_PX);
+  });
+
+  test("a resize that changes only the rows keeps the raster, so cached images stay valid", () => {
+    const a = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, direct);
+    const taller = resolveGeometry({ cols: 120, rows: 60 }, { cellHpx: 28, cellWpx: 14 }, direct);
+    const wider = resolveGeometry({ cols: 121, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, direct);
+    const bigger = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 30, cellWpx: 15 }, direct);
+    expect(sameRaster(a.raster, taller.raster)).toBe(true);
+    expect(sameRaster(a.raster, wider.raster)).toBe(false);
+    expect(sameRaster(a.raster, bigger.raster)).toBe(false);
   });
 
   test("a zero-column screen still captures a positive width", () => {
-    const g = resolveGeometry({ cols: 0, rows: 20 }, CELL, direct);
-    expect(g.viewportWidthCssPx).toBeGreaterThan(0);
+    const g = resolveGeometry({ cols: 0, rows: 10 }, { cellHpx: 20, cellWpx: 10 }, direct);
     expect(g.imgWidthPx).toBeGreaterThan(0);
-  });
-});
-
-describe("computeTiles", () => {
-  test("tiles cover the document from the top without gaps in two-cell units", () => {
-    const { tiles, truncated, contentHeightPx } = layout(9001);
-    let y = 0;
-    for (const tile of tiles) {
-      expect(tile.topPx).toBe(y);
-      expect(tile.heightPx % UNIT).toBe(0);
-      y += tile.heightPx;
-    }
-    expect(y).toBeGreaterThanOrEqual(9001);
-    expect(y - 9001).toBeLessThan(UNIT);
-    expect(truncated).toBe(false);
-    expect(contentHeightPx).toBe(9010);
-  });
-});
-
-describe("clampScroll", () => {
-  test("keeps the scroll inside the document on cell boundaries", () => {
-    const { contentHeightPx } = layout(8000);
-    expect(clampScroll(-100, contentHeightPx, ROWS, CELL_HPX, 1)).toBe(0);
-    expect(clampScroll(37, contentHeightPx, ROWS, CELL_HPX, 1)).toBe(40);
-    expect(clampScroll(10 ** 6, contentHeightPx, ROWS, CELL_HPX, 1)).toBe(8000 - ROWS * CELL_HPX);
-    expect(clampScroll(100, layout(300).contentHeightPx, ROWS, CELL_HPX, 1)).toBe(0);
-  });
-
-  test("downscaled odd cells scroll in two-cell steps and still reach the tail", () => {
-    const { contentHeightPx } = layout(3131, 31, 64);
-    const max = maxScrollPx(contentHeightPx, 64, 31, 0.5);
-    expect(max % 62).toBe(0);
-    expect(max + 64 * 31).toBeGreaterThanOrEqual(contentHeightPx);
-    expect(clampScroll(10 ** 6, contentHeightPx, 64, 31, 1)).toBe(3131 - 64 * 31);
-  });
-});
-
-describe("backfillOrder", () => {
-  test("fetches tiles nearest the view first, breaking ties upward when scrolling up", () => {
-    const { tiles } = layout(1500);
-    expect(backfillOrder(500, ROWS, CELL_HPX, tiles, -1)).toEqual([1, 0, 2]);
+    expect(g.viewportWidthCssPx).toBeGreaterThan(0);
   });
 });
