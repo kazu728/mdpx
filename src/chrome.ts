@@ -8,7 +8,9 @@ export async function resolveExecutable(): Promise<string | null> {
   const override = process.env.PUPPETEER_EXECUTABLE_PATH;
   if (override) return override;
   try {
-    return await puppeteer.executablePath("chrome");
+    const chrome = await puppeteer.executablePath("chrome");
+    accessSync(chrome, constants.X_OK);
+    return chrome;
   } catch {
     return findOnPath(PATH_EXECUTABLES, process.env.PATH ?? "");
   }

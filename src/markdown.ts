@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import MarkdownIt from "markdown-it";
+import katex from "katex";
+import markdownit, { type MarkdownIt, type Token } from "markdown-it";
+import { githubAlerts } from "./alerts.ts";
 import type { Theme } from "./theme.ts";
 import taskLists from "markdown-it-task-lists";
 import {
@@ -10,12 +12,11 @@ import {
   createHighlighter,
   type BundledLanguage,
   type Highlighter,
-  type ShikiTransformer,
 } from "shiki";
 
 const require = createRequire(import.meta.url);
 
-const katex: typeof import("@vscode/markdown-it-katex").default = require(
+const markdownItKatex: (md: MarkdownIt, options: { katex: typeof katex; strict: boolean }) => void = require(
   "@vscode/markdown-it-katex",
 ).default;
 
@@ -29,19 +30,7 @@ export interface Doc {
   readonly blocks: readonly Block[];
 }
 
-type Token = ReturnType<MarkdownIt["parse"]>[number];
-
 const SHIKI_THEME: Record<Theme, string> = { light: "github-light", dark: "github-dark" };
-
-// Keep github-markdown-css by stripping shiki's <pre> background.
-const dropShikiBackground: ShikiTransformer = {
-  pre(node) {
-    const style = node.properties.style;
-    if (typeof style === "string") {
-      node.properties.style = style.replace(/background-color:[^;]*;?/g, "").trim();
-    }
-  },
-};
 
 const LANGS = [
   "bash", "c", "cpp", "css", "diff", "dockerfile", "go", "graphql", "html",
@@ -60,7 +49,7 @@ for (const info of bundledLanguagesInfo) {
 
 interface Renderer {
   highlighter: Highlighter;
-  md: MarkdownIt;
+  md: Record<Theme, MarkdownIt>;
 }
 
 let rendererPromise: Promise<Renderer> | null = null;
@@ -68,7 +57,10 @@ function getRenderer(): Promise<Renderer> {
   return (rendererPromise ??= createHighlighter({
     themes: Object.values(SHIKI_THEME),
     langs: [],
-  }).then((highlighter) => ({ highlighter, md: createMarkdown(highlighter) })));
+  }).then((highlighter) => ({
+    highlighter,
+    md: { light: createMarkdown(highlighter, "light"), dark: createMarkdown(highlighter, "dark") },
+  })));
 }
 
 /** Escaping (not deleting) keeps `<<meta>meta ...>` from becoming a tag. */
@@ -76,29 +68,28 @@ function escapeMetaTags(html: string): string {
   return html.replace(/<(\/?)(meta)\b/gi, (_m, slash: string, word: string) => `&lt;${slash}${word}`);
 }
 
-interface RenderEnv {
-  theme: Theme;
-}
-
 function fenceLanguage(token: Token): string {
   return token.info.trim().split(/\s+/g)[0]!;
 }
 
-function createMarkdown(highlighter: Highlighter): MarkdownIt {
-  const md = new MarkdownIt({ html: true, linkify: true });
+function createMarkdown(highlighter: Highlighter, theme: Theme): MarkdownIt {
+  const md = markdownit({ html: true, linkify: true });
+  md.linkify.set({ urlAuth: true });
   md.use(taskLists);
-  md.use(katex);
+  md.use(githubAlerts);
+  md.use(markdownItKatex, { katex, strict: false });
 
   const escape = md.utils.escapeHtml;
-  md.renderer.rules.fence = (tokens, idx, _options, env: RenderEnv) => {
+  md.renderer.rules.fence = (tokens, idx, options, env, self) => {
     const token = tokens[idx]!;
     const lang = fenceLanguage(token);
     if (lang === "mermaid") return `<pre class="mermaid">${escape(token.content)}</pre>\n`;
+    if (lang === "math") return md.renderer.rules.math_block!(tokens, idx, options, env, self);
     const toHtml = (l: string) =>
       highlighter.codeToHtml(token.content, {
         lang: l,
-        theme: SHIKI_THEME[env.theme],
-        transformers: [dropShikiBackground],
+        theme: SHIKI_THEME[theme],
+        rootStyle: false,
       });
     try {
       return toHtml(lang || "text") + "\n";
@@ -189,9 +180,9 @@ export async function renderDocument(
   markdown: string,
   options: { theme: Theme; mdDir: string },
 ): Promise<Doc> {
-  const { highlighter, md } = await getRenderer();
-  const env: RenderEnv = { theme: options.theme };
-  const tokens = md.parse(markdown, env);
+  const { highlighter, md: mdByTheme } = await getRenderer();
+  const md = mdByTheme[options.theme];
+  const tokens = md.parse(markdown, {});
   const languages = new Set<BundledLanguage>();
   for (const token of tokens) {
     if (token.type !== "fence") continue;
@@ -202,7 +193,7 @@ export async function renderDocument(
 
   const blocks = await Promise.all(
     groupOpenHtml(topLevelRanges(tokens)).map(async (range): Promise<Block> => {
-      const html = escapeMetaTags(md.renderer.render(range, md.options, env));
+      const html = escapeMetaTags(md.renderer.render(range, md.options));
       const versions = await imageVersions(html, options.mdDir);
       const key = createHash("sha1")
         .update(`${options.theme}\0${html}\0${versions}`)

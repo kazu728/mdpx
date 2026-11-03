@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,6 +78,34 @@ describe("renderDocument", () => {
     const doc = await render("```mermaid\ngraph TD; A-->B\n```\n\n$E = mc^2$\n");
     expect(doc.blocks[0]!.html).toBe('<pre class="mermaid">graph TD; A--&gt;B\n</pre>\n');
     expect(doc.blocks[1]!.html).toMatch(/class="katex/);
+  });
+
+  test("a math fence is told by its first word, case-sensitively, as GitHub does", async () => {
+    const doc = await render("```math\nx^2\n```\n\n```math extra\nx^2\n```\n\n```MATH\nx^2\n```\n");
+    expect(doc.blocks[0]!.html).toContain('class="katex-block"');
+    expect(doc.blocks[1]!.html).toContain('class="katex-block"');
+    expect(doc.blocks[2]!.html).toContain('class="shiki');
+  });
+
+  test("Japanese in math mode writes no warning over the terminal", async () => {
+    const warn = spyOn(console, "warn");
+    try {
+      await render("$x = 日本語$\n");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a GitHub alert is one block with the stylesheet's classes", async () => {
+    const doc = await render("> [!NOTE]\n> x\n");
+    expect(doc.blocks).toHaveLength(1);
+    expect(doc.blocks[0]!.html).toContain('<div class="markdown-alert markdown-alert-note">');
+  });
+
+  test("an autolink keeps the credentials in its URL", async () => {
+    const doc = await render("https://user:pass@example.com/\n");
+    expect(doc.blocks[0]!.html).toBe('<p><a href="https://user:pass@example.com/">https://user:pass@example.com/</a></p>\n');
   });
 
   test("meta tags in the body cannot redirect the page", async () => {
