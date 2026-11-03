@@ -19,20 +19,9 @@ const katex: typeof import("@vscode/markdown-it-katex").default = require(
   "@vscode/markdown-it-katex",
 ).default;
 
-export type BlockKind = "heading" | "other";
-
-
 export interface Block {
-  /**
-   * Content identity: hash of the theme, the rendered HTML and the versions of the local
-   * images it shows. Equal keys render equal pixels at the same raster spec. Hashing the
-   * rendered HTML rather than the source means a changed reference-link definition re-keys
-   * every paragraph that uses it.
-   */
   readonly key: string;
-  /** Self-contained: every element opened in it is closed in it. */
   readonly html: string;
-  readonly kind: BlockKind;
 }
 
 export interface Doc {
@@ -152,10 +141,6 @@ function netOpenElements(html: string): number {
   return depth;
 }
 
-/**
- * Merges each raw HTML block that leaves elements open (`<details>`, `<div align=center>`)
- * with the blocks after it until they close, so every block can live in its own wrapper.
- */
 function groupOpenHtml(ranges: Token[][]): Token[][] {
   const groups: Token[][] = [];
   let open = 0;
@@ -172,7 +157,6 @@ function imageSources(html: string): string[] {
   return Array.from(html.matchAll(/<img\b[^>]*?\ssrc="([^"]*)"/gi), (m) => m[1]!);
 }
 
-/** The URL relative links in the document resolve against: the page's <base>. */
 export function documentBaseUrl(mdDir: string): URL {
   const url = pathToFileURL(mdDir);
   if (!url.pathname.endsWith("/")) url.pathname += "/";
@@ -224,7 +208,7 @@ export async function renderDocument(
         .update(`${options.theme}\0${html}\0${versions}`)
         .digest("base64url")
         .slice(0, 22);
-      return { key, html, kind: range[0]!.type === "heading_open" ? "heading" : "other" };
+      return { key, html };
     }),
   );
   return { theme: options.theme, blocks };

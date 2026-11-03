@@ -3,7 +3,6 @@ import {
   anchorAt,
   buildLayout,
   clampTop,
-  headingRows,
   maxTop,
   prefetchOrder,
   topFor,
@@ -20,10 +19,8 @@ export type ScrollDelta =
   | { kind: "lines"; n: number }
   | { kind: "halfpage"; dir: 1 | -1 }
   | { kind: "top" }
-  | { kind: "bottom" }
-  | { kind: "heading"; dir: 1 | -1 };
+  | { kind: "bottom" };
 
-/** Time arrives with the events; the scheduler never reads a clock. */
 export type SchedulerEvent =
   | { type: "fileChanged"; at: number }
   | { type: "resize"; geometry: Geometry; at: number }
@@ -32,16 +29,12 @@ export type SchedulerEvent =
   | { type: "syncFailed"; at: number }
   | { type: "captured"; imageKey: string; id: number; image: CapturedImage; at: number }
   | { type: "captureFailed"; imageKey: string; id: number; gone: boolean; at: number }
-  | { type: "tick"; at: number }
-  | { type: "hardRefresh"; at: number };
+  | { type: "tick"; at: number };
 
 export type Action =
-  /** Render the source and sync the page at the current geometry. */
   | { type: "sync" }
-  /** Screenshot the slice, transmit it as image `id`, then report `captured`. */
   | { type: "capture"; imageKey: string; id: number; ref: CaptureRef }
-  | { type: "evict"; ids: number[] }
-  | { type: "resetPage" };
+  | { type: "evict"; ids: number[] };
 
 export interface Step {
   readonly actions: Action[];
@@ -54,7 +47,6 @@ export interface ResidentImage extends CapturedImage {
   readonly id: number;
 }
 
-/** What the scheduler is fetching images for: an update, or a scroll of the shown layout. */
 export interface Target {
   readonly layout: Layout;
   readonly top: number;
@@ -78,24 +70,9 @@ const PREFETCH_SHARE = 0.8;
 interface ImageEntry {
   readonly id: number;
   readonly bytes: number;
-  /** Set once the terminal holds it. */
   image: CapturedImage | null;
 }
 
-/**
- * Invariants:
- * - At most one sync and one capture in flight.
- * - `shown` is replaced only by a layout whose visible slices are all resident at the top it
- *   will show. The screen shows a hole only after a resize, or when the old screen and the
- *   target do not fit in storage together and the old one gives way; holes are filled again.
- * - Ids are allocated here only and never reused. A resident id is in `images` exactly while
- *   the terminal holds it, and is evicted with an action before its entry goes. A capture
- *   forgotten in flight (by a resize or a refresh) is evicted when it lands.
- * - Resident and in-flight bytes stay within the terminal's storage. A slice visible in
- *   `shown` is evicted only to give way to the target.
- * - Images are keyed by content, not by version: a new layout reuses every slice whose key
- *   survived, and undoing an edit finds the old pixels if they were not evicted.
- */
 export class Scheduler {
   private geometry: Geometry;
   private shown: Layout | null = null;
@@ -154,14 +131,6 @@ export class Scheduler {
         break;
       case "tick":
         break;
-      case "hardRefresh":
-        this.forgetImages();
-        this.shown = null;
-        this.next = null;
-        this.pendingTop = null;
-        this.actions.push({ type: "resetPage" });
-        this.dirty = true;
-        break;
     }
     for (const [key, expires] of this.marks) if (expires <= event.at) this.marks.delete(key);
     this.reconcile(event.at);
@@ -198,7 +167,10 @@ export class Scheduler {
     const rasterChanged = !sameRaster(this.geometry.raster, geometry.raster);
     this.geometry = geometry;
     if (rasterChanged) {
-      this.forgetImages();
+      const ids = [...this.images.values()].filter((e) => e.image).map((e) => e.id);
+      if (ids.length) this.actions.push({ type: "evict", ids });
+      this.images.clear();
+      this.failedKeys.clear();
       this.shown = null;
       this.next = null;
       this.pendingTop = null;
@@ -209,13 +181,6 @@ export class Scheduler {
       this.top = this.follow ? maxTop(this.shown, this.viewRows) : clampTop(this.shown, this.top, this.viewRows);
     }
     this.pendingTop = null;
-  }
-
-  private forgetImages(): void {
-    const ids = [...this.images.values()].filter((e) => e.image).map((e) => e.id);
-    if (ids.length) this.actions.push({ type: "evict", ids });
-    this.images.clear();
-    this.failedKeys.clear();
   }
 
   private onKey(delta: ScrollDelta): void {
@@ -241,18 +206,9 @@ export class Scheduler {
         to = max;
         this.direction = 1;
         break;
-      case "heading": {
-        const rows = headingRows(shown);
-        const target = delta.dir > 0 ? rows.find((r) => r > from) : rows.findLast((r) => r < from);
-        if (target !== undefined) to = target;
-        this.direction = delta.dir;
-        break;
-      }
     }
     to = clampTop(shown, to, this.viewRows);
-    this.follow =
-      delta.kind === "bottom" ||
-      ((delta.kind === "lines" || delta.kind === "halfpage") && this.direction > 0 && to === max);
+    this.follow = this.direction > 0 && to === max;
     this.pendingTop = to === this.top ? null : to;
     if (this.failure === "scroll") this.failure = null;
   }
@@ -271,7 +227,6 @@ export class Scheduler {
     this.capturing = false;
     const entry = this.images.get(imageKey);
     if (entry?.id === id) entry.image = image;
-    // Forgotten while in flight (a resize or a refresh): the terminal holds it, nobody wants it.
     else this.actions.push({ type: "evict", ids: [id] });
   }
 
@@ -307,7 +262,6 @@ export class Scheduler {
   private topForNext(next: Layout): number {
     if (this.follow) return maxTop(next, this.viewRows);
     const from = this.pendingTop ?? this.top;
-    // At the very top, stay there, so an edit to the first lines shows up.
     if (!this.shown || from === 0) return clampTop(next, from, this.viewRows);
     return topFor(next, anchorAt(this.shown, from), this.viewRows, from);
   }

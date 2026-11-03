@@ -15,9 +15,9 @@ const render = (markdown: string, theme: Theme = "light") => renderDocument(mark
 const keys = async (markdown: string, theme: Theme = "light") => (await render(markdown, theme)).blocks.map((b) => b.key);
 
 describe("renderDocument", () => {
-  test("splits the document into top-level blocks, with headings marked", async () => {
+  test("splits the document into top-level blocks", async () => {
     const doc = await render("# Title\n\nSome *text*.\n\n- a\n- b\n\n```ts\nlet x = 1;\n```\n\n| a |\n|---|\n| 1 |\n");
-    expect(doc.blocks.map((b) => b.kind)).toEqual(["heading", "other", "other", "other", "other"]);
+    expect(doc.blocks).toHaveLength(5);
     expect(doc.blocks[1]!.html).toBe("<p>Some <em>text</em>.</p>\n");
     expect(doc.blocks[2]!.html).toContain("<ul>");
   });

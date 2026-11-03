@@ -13,7 +13,6 @@ import type { Term } from "./term.ts";
 export interface PageLike {
   sync(doc: Doc, geometry: Geometry): Promise<SyncedLayout>;
   capture(ref: CaptureRef): Promise<Capture>;
-  reset(): Promise<void>;
 }
 
 type CaptureAction = Extract<Action, { type: "capture" }>;
@@ -47,7 +46,6 @@ export class Pipeline {
   dispatch(input: Input): void {
     if (this.deps.isShuttingDown()) return;
     const step = this.deps.scheduler.dispatch({ ...input, at: this.now() } as SchedulerEvent);
-    // Drawn before the actions, so an image about to be evicted is no longer placed.
     this.redraw();
     for (const action of step.actions) this.execute(action);
     if (this.timer) clearTimeout(this.timer);
@@ -72,9 +70,6 @@ export class Pipeline {
         break;
       case "evict":
         this.deps.term.write(action.ids.map(deleteImage).join(""));
-        break;
-      case "resetPage":
-        void this.onPage((page) => page.reset()).catch((e) => this.fatal(e));
         break;
     }
   }
@@ -109,7 +104,6 @@ export class Pipeline {
     }
     let layout: SyncedLayout;
     try {
-      // The geometry is read when the page is free, so a resize while queued is honored.
       layout = await this.onPage((page) => page.sync(doc, scheduler.view().geometry));
     } catch (e) {
       await this.fatal(e);

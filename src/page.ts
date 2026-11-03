@@ -14,7 +14,6 @@ const require = createRequire(import.meta.url);
 
 export class CaptureGone extends Error {}
 
-/** Chrome is alive but could not take this screenshot; another may well succeed. */
 export class CaptureFailed extends Error {}
 
 export interface Capture extends CapturedImage {
@@ -45,7 +44,6 @@ const STABLE_IMG_DECODE_MS = 1000;
 const STABLE_MERMAID_MS = 3000;
 const REFLOW_DEBOUNCE_MS = 50;
 
-/** A block the page already holds is sent without its HTML. */
 interface SyncBlock {
   key: string;
   html?: string;
@@ -53,7 +51,6 @@ interface SyncBlock {
 
 type SyncResult =
   | { rects: [top: number, height: number][]; docHeight: number }
-  /** Blocks sent without HTML that the page does not hold; nothing was changed. */
   | { missing: string[] };
 
 declare global {
@@ -98,7 +95,6 @@ const RUNTIME = String.raw`
     let o = overflow.get(w);
     if (!o || o.width !== innerWidth) {
       o = { width: innerWidth, height: box.height, above: 0, below: 0 };
-      // Only a block whose content overflows needs the walk; scrollHeight knows without one.
       if (w.scrollHeight > box.height + 1) {
         const range = document.createRange();
         range.selectNodeContents(w);
@@ -292,10 +288,7 @@ export class Page {
   private viewport: { widthCssPx: number; deviceScaleFactor: number } | null = null;
   private held = new Map<string, number>();
 
-  private constructor(
-    private readonly page: BrowserPage,
-    private readonly shellPath: string,
-  ) {}
+  private constructor(private readonly page: BrowserPage) {}
 
   static async open(
     page: BrowserPage,
@@ -304,25 +297,16 @@ export class Page {
     const shellPath = join(options.dir, "shell.html");
     await writeFile(shellPath, shellHtml(options.mdDir, options.assets, randomUUID()));
     await page.exposeFunction("__mdpxReflow", options.onReflow);
-    const opened = new Page(page, shellPath);
-    await opened.reset();
-    return opened;
+    await page.goto(pathToFileURL(shellPath).href, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+    return new Page(page);
   }
 
-  async reset(): Promise<void> {
-    this.viewport = null;
-    this.held.clear();
-    await this.page.goto(pathToFileURL(this.shellPath).href, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
-  }
-
-  /** Syncing the same doc twice changes nothing. */
   async sync(doc: Doc, geometry: Geometry): Promise<SyncedLayout> {
     const { viewportWidthCssPx: widthCssPx, deviceScaleFactor } = geometry;
     if (this.viewport?.widthCssPx !== widthCssPx || this.viewport.deviceScaleFactor !== deviceScaleFactor) {
       await this.page.setViewport({ width: widthCssPx, height: VIEWPORT_HEIGHT_CSS_PX, deviceScaleFactor });
       this.viewport = { widthCssPx, deviceScaleFactor };
     }
-    // Unknown until this sync succeeds: a failure may leave any mix of old and new wrappers.
     const held = this.held;
     this.held = new Map();
     const send = (resend: ReadonlySet<string>) => {
@@ -343,7 +327,6 @@ export class Page {
       theme: doc.theme,
       blocks: doc.blocks.map((b, i) => ({
         key: b.key,
-        kind: b.kind,
         topCss: result.rects[i]![0],
         heightCss: result.rects[i]![1],
       })),
@@ -351,7 +334,6 @@ export class Page {
     };
   }
 
-  /** The blocks are located when the shot is taken, never from an older layout. */
   async capture(ref: CaptureRef): Promise<Capture> {
     const viewport = this.viewport;
     if (!viewport) throw new CaptureGone("the page has not been synced");

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Geometry } from "./geometry.ts";
+import { resolveGeometry, type Geometry } from "./geometry.ts";
 import type { CaptureRef, SyncedLayout } from "./layout.ts";
 import type { Doc } from "./markdown.ts";
 import { CaptureFailed, CaptureGone, type Capture } from "./page.ts";
@@ -12,8 +12,7 @@ import { GEO } from "./test-geometry.ts";
 
 type Call =
   | { kind: "sync"; doc: Doc; geometry: Geometry; resolve(v: SyncedLayout): void; reject(e: unknown): void }
-  | { kind: "capture"; ref: CaptureRef; resolve(v: Capture): void; reject(e: unknown): void }
-  | { kind: "reset"; resolve(v: void): void; reject(e: unknown): void };
+  | { kind: "capture"; ref: CaptureRef; resolve(v: Capture): void; reject(e: unknown): void };
 
 function fakePage() {
   const unclaimed: Call[] = [];
@@ -26,7 +25,6 @@ function fakePage() {
   const page: PageLike = {
     sync: (doc, geometry) => new Promise((resolve, reject) => push({ kind: "sync", doc, geometry, resolve, reject })),
     capture: (ref) => new Promise((resolve, reject) => push({ kind: "capture", ref, resolve, reject })),
-    reset: () => new Promise((resolve, reject) => push({ kind: "reset", resolve, reject })),
   };
   const next = () =>
     new Promise<Call>((resolve) => {
@@ -41,7 +39,7 @@ function layoutFor(doc: Doc, geometry: Geometry): SyncedLayout {
   let y = 32;
   const blocks = doc.blocks.map((b, i) => {
     if (i > 0) y += 16;
-    const placed = { key: b.key, kind: b.kind, topCss: y, heightCss: 60 };
+    const placed = { key: b.key, topCss: y, heightCss: 60 };
     y += 60;
     return placed;
   });
@@ -102,7 +100,7 @@ describe("Pipeline", () => {
     const sync = await fake.next();
     expect(sync.kind).toBe("sync");
     if (sync.kind !== "sync") return;
-    expect(sync.doc.blocks.map((b) => b.kind)).toEqual(["heading", "other"]);
+    expect(sync.doc.blocks).toHaveLength(2);
     expect(sync.geometry).toBe(GEO);
     sync.resolve(layoutFor(sync.doc, sync.geometry));
     for (let i = 0; i < 2; i++) {
@@ -201,7 +199,11 @@ describe("Pipeline", () => {
     const { pipeline, writes, display } = await setup();
     await display();
     writes.length = 0;
-    pipeline.dispatch({ type: "hardRefresh" });
+    const wider = resolveGeometry({ cols: 90, rows: 51 }, { cellHpx: 20, cellWpx: 10 }, {
+      frameBytes: null,
+      storageBytes: 320_000_000,
+    });
+    pipeline.dispatch({ type: "resize", geometry: wider });
     const out = writes.join("");
     expect(out).toContain("a=d,d=I");
     expect(out.indexOf("a=d,d=I")).toBeGreaterThan(out.indexOf("\x1b[?2026l"));

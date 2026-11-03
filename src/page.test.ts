@@ -72,7 +72,7 @@ afterAll(() => rm(dir, { recursive: true, force: true }));
 
 const doc = (...keys: string[]): Doc => ({
   theme: "light",
-  blocks: keys.map((key) => ({ key, html: `<p>${key}</p>`, kind: "other" })),
+  blocks: keys.map((key) => ({ key, html: `<p>${key}</p>` })),
 });
 
 async function open(): Promise<{ fake: FakeBrowserPage; page: Page }> {
@@ -147,7 +147,7 @@ describe("Page.sync", () => {
     expect(sent(fake)).toEqual(["b"]);
   });
 
-  test("resends the blocks the page says it lost, and everything after a failed sync or a reset", async () => {
+  test("resends the blocks the page says it lost, and everything after a failed sync", async () => {
     const { fake, page } = await open();
     await page.sync(doc("a", "b"), GEO);
     fake.missingOnce = ["b"];
@@ -159,9 +159,5 @@ describe("Page.sync", () => {
     await expect(page.sync(doc("a", "b", "c"), GEO)).rejects.toThrow("evaluation failed");
     await page.sync(doc("a", "b", "c"), GEO);
     expect(sent(fake)).toEqual(["a+html", "b+html", "c+html"]);
-
-    await page.reset();
-    await page.sync(doc("a"), GEO);
-    expect(sent(fake)).toEqual(["a+html"]);
   });
 });

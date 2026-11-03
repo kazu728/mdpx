@@ -12,11 +12,7 @@ const SHOW_CURSOR = `${ESC}[?25h`;
 // CSI 2J wipes stored kitty images; only safe before the first transfer. Later frames use CSI 0J.
 const CLEAR_SCREEN = `${ESC}[2J`;
 
-export type Key =
-  | { type: "quit" }
-  | { type: "theme" }
-  | { type: "refresh" }
-  | { type: "scroll"; delta: ScrollDelta };
+export type Key = { type: "quit" } | { type: "theme" } | { type: "scroll"; delta: ScrollDelta };
 
 const MAX_CELL_PX = 1000;
 
@@ -25,7 +21,6 @@ const GFX_PROBE_ID = 31;
 const KEY_CTRL_C = "\x03";
 const KEY_CTRL_D = "\x04";
 const KEY_CTRL_U = "\x15";
-const KEY_CTRL_R = "\x12";
 const OSC_INTRODUCER = 0x5d;
 const DCS_INTRODUCER = 0x50;
 const APC_INTRODUCER = 0x5f;
@@ -233,21 +228,6 @@ export class Term {
         break;
       case "t":
         this.emit({ type: "theme" });
-        break;
-      case KEY_CTRL_R:
-        this.emit({ type: "refresh" });
-        break;
-      case "j":
-        this.emit({ type: "scroll", delta: { kind: "lines", n: 1 } });
-        break;
-      case "k":
-        this.emit({ type: "scroll", delta: { kind: "lines", n: -1 } });
-        break;
-      case "]":
-        this.emit({ type: "scroll", delta: { kind: "heading", dir: 1 } });
-        break;
-      case "[":
-        this.emit({ type: "scroll", delta: { kind: "heading", dir: -1 } });
         break;
       case " ":
       case KEY_CTRL_D:

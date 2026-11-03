@@ -4,7 +4,6 @@ import {
   anchorAt,
   buildLayout,
   cropOf,
-  headingRows,
   maxTop,
   prefetchOrder,
   topFor,
@@ -14,22 +13,19 @@ import {
   type Slice,
   type SyncedLayout,
 } from "./layout.ts";
-import type { BlockKind } from "./markdown.ts";
 import { GEO } from "./test-geometry.ts";
 
 interface Spec {
   key: string;
   height: number;
   gap?: number;
-  kind?: BlockKind;
 }
 
-/** Stacks blocks the way the page does: 32px of article padding, then each block after its gap. */
 function synced(specs: Spec[], g: Geometry = GEO): SyncedLayout {
   let y = 32;
   const blocks = specs.map((s, i) => {
     if (i > 0) y += s.gap ?? 16;
-    const block = { key: s.key, kind: s.kind ?? "other", topCss: y, heightCss: s.height };
+    const block = { key: s.key, topCss: y, heightCss: s.height };
     y += s.height;
     return block;
   });
@@ -53,11 +49,9 @@ function randomSpecs(random: () => number, count: number): Spec[] {
     key: `b${Math.floor(random() * count)}`,
     height: Math.round(random() * 400 * 100) / 100 + 0.5,
     gap: random() < 0.15 ? Math.round(random() * 15 * 100) / 100 : 16 + Math.round(random() * 24 * 100) / 100,
-    kind: random() < 0.2 ? "heading" : "other",
   }));
 }
 
-/** What the page captures for a slice of a unit whose top is at `unitTopCss` (see Page.capture). */
 function captureAt(slice: Slice, unitTopCss: number, g: Geometry): CapturedImage & { contentTopCss: number; topCss: number } {
   const contentTopCss = unitTopCss + slice.capture.offsetCss;
   const { topCss, bottomCss } = captureClipCss(contentTopCss, slice.capture.lengthCss, g.deviceScaleFactor);
@@ -101,10 +95,10 @@ describe("buildLayout", () => {
       raster: g.raster,
       theme: "light",
       blocks: [
-        { key: "logo", kind: "other", topCss: 32, heightCss: 240 },
-        { key: "title", kind: "heading", topCss: 32, heightCss: 40 },
-        { key: "intro", kind: "other", topCss: 88, heightCss: 24 },
-        { key: "after", kind: "other", topCss: 300, heightCss: 24 },
+        { key: "logo", topCss: 32, heightCss: 240 },
+        { key: "title", topCss: 32, heightCss: 40 },
+        { key: "intro", topCss: 88, heightCss: 24 },
+        { key: "after", topCss: 300, heightCss: 24 },
       ],
       docHeightCss: 356,
     };
@@ -168,7 +162,6 @@ describe("visiblePlacements", () => {
             rowsSeen.add(p.screenRow + r);
           }
           expect(p.screenRow + p.rows).toBeLessThanOrEqual(g.viewRows);
-          // No stretching: the crop is exactly as tall as the rows it fills, give or take rounding.
           expect(Math.abs(p.sourceHImgPx - p.rows * cellHpx * renderScale)).toBeLessThanOrEqual(1);
           const oldSlice = before.slices.get(p.imageKey);
           if (!oldSlice) continue;
@@ -227,11 +220,6 @@ describe("anchors", () => {
     const removed = layoutOf(doc);
     expect(topFor(removed, anchorAt(before, 30), GEO.viewRows, 30)).toBe(30);
     expect(topFor(removed, { block: { key: "gone", occurrence: 0 }, offset: 0 }, GEO.viewRows, 7)).toBe(7);
-  });
-
-  test("heading rows are where heading units start", () => {
-    const l = layoutOf([{ key: "h", height: 40, kind: "heading" }, { key: "p", height: 40 }, { key: "h2", height: 40, kind: "heading" }]);
-    expect(headingRows(l)).toEqual([l.units[0]!.rowStart, l.units[2]!.rowStart]);
   });
 });
 

@@ -81,7 +81,6 @@ async function runApp(mdPath: string): Promise<void> {
     if (k.type === "quit") return void shutdown(0);
     if (!started) return;
     if (k.type === "theme") return started.toggleTheme();
-    if (k.type === "refresh") return started.dispatch({ type: "hardRefresh" });
     started.dispatch({ type: "key", delta: k.delta });
   });
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => void shutdown(0));

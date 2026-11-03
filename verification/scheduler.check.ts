@@ -1,44 +1,23 @@
-/**
- * Exhaustive, bounded model check of the real Scheduler (src/scheduler.ts).
- *
- * The page, the terminal and the user are modeled as an environment that may do anything
- * in any order: save one of a few documents, answer or fail the pending sync, deliver or fail
- * the capture in flight, press keys, resize, refresh. Every reachable state of
- * (scheduler, environment) is explored breadth first, up to a depth, and every transition is
- * checked against the properties below. A violation prints the shortest sequence of events
- * that reaches it.
- *
- * Usage: bun verification/scheduler.check.ts [--depth N]
- */
 import { CELL_CSS_PX, maxSliceImagePx, resolveGeometry, type Geometry } from "../src/geometry.ts";
 import { visibleImageKeys, type Layout, type SyncedLayout } from "../src/layout.ts";
-import type { BlockKind } from "../src/markdown.ts";
 import { Scheduler, type Action, type ScrollDelta, type SchedulerEvent } from "../src/scheduler.ts";
 
 interface Spec {
   key: string;
   height: number;
   gap?: number;
-  kind?: BlockKind;
 }
 
-/** Documents the file may hold. Together they insert, edit, delete, duplicate, merge and slice blocks. */
 const DOCS: Spec[][] = [
-  [{ key: "A", height: 30, kind: "heading" }, { key: "B", height: 60 }, { key: "C", height: 30 }, { key: "T", height: 100 }],
-  [{ key: "N", height: 40 }, { key: "A", height: 30, kind: "heading" }, { key: "B", height: 60 }, { key: "C", height: 30 }, { key: "T", height: 100 }],
-  [{ key: "A", height: 30, kind: "heading" }, { key: "B2", height: 60 }, { key: "C", height: 30, gap: 4 }, { key: "T", height: 100 }],
-  [{ key: "A", height: 30, kind: "heading" }, { key: "C", height: 30 }, { key: "A", height: 30, kind: "heading" }, { key: "T", height: 100 }],
+  [{ key: "A", height: 30 }, { key: "B", height: 60 }, { key: "C", height: 30 }, { key: "T", height: 100 }],
+  [{ key: "N", height: 40 }, { key: "A", height: 30 }, { key: "B", height: 60 }, { key: "C", height: 30 }, { key: "T", height: 100 }],
+  [{ key: "A", height: 30 }, { key: "B2", height: 60 }, { key: "C", height: 30, gap: 4 }, { key: "T", height: 100 }],
+  [{ key: "A", height: 30 }, { key: "C", height: 30 }, { key: "A", height: 30 }, { key: "T", height: 100 }],
   [{ key: "C", height: 30 }],
 ];
 
-/** Slices of three rows, so the 100px block needs several. */
 const SLICE_ROWS = 3;
 
-/**
- * Terminal storage, in images of the tallest slice. "tight" cannot hold two screens of every
- * document, so it evicts constantly and some updates must give up; "roomy" holds two screens,
- * the most an update needs, so every update must also get through.
- */
 const STORAGE = { tight: 4, roomy: 9 } as const;
 type Storage = keyof typeof STORAGE;
 
@@ -49,7 +28,6 @@ function screen(cols: number, rows: number, storage: Storage): Geometry {
   return { ...g, raster, storageBytes: largestSlice * STORAGE[storage] };
 }
 
-/** The screens the terminal may have: a base, one with more rows, one wider. */
 let SCREENS: Geometry[] = [];
 
 const KEYS: ScrollDelta[] = [
@@ -58,14 +36,13 @@ const KEYS: ScrollDelta[] = [
   { kind: "halfpage", dir: 1 },
   { kind: "top" },
   { kind: "bottom" },
-  { kind: "heading", dir: 1 },
 ];
 
 function synced(doc: Spec[], g: Geometry): SyncedLayout {
   let y = 32;
   const blocks = doc.map((s, i) => {
     if (i > 0) y += s.gap ?? CELL_CSS_PX;
-    const b = { key: s.key, kind: s.kind ?? ("other" as BlockKind), topCss: y, heightCss: s.height };
+    const b = { key: s.key, topCss: y, heightCss: s.height };
     y += s.height;
     return b;
   });
@@ -79,7 +56,6 @@ interface Env {
   screen: number;
   sync: { screen: number } | null;
   capture: CaptureAction | null;
-  /** Images the terminal holds: id -> bytes. */
   terminal: Map<number, number>;
   holeAllowed: boolean;
 }
@@ -136,11 +112,6 @@ function layoutName(l: Layout | null): string {
   return name;
 }
 
-/**
- * Identifies a state up to renaming of image ids, which the scheduler only compares and
- * allocates fresh. Marks, latency and the clock are left out: they only feed the status line
- * and the wake-up time, never a decision.
- */
 function stateKey(w: World): string {
   const f = fieldsOf(w.s);
   const ids = new Set<number>();
@@ -195,8 +166,6 @@ function perform(w: World, actions: Action[]): void {
           w.env.terminal.delete(id);
         }
         break;
-      case "resetPage":
-        break;
     }
   }
 }
@@ -216,11 +185,11 @@ function crowded(w: World): boolean {
 }
 
 function dispatch(w: World, event: SchedulerEvent): void {
-  const before = w.s.view();
+  const idsBefore = new Map([...fieldsOf(w.s).images].map(([key, e]) => [key, e.id]));
   const step = w.s.dispatch(event);
   const after = w.s.view();
   if (after.shown) {
-    const showing = new Map([...visibleImageKeys(after.shown, after.top, after.geometry.viewRows)].map((k) => [before.images.get(k)?.id, k]));
+    const showing = new Map([...visibleImageKeys(after.shown, after.top, after.geometry.viewRows)].map((k) => [idsBefore.get(k), k]));
     for (const a of step.actions) {
       if (a.type !== "evict") continue;
       for (const id of a.ids) {
@@ -335,11 +304,9 @@ function moves(w: World): Move[] {
       },
     });
   });
-  out.push({ label: "Ctrl-R", apply: (x) => dispatch(x, { type: "hardRefresh", at }) });
   return out;
 }
 
-/** Liveness: after one more save, answering everything without failure shows the current doc. */
 function converges(start: World): string | null {
   const w = clone(start);
   dispatch(w, { type: "fileChanged", at: 0 });

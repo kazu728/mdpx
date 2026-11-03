@@ -38,11 +38,6 @@ describe("Term", () => {
     ["q", QUIT],
     ["\x03", QUIT],
     ["t", { type: "theme" }],
-    ["\x12", { type: "refresh" }],
-    ["j", lines(1)],
-    ["k", lines(-1)],
-    ["]", { type: "scroll", delta: { kind: "heading", dir: 1 } }],
-    ["[", { type: "scroll", delta: { kind: "heading", dir: -1 } }],
     [`${ESC}[B`, lines(1)],
     [`${ESC}[A`, lines(-1)],
     [`${ESC}OB`, lines(1)],
@@ -66,8 +61,8 @@ describe("Term", () => {
 
     test("keys arriving together in one read are all handled in order", () => {
       const t = terminal();
-      t.input(`jk ${ESC}[A${ESC}OB`);
-      expect(t.keys).toEqual([lines(1), lines(-1), halfpage(1), lines(-1), lines(1)]);
+      t.input(`t ${ESC}[A${ESC}OB`);
+      expect(t.keys).toEqual([{ type: "theme" }, halfpage(1), lines(-1), lines(1)]);
     });
 
     test("a sequence split across reads is reassembled", () => {
@@ -90,7 +85,7 @@ describe("Term", () => {
 
     test("terminal replies and string payloads never fire keys", () => {
       const t = terminal();
-      t.input(`${ESC}_Gi=31;quit-jkgG${ESC}\\${ESC}]0;jk\x07${ESC}[6;31;14t${ESC}[?62;cq`);
+      t.input(`${ESC}_Gi=31;quit-gG${ESC}\\${ESC}]0;gG\x07${ESC}[6;31;14t${ESC}[?62;cq`);
       expect(t.keys).toEqual([QUIT]);
       t.input(`${ESC}Pq${ESC}\\${ESC}[6;31;14tq`);
       expect(t.keys).toEqual([QUIT, QUIT]);

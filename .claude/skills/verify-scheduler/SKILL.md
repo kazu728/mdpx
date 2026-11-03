@@ -26,7 +26,7 @@ Each property, with the harm when it breaks:
 | With room for two screens, one more save followed by answers without failure shows the current document, covered, status idle | an edit never reaches the screen |
 
 The world: 5 documents (insert at the top, edit, delete with a duplicate, two blocks merged into
-one unit, a block cut into 3 slices), 3 screens (base, more rows, wider), 6 keys, Ctrl-R, and a
+one unit, a block cut into 3 slices), 3 screens (base, more rows, wider), 5 keys, and a
 page that may answer a sync at the old or the new screen, fail it, deliver a capture, or fail it
 as "blocks moved" or as a content error. It runs twice: storage for 4 slices, which evicts
 constantly and must stay safe, and storage for 9, which must also let every update through.
@@ -45,14 +45,14 @@ than the depth. A pass covers that world and depth, not the whole program.
 bun run verify
 ```
 
-The default depth is 8 (about 20 seconds; every order of up to 8 events). Before merging a
+The default depth is 8 (about 10 seconds; every order of up to 8 events). Before merging a
 scheduler change, go deeper:
 
 ```sh
 bun run verify --depth 10
 ```
 
-Depth 10 explores about 800,000 states in about 3 minutes per storage setting. Exit status 0
+Depth 10 explores up to about 630,000 states per storage setting, in about 2 minutes in total. Exit status 0
 means every property held; 1 means a violation, printed with the shortest event sequence that
 reaches it, for example:
 
@@ -95,7 +95,7 @@ against the copy, confirm it reports the violation, and discard the copy.
 | Check | Code it covers |
 | --- | --- |
 | all properties | `Scheduler` in `src/scheduler.ts`: `dispatch`, `view`, and every private method |
-| visibility and anchors | `buildLayout`, `visibleImageKeys`, `maxTop`, `clampTop`, `anchorAt`, `topFor`, `headingRows`, `prefetchOrder` in `src/layout.ts` |
+| visibility and anchors | `buildLayout`, `visibleImageKeys`, `maxTop`, `clampTop`, `anchorAt`, `topFor`, `prefetchOrder` in `src/layout.ts` |
 | screens | `resolveGeometry`, `sameRaster`, `maxSliceImagePx`, `maxSliceImageRows`, `captureGridCss` in `src/geometry.ts` (and `Theme` in `src/theme.ts`, by type only) |
 
 Last confirmed against the code at commit `4eae94b`. When any covered code has changed since

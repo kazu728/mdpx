@@ -1,21 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { maxSliceImagePx, resolveGeometry, type Geometry } from "./geometry.ts";
 import { maxTop, visibleImageKeys, type SyncedLayout } from "./layout.ts";
-import type { BlockKind } from "./markdown.ts";
 import { MARK_MS, Scheduler, type Action, type ScrollDelta, type SchedulerEvent, type Step } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
 
 interface Spec {
   key: string;
   height: number;
-  kind?: BlockKind;
 }
 
 function synced(specs: readonly Spec[], g: Geometry): SyncedLayout {
   let y = 32;
   const blocks = specs.map((s, i) => {
     if (i > 0) y += 16;
-    const block = { key: s.key, kind: s.kind ?? ("other" as BlockKind), topCss: y, heightCss: s.height };
+    const block = { key: s.key, topCss: y, heightCss: s.height };
     y += s.height;
     return block;
   });
@@ -33,10 +31,8 @@ class Session {
   doc: Spec[] = [];
   t = 0;
   syncs = 0;
-  resets = 0;
   captures: CaptureAction[] = [];
   captured: string[] = [];
-  /** What the terminal holds: id -> bytes. */
   terminal = new Map<number, number>();
   usedIds = new Set<number>();
   last: Step = { actions: [], wakeAt: null };
@@ -55,7 +51,6 @@ class Session {
     const step = this.s.dispatch(event);
     for (const a of step.actions) {
       if (a.type === "sync") this.syncs++;
-      else if (a.type === "resetPage") this.resets++;
       else if (a.type === "evict") for (const id of a.ids) this.terminal.delete(id);
       else {
         expect(this.usedIds.has(a.id)).toBe(false);
@@ -259,7 +254,6 @@ describe("scrolling", () => {
     t.save(paragraphs(80));
     t.deliverAll();
     t.key({ kind: "bottom" });
-    // Prefetching filled only part of the storage, so the end still has to be captured.
     expect(t.captures.length).toBe(1);
     expect(t.view.status).toBe("scrolling");
     expect(t.view.top).toBe(0);
@@ -280,23 +274,6 @@ describe("scrolling", () => {
     expect(s.view.top).toBe(maxTop(s.view.shown!, GEO.viewRows));
     s.key({ kind: "lines", n: -1 });
     expect(s.view.follow).toBe(false);
-  });
-
-  test("] and [ jump between headings", () => {
-    const s = new Session();
-    const doc: Spec[] = [];
-    for (let i = 0; i < 6; i++) doc.push({ key: `h${i}`, height: 40, kind: "heading" }, ...paragraphs(8, `s${i}-`));
-    s.save(doc);
-    s.deliverAll();
-    const rows = s.view.shown!.units.filter((u) => u.heading).map((u) => u.rowStart);
-    expect(rows[0]).toBeGreaterThan(0);
-    s.key({ kind: "heading", dir: 1 });
-    s.key({ kind: "heading", dir: 1 });
-    s.deliverAll();
-    expect(s.view.top).toBe(rows[1]!);
-    s.key({ kind: "heading", dir: -1 });
-    s.deliverAll();
-    expect(s.view.top).toBe(rows[0]!);
   });
 
   test("storage holds across a long scroll: far images are evicted, the visible ones never", () => {
@@ -415,17 +392,6 @@ describe("resizes and failures", () => {
     s.deliverAll();
     expect(s.view.status).toBe("idle");
   });
-
-  test("a hard refresh evicts everything, resets the page and draws again", () => {
-    const s = new Session();
-    s.save(paragraphs(3));
-    s.deliverAll();
-    s.send({ type: "hardRefresh", at: s.tick() });
-    expect(s.terminal.size).toBe(0);
-    expect(s.resets).toBe(1);
-    s.deliverAll();
-    expect(s.covered()).toBe(true);
-  });
 });
 
 describe("random interleavings", () => {
@@ -441,7 +407,6 @@ describe("random interleavings", () => {
     for (let seed = 1; seed <= 90; seed++) {
       const random = rng(seed);
       const pick = <T,>(xs: readonly T[]) => xs[Math.floor(random() * xs.length)]!;
-      // 4MB cannot hold two screens, so updates may give up; 12MB can, and still forces eviction.
       const storage = seed % 3 === 0 ? 4_000_000 : pick([12_000_000, 320_000_000]);
       const s = new Session(withStorage(storage));
       let doc = paragraphs(20 + Math.floor(random() * 40), "p", 40);
@@ -468,11 +433,9 @@ describe("random interleavings", () => {
             { kind: "halfpage", dir: -1 },
             { kind: "top" },
             { kind: "bottom" },
-            { kind: "heading", dir: 1 },
           ]));
         } else if (r < 0.9) s.resize({ cols: 80, rows: 20 + Math.floor(random() * 40) });
         else if (r < 0.92) s.resize({ cols: pick([70, 80, 90]), rows: 51 });
-        else if (r < 0.93) s.send({ type: "hardRefresh", at: s.tick() });
         else s.send({ type: "tick", at: s.tick(500) });
       }
       s.save(doc);

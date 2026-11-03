@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 import { CELL_CSS_PX, maxSliceImagePx, type Geometry, type RasterSpec } from "./geometry.ts";
-import type { BlockKind } from "./markdown.ts";
 import type { Theme } from "./theme.ts";
 
 export interface PlacedBlock {
   readonly key: string;
-  readonly kind: BlockKind;
   readonly topCss: number;
   readonly heightCss: number;
 }
@@ -17,17 +15,14 @@ export interface SyncedLayout {
   readonly docHeightCss: number;
 }
 
-/** The nth block with this key, in document order. */
 export interface BlockRef {
   readonly key: string;
   readonly occurrence: number;
 }
 
-/** What to screenshot: part of the run of blocks from first to last, in CSS px from its top. */
 export interface CaptureRef {
   readonly first: BlockRef;
   readonly last: BlockRef;
-  /** The run's height when laid out. The page refuses a capture once the run has another height. */
   readonly runHeightImgPx: number;
   readonly offsetCss: number;
   readonly lengthCss: number;
@@ -47,14 +42,8 @@ export interface Slice {
   readonly maxBytes: number;
 }
 
-/**
- * A run of blocks with at least one row of blank page above and below it. A row on screen
- * that shows the unit never reaches past that blank page, so its slices show the same pixels
- * whichever row phase the unit lands on, and units never share a terminal row.
- */
 export interface Unit {
   readonly members: readonly BlockRef[];
-  readonly heading: boolean;
   readonly topScreenPx: number;
   readonly rowStart: number;
   readonly rowEnd: number;
@@ -75,15 +64,10 @@ export interface Placement {
   readonly unit: number;
   readonly screenRow: number;
   readonly rows: number;
-  /** Image px from the slice's first content row to the first row shown; negative above it. */
   readonly offsetImgPx: number;
   readonly sourceHImgPx: number;
 }
 
-/**
- * The image holds at least one row of page around its content, so the crop stays inside it
- * whatever row phase the content has now.
- */
 export function cropOf(p: Placement, image: CapturedImage): { y: number; h: number } {
   const h = Math.min(p.sourceHImgPx, image.heightImgPx);
   const y = Math.round(image.contentTopImgPx + p.offsetImgPx);
@@ -92,7 +76,6 @@ export function cropOf(p: Placement, image: CapturedImage): { y: number; h: numb
 
 export interface Anchor {
   readonly block: BlockRef;
-  /** Rows from the anchored unit's first row to the top of the view; negative inside the gap above it. */
   readonly offset: number;
 }
 
@@ -162,7 +145,6 @@ export function buildLayout(synced: SyncedLayout, g: Geometry): Layout {
     });
     return {
       members,
-      heading: blocks[0]!.kind === "heading",
       topScreenPx,
       rowStart,
       rowEnd,
@@ -232,10 +214,6 @@ export function topFor(layout: Layout, anchor: Anchor | null, viewRows: number, 
     }
   }
   return clampTop(layout, best ? best.unit.rowStart + anchor.offset : fallback, viewRows);
-}
-
-export function headingRows(layout: Layout): number[] {
-  return layout.units.filter((u) => u.heading).map((u) => u.rowStart);
 }
 
 export function prefetchOrder(

@@ -12,7 +12,7 @@ function layoutOf(keys: string[], g = GEO, theme: "light" | "dark" = "light"): L
   let y = 32;
   const blocks = keys.map((key, i) => {
     if (i > 0) y += 16;
-    const b = { key, kind: "other" as const, topCss: y, heightCss: 60 };
+    const b = { key, topCss: y, heightCss: 60 };
     y += 60;
     return b;
   });

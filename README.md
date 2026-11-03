@@ -26,12 +26,9 @@ mdpx <file.md>
 
 | Key | Action |
 | --- | --- |
-| `j` `k` ↑ ↓ wheel | one line |
 | Space `Ctrl-D` `Ctrl-U` | half page |
 | `g` `G` | top / bottom (`G` follows the end as the file grows) |
-| `]` `[` | next / previous heading |
 | `t` | toggle theme |
-| `Ctrl-R` | redraw everything |
 
 The status line shows how long the last save took to reach the screen. Blocks that
 changed in the last save are marked in the left column for a moment, and text added
