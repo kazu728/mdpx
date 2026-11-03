@@ -311,6 +311,32 @@ describe("scrolling", () => {
     }
   });
 
+  test("when the old and the new screen do not fit together, the old one gives way and the update lands", () => {
+    const g = withStorage(5_000_000);
+    const s = new Session(g);
+    s.save(paragraphs(40, "old-"));
+    s.deliverAll();
+    s.save(paragraphs(40, "new-"));
+    s.deliverAll();
+    expect(s.view.shown!.blockKeys[0]).toBe("new-0");
+    expect(s.view.status).toBe("idle");
+    expect(s.covered()).toBe(true);
+  });
+
+  test("an update that does not fit even alone keeps the old screen whole", () => {
+    const g = withStorage(3_000_000);
+    const s = new Session(g);
+    s.save(paragraphs(3, "p", 30));
+    s.deliverAll();
+    const held = [...s.view.images.values()].map((i) => i.id);
+    s.save([{ key: "huge", height: 3000 }]);
+    s.deliverAll();
+    const ids = [...s.view.images.values()].map((i) => i.id);
+    expect(held.every((id) => ids.includes(id))).toBe(true);
+    expect(s.covered()).toBe(true);
+    expect(s.view.status).toBe("update failed");
+  });
+
   test("a move the storage cannot hold is abandoned without dropping the display", () => {
     const g = withStorage(3_000_000);
     const s = new Session(g);

@@ -204,6 +204,22 @@ function perform(w: World, actions: Action[]): void {
   }
 }
 
+/** Bytes the slices visible in these screens can take, each slice counted once. */
+function screensBytes(screens: { layout: Layout; top: number }[], viewRows: number): number {
+  const slices = new Map<string, number>();
+  for (const { layout, top } of screens) {
+    for (const key of visibleImageKeys(layout, top, viewRows)) slices.set(key, layout.slices.get(key)!.maxBytes);
+  }
+  return [...slices.values()].reduce((a, b) => a + b, 0);
+}
+
+/** The old screen and the target do not fit in storage together, so the old one may give way. */
+function crowded(w: World): boolean {
+  const v = w.s.view();
+  if (!v.shown || !v.target) return false;
+  return screensBytes([{ layout: v.shown, top: v.top }, v.target], v.geometry.viewRows) > v.geometry.storageBytes;
+}
+
 function dispatch(w: World, event: SchedulerEvent): void {
   const before = w.s.view();
   const step = w.s.dispatch(event);
@@ -212,7 +228,11 @@ function dispatch(w: World, event: SchedulerEvent): void {
     const showing = new Map([...visibleImageKeys(after.shown, after.top, after.geometry.viewRows)].map((k) => [before.images.get(k)?.id, k]));
     for (const a of step.actions) {
       if (a.type !== "evict") continue;
-      for (const id of a.ids) if (showing.has(id)) throw new Violation(`evicted ${showing.get(id)}, which stays on screen`);
+      for (const id of a.ids) {
+        if (!showing.has(id)) continue;
+        if (!crowded(w)) throw new Violation(`evicted ${showing.get(id)}, which stays on screen, though the old screen and the target fit together`);
+        w.env.holeAllowed = true;
+      }
     }
   }
   perform(w, step.actions);
@@ -222,9 +242,19 @@ function dispatch(w: World, event: SchedulerEvent): void {
 
 function checkState(w: World): void {
   if (!w.env.holeAllowed && !covered(w)) throw new Violation("the screen shows a block whose image is not in the terminal");
-  const status = w.s.view().status;
-  if (!w.env.sync && !w.env.capture && (status === "scrolling" || status === "updating" || status === "rendering")) {
+  const v = w.s.view();
+  const status = v.status;
+  const idle = !w.env.sync && !w.env.capture;
+  if (idle && (status === "scrolling" || status === "updating" || status === "rendering")) {
     throw new Violation(`nothing is in flight, yet the status says "${status}": that work never happens`);
+  }
+  if (idle && v.shown && !covered(w)) {
+    const failed = fieldsOf(w.s).failedKeys;
+    const visible = visibleImageKeys(v.shown, v.top, v.geometry.viewRows);
+    const tooBig = screensBytes([{ layout: v.shown, top: v.top }], v.geometry.viewRows) > v.geometry.storageBytes;
+    if (!tooBig && ![...visible].some((k) => !v.images.has(k) && failed.has(k))) {
+      throw new Violation("nothing is in flight, yet a block on screen has no image: the hole is never filled");
+    }
   }
   const g = w.s.view().geometry;
   let used = 0;

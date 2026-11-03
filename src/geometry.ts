@@ -51,15 +51,17 @@ export const GUTTER_COLS = 1;
 const MAX_IMAGE_PX = 4096;
 
 /**
- * Screenshots start and end on this CSS px grid. Puppeteer rounds a clip to whole CSS px, and
- * a multiple of one cell (two when a downscaled cell is an odd number of px) is also a whole
- * number of image px, so the image lands exactly where it was asked to.
+ * Screenshots start and end on this CSS px grid: the finest step that is also a whole number of
+ * image px, since puppeteer rounds a clip to whole CSS px. With 28px cells that is 4 CSS px; with
+ * odd cells it is a whole row, or two rows for a downscaled odd cell.
  */
 export function captureGridCss(deviceScaleFactor: number): number {
-  return CELL_CSS_PX * (Number.isInteger(CELL_CSS_PX * deviceScaleFactor) ? 1 : 2);
+  let step = 1;
+  while (step < 2 * CELL_CSS_PX && !Number.isInteger(step * deviceScaleFactor)) step *= 2;
+  return step;
 }
 
-/** What to screenshot for a slice: its content rounded out to the grid, plus one more grid step of page above and below. */
+/** What to screenshot for a slice: its content and one row of page above and below, rounded out to the grid. */
 export function captureClipCss(
   contentTopCss: number,
   lengthCss: number,
@@ -67,28 +69,22 @@ export function captureClipCss(
 ): { topCss: number; bottomCss: number } {
   const grid = captureGridCss(deviceScaleFactor);
   return {
-    topCss: Math.floor(contentTopCss / grid) * grid - grid,
-    bottomCss: Math.ceil((contentTopCss + lengthCss) / grid) * grid + grid,
+    topCss: Math.floor((contentTopCss - CELL_CSS_PX) / grid) * grid,
+    bottomCss: Math.ceil((contentTopCss + lengthCss + CELL_CSS_PX) / grid) * grid,
   };
 }
 
-/** The most rows `captureClipCss` can span for content of `contentRows` rows, wherever it sits on the grid. */
-export function maxSliceImageRows(contentRows: number, gridRows: number): number {
-  return (Math.ceil(contentRows / gridRows) + 3) * gridRows;
-}
 
 /** The tallest image a slice of `lengthCss` can have. */
-export function maxSliceImagePx(lengthCss: number, raster: RasterSpec): number {
-  const gridRows = captureGridCss((raster.renderScale * raster.cellHpx) / CELL_CSS_PX) / CELL_CSS_PX;
-  const rows = maxSliceImageRows(Math.ceil(lengthCss / CELL_CSS_PX), gridRows);
-  return Math.ceil(rows * raster.cellHpx * raster.renderScale);
+export function maxSliceImagePx(lengthCss: number, raster: Pick<RasterSpec, "cellHpx" | "renderScale">): number {
+  const deviceScaleFactor = (raster.renderScale * raster.cellHpx) / CELL_CSS_PX;
+  const grid = captureGridCss(deviceScaleFactor);
+  return Math.round((Math.ceil((lengthCss + 2 * CELL_CSS_PX) / grid) + 1) * grid * deviceScaleFactor);
 }
 
 export const FULL_SCALE = 1;
 const REDUCED_SCALE = 0.5;
 
-/** An update keeps the old screen's images until the new screen's are in. */
-const SCREENS_HELD_IN_AN_UPDATE = 2;
 
 const HERDR_RELAY: GraphicsLimits = {
   frameBytes: 32 * 1024 * 1024 - 2 * 1024 * 1024,
@@ -110,18 +106,25 @@ interface Plan {
 }
 
 /**
+ * The shortest common block in GitHub's CSS, one 24px line of text, plus its 16px margin.
+ * Screens of shorter blocks (runs of horizontal rules) can need more than screenImageBytes.
+ */
+const MIN_BLOCK_PITCH_CSS = 40;
+
+/**
  * The most image bytes one screen can need: its visible rows, the hidden part of the slice cut
- * by each edge of the view, and the page captured around each visible slice. Assumes blocks at
- * least one row tall, as GitHub's are, so units start at least two rows apart.
+ * by each edge of the view, and the page captured around each visible slice.
  */
 export function screenImageBytes(
   imgWidthPx: number,
   raster: Pick<RasterSpec, "cellHpx" | "renderScale" | "sliceRows">,
   viewRows: number,
 ): number {
-  const gridRows = captureGridCss((raster.renderScale * raster.cellHpx) / CELL_CSS_PX) / CELL_CSS_PX;
-  const slices = Math.ceil(viewRows / 2) + 2 + Math.floor(viewRows / raster.sliceRows);
-  const rows = viewRows + 2 * raster.sliceRows + 4 * gridRows * slices;
+  const grid = captureGridCss((raster.renderScale * raster.cellHpx) / CELL_CSS_PX);
+  const slices =
+    Math.ceil((viewRows * CELL_CSS_PX) / MIN_BLOCK_PITCH_CSS) + 2 + Math.floor(viewRows / raster.sliceRows);
+  const aroundEachCss = 2 * CELL_CSS_PX + 2 * grid;
+  const rows = viewRows + 2 * raster.sliceRows + (slices * aroundEachCss) / CELL_CSS_PX;
   return imgWidthPx * Math.ceil(rows * raster.cellHpx * raster.renderScale) * 4;
 }
 
@@ -129,10 +132,11 @@ export function screenImageBytes(
 function plansAt(widthPx: number, cellHpx: number, renderScale: number, limits: GraphicsLimits): Plan[] {
   const imgWidthPx = Math.max(1, Math.round(widthPx * renderScale));
   const cellImg = cellHpx * renderScale;
-  const quantum = captureGridCss((renderScale * cellHpx) / CELL_CSS_PX) / CELL_CSS_PX;
+  // Slices must end on the grid, so with a two-row grid they are an even number of rows.
+  const quantum = Math.max(1, captureGridCss(cellImg / CELL_CSS_PX) / CELL_CSS_PX);
   const plans: Plan[] = [];
   for (let rows = Math.floor(MAX_IMAGE_PX / cellImg / quantum) * quantum; rows >= quantum; rows -= quantum) {
-    const h = maxSliceImageRows(rows, quantum) * cellImg;
+    const h = maxSliceImagePx(rows * CELL_CSS_PX, { cellHpx, renderScale });
     if (h > MAX_IMAGE_PX) continue;
     if (limits.frameBytes !== null && transferSize(imgWidthPx * h * 4) > limits.frameBytes) continue;
     plans.push({ renderScale, imgWidthPx, sliceRows: rows });
@@ -141,14 +145,13 @@ function plansAt(widthPx: number, cellHpx: number, renderScale: number, limits: 
 }
 
 /**
- * The tallest slices at full scale that leave room for an update, then the same at reduced
- * scale (the relay only). When nothing leaves room, the plan that needs the least, so that as
- * few updates as possible have to give up.
+ * The tallest slices at full scale that one screen fits in; at reduced scale (the relay only)
+ * just when no screen fits at full scale. When nothing fits, the plan that needs the least.
  */
 function resolvePlan(widthPx: number, cellHpx: number, viewRows: number, limits: GraphicsLimits): Plan {
   const scales = limits.frameBytes === null ? [FULL_SCALE] : [FULL_SCALE, REDUCED_SCALE];
   const need = (p: Plan) =>
-    SCREENS_HELD_IN_AN_UPDATE * screenImageBytes(p.imgWidthPx, { cellHpx, renderScale: p.renderScale, sliceRows: p.sliceRows }, viewRows);
+    screenImageBytes(p.imgWidthPx, { cellHpx, renderScale: p.renderScale, sliceRows: p.sliceRows }, viewRows);
   const candidates = scales.map((scale) => plansAt(widthPx, cellHpx, scale, limits));
   for (const plans of candidates) {
     const fit = plans.find((p) => need(p) <= limits.storageBytes);

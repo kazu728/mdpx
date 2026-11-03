@@ -55,6 +55,12 @@ export interface ResidentImage extends CapturedImage {
   readonly id: number;
 }
 
+/** What the scheduler is fetching images for: an update, or a scroll of the shown layout. */
+export interface Target {
+  readonly layout: Layout;
+  readonly top: number;
+}
+
 export interface ViewState {
   readonly geometry: Geometry;
   readonly shown: Layout | null;
@@ -65,6 +71,7 @@ export interface ViewState {
   readonly follow: boolean;
   readonly status: Status;
   readonly latencyMs: number | null;
+  readonly target: Target | null;
 }
 
 export const MARK_MS = 1500;
@@ -81,12 +88,13 @@ interface ImageEntry {
  * Invariants:
  * - At most one sync and one capture in flight.
  * - `shown` is replaced only by a layout whose visible slices are all resident at the top it
- *   will show, so the screen never shows a hole for a block it has.
+ *   will show. The screen shows a hole only after a resize, or when the old screen and the
+ *   target do not fit in storage together and the old one gives way; holes are filled again.
  * - Ids are allocated here only and never reused. A resident id is in `images` exactly while
  *   the terminal holds it, and is evicted with an action before its entry goes. A capture
  *   forgotten in flight (by a resize or a refresh) is evicted when it lands.
  * - Resident and in-flight bytes stay within the terminal's storage. A slice visible in
- *   `shown` is never evicted.
+ *   `shown` is evicted only to give way to the target.
  * - Images are keyed by content, not by version: a new layout reuses every slice whose key
  *   survived, and undoing an edit finds the old pixels if they were not evicted.
  */
@@ -178,6 +186,7 @@ export class Scheduler {
       follow: this.follow,
       status: this.status(),
       latencyMs: this.latencyMs,
+      target: this.target(),
     };
   }
 
@@ -331,20 +340,24 @@ export class Scheduler {
     }
   }
 
+  private target(): Target | null {
+    if (this.next) return { layout: this.next, top: this.topForNext(this.next) };
+    if (this.shown && this.pendingTop !== null) return { layout: this.shown, top: this.pendingTop };
+    return null;
+  }
+
+  private missingVisible(target: Target): string | undefined {
+    return [...visibleImageKeys(target.layout, target.top, this.viewRows)].find((key) => !this.images.get(key)?.image);
+  }
+
   private fetch(): void {
     if (this.capturing || this.awaitingFreshSync) return;
-    const target = this.next
-      ? { layout: this.next, top: this.topForNext(this.next) }
-      : this.shown && this.pendingTop !== null
-        ? { layout: this.shown, top: this.pendingTop }
-        : null;
+    const target = this.target();
     if (target) {
-      const missing = [...visibleImageKeys(target.layout, target.top, this.viewRows)].find(
-        (key) => !this.images.get(key)?.image,
-      );
+      const missing = this.missingVisible(target);
       if (missing === undefined) return;
       const slice = target.layout.slices.get(missing)!;
-      if (!this.failedKeys.has(missing) && this.makeRoom(slice.maxBytes, this.protectedKeys(target))) {
+      if (!this.failedKeys.has(missing) && (this.makeRoom(slice.maxBytes, this.protectedKeys(target)) || this.giveWay(target, slice))) {
         this.capture(slice);
       } else {
         this.giveUp(target.layout);
@@ -355,7 +368,7 @@ export class Scheduler {
     if (this.shown) this.prefetch(this.shown);
   }
 
-  private protectedKeys(target: { layout: Layout; top: number } | null): Set<string> {
+  private protectedKeys(target: Target | null): Set<string> {
     const keep = this.shown ? visibleImageKeys(this.shown, this.top, this.viewRows) : new Set<string>();
     if (target) for (const key of visibleImageKeys(target.layout, target.top, this.viewRows)) keep.add(key);
     return keep;
@@ -371,7 +384,24 @@ export class Scheduler {
     }
   }
 
+  /**
+   * When the old screen and the target do not both fit, the old screen's images go, so the
+   * target can land; pointless when the target alone does not fit.
+   */
+  private giveWay(target: Target, slice: Slice): boolean {
+    const keys = visibleImageKeys(target.layout, target.top, this.viewRows);
+    let bytes = 0;
+    for (const key of keys) bytes += target.layout.slices.get(key)!.maxBytes;
+    return bytes <= this.geometry.storageBytes && this.makeRoom(slice.maxBytes, keys);
+  }
+
   private prefetch(shown: Layout): void {
+    const hole = this.missingVisible({ layout: shown, top: this.top });
+    if (hole !== undefined && !this.failedKeys.has(hole)) {
+      const slice = shown.slices.get(hole)!;
+      if (this.makeRoom(slice.maxBytes, this.protectedKeys(null))) this.capture(slice);
+      return;
+    }
     if (this.failure === "scroll") return;
     const budget = Math.floor(this.geometry.storageBytes * PREFETCH_SHARE);
     const keep = new Set<string>();

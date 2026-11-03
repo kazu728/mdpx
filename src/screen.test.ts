@@ -33,6 +33,7 @@ function view(shown: Layout | null, overrides: Partial<ViewState> = {}): ViewSta
     follow: false,
     status: "idle",
     latencyMs: null,
+    target: null,
     ...overrides,
   };
 }

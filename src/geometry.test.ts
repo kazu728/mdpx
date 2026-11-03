@@ -5,7 +5,6 @@ import {
   FULL_SCALE,
   captureGridCss,
   maxSliceImagePx,
-  maxSliceImageRows,
   GUTTER_COLS,
   detectGraphicsLimits,
   resolveGeometry,
@@ -45,10 +44,10 @@ describe("resolveGeometry", () => {
   test("the tallest slice that still fits one screenshot with its page around it", () => {
     const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, direct);
     expect(sliceImageHeight(g)).toBeLessThanOrEqual(4096);
-    expect(maxSliceImageRows(g.raster.sliceRows + 1, 1) * 28).toBeGreaterThan(4096);
+    expect(maxSliceImagePx((g.raster.sliceRows + 1) * CELL_CSS_PX, g.raster)).toBeGreaterThan(4096);
   });
 
-  test("on the relay, a slice fits one frame and large screens trade resolution for room", () => {
+  test("on the relay, a slice fits one frame and only a screen too large for full resolution drops it", () => {
     const small = resolveGeometry({ cols: 80, rows: 24 }, { cellHpx: 20, cellWpx: 10 }, relayed);
     expect(small.raster.renderScale).toBe(FULL_SCALE);
     const large = resolveGeometry({ cols: 400, rows: 120 }, { cellHpx: 40, cellWpx: 20 }, relayed);
@@ -58,27 +57,24 @@ describe("resolveGeometry", () => {
     }
   });
 
-  test("the chosen slices leave room for an update, tallest first and at full scale when it can", () => {
-    const need = (g: Geometry) => 2 * screenImageBytes(g.imgWidthPx, g.raster, g.viewRows);
-    const direct50 = resolveGeometry({ cols: 120, rows: 50 }, { cellHpx: 28, cellWpx: 14 }, direct);
-    expect(direct50.raster.renderScale).toBe(FULL_SCALE);
-    expect(need(direct50)).toBeLessThanOrEqual(direct.storageBytes);
-    for (const [cols, rows, scale] of [[120, 40, FULL_SCALE], [200, 60, 0.5]] as const) {
-      const g = resolveGeometry({ cols, rows }, { cellHpx: 28, cellWpx: 14 }, relayed);
-      expect(g.raster.renderScale).toBe(scale);
-      expect(need(g)).toBeLessThanOrEqual(relayed.storageBytes);
-      // Two rows taller would not leave room, or would not fit one screenshot or one frame.
+  test("full resolution whenever a screen fits, with the tallest slices that let it", () => {
+    const need = (g: Geometry) => screenImageBytes(g.imgWidthPx, g.raster, g.viewRows);
+    for (const [cols, rows, limits] of [[120, 50, direct], [300, 80, direct], [120, 40, relayed], [160, 50, relayed], [200, 60, relayed]] as const) {
+      const g = resolveGeometry({ cols, rows }, { cellHpx: 28, cellWpx: 14 }, limits);
+      expect(g.raster.renderScale).toBe(FULL_SCALE);
+      expect(need(g)).toBeLessThanOrEqual(limits.storageBytes);
+      // Two rows taller would not fit the storage, one screenshot or one relay frame.
       const taller = { ...g, raster: { ...g.raster, sliceRows: g.raster.sliceRows + 2 } };
       const tallerFits =
-        need(taller) <= relayed.storageBytes &&
+        need(taller) <= limits.storageBytes &&
         sliceImageHeight(taller) <= 4096 &&
-        transferSize(g.imgWidthPx * sliceImageHeight(taller) * 4) <= relayed.frameBytes!;
+        (limits.frameBytes === null || transferSize(g.imgWidthPx * sliceImageHeight(taller) * 4) <= limits.frameBytes);
       expect(tallerFits).toBe(false);
     }
-    // A 5K screen cannot hold two worst-case screens even at half resolution: best effort.
+    // On the relay, a 5K screen does not fit at full resolution even once: only then, half.
     const huge = resolveGeometry({ cols: 300, rows: 80 }, { cellHpx: 32, cellWpx: 16 }, relayed);
     expect(huge.raster.renderScale).toBe(0.5);
-    expect(need(huge)).toBeGreaterThan(relayed.storageBytes);
+    expect(need(huge)).toBeLessThanOrEqual(relayed.storageBytes);
   });
 
   test("downscaled odd cells capture on a two-row grid so image edges stay on whole px", () => {

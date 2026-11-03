@@ -170,14 +170,14 @@ describe("visiblePlacements", () => {
 });
 
 describe("screenImageBytes", () => {
-  test("no screen of blocks at least a row tall needs more image bytes than the bound", () => {
+  test("no screen of blocks at least a line of text tall needs more image bytes than the bound", () => {
     const sliced = (g: Geometry, sliceRows: number): Geometry => ({ ...g, raster: { ...g.raster, sliceRows } });
     const screens = [...GEOMETRIES, sliced(GEO, 3), sliced(GEOMETRIES[1]!, 7)];
     for (const [seed, g] of screens.entries()) {
       const random = rng(500 + seed);
       const bound = screenImageBytes(g.imgWidthPx, g.raster, g.viewRows);
       for (let round = 0; round < 60; round++) {
-        const specs = randomSpecs(random, 40).map((s) => ({ ...s, height: Math.max(CELL_CSS_PX, s.height) }));
+        const specs = randomSpecs(random, 40).map((s) => ({ ...s, height: Math.max(24, s.height) }));
         const l = layoutOf(specs, g);
         for (let top = 0; top < l.totalRows; top += 1 + Math.floor(random() * 5)) {
           const keys = new Set(visiblePlacements(l, top, g.viewRows).map((p) => p.imageKey));

@@ -16,8 +16,9 @@ Each property, with the harm when it breaks:
 
 | Property | Harm if broken |
 | --- | --- |
-| The view only moves to rows whose images are all in the terminal (after a resize, until they arrive, excepted) | the screen shows a block as blank page |
-| An image the screen goes on showing is never evicted | a block vanishes mid-read |
+| A block shows without its image only after a resize, or after the old screen gave way because it and the target (the update or scroll being fetched) do not fit in storage together | the screen shows a block as blank page for no reason |
+| An image the screen goes on showing is evicted only in that same crowded case | a block vanishes mid-read for no reason |
+| With nothing in flight, every block on screen has its image, unless the screen alone exceeds storage or that block's capture failed | a hole stays on screen for good |
 | Images held plus the capture in flight stay within terminal storage | the terminal drops images, or the herdr relay stalls |
 | The terminal holds exactly the ids the scheduler believes are resident | leaked images fill storage, or placements point at nothing |
 | At most one sync and one capture are in flight; a new id is never one the terminal holds | page work interleaves; an upload overwrites a live image |
