@@ -61,7 +61,6 @@ export function captureGridCss(deviceScaleFactor: number): number {
   return step;
 }
 
-/** What to screenshot for a slice: its content and one row of page above and below, rounded out to the grid. */
 export function captureClipCss(
   contentTopCss: number,
   lengthCss: number,
@@ -75,7 +74,6 @@ export function captureClipCss(
 }
 
 
-/** The tallest image a slice of `lengthCss` can have. */
 export function maxSliceImagePx(lengthCss: number, raster: Pick<RasterSpec, "cellHpx" | "renderScale">): number {
   const deviceScaleFactor = (raster.renderScale * raster.cellHpx) / CELL_CSS_PX;
   const grid = captureGridCss(deviceScaleFactor);
@@ -187,7 +185,7 @@ export function resolveGeometry(
     cols,
     rows,
     viewRows,
-    // Chrome rounds the screenshot width, so rounding up keeps it no narrower than the crop.
+    // Puppeteer clips to whole CSS px, so rounding up keeps the screenshot no narrower than the crop.
     viewportWidthCssPx: Math.ceil((widthPx * CELL_CSS_PX) / cell.cellHpx),
     deviceScaleFactor: (plan.renderScale * cell.cellHpx) / CELL_CSS_PX,
     imgWidthPx: plan.imgWidthPx,

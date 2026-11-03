@@ -45,7 +45,6 @@ export type Action =
 
 export interface Step {
   readonly actions: Action[];
-  /** Dispatch a tick no later than this. */
   readonly wakeAt: number | null;
 }
 
@@ -65,7 +64,6 @@ export interface ViewState {
   readonly geometry: Geometry;
   readonly shown: Layout | null;
   readonly top: number;
-  /** Images the terminal holds, by content key. */
   readonly images: ReadonlyMap<string, ResidentImage>;
   readonly marks: ReadonlySet<string>;
   readonly follow: boolean;
@@ -109,7 +107,6 @@ export class Scheduler {
   private dirty = false;
   private syncing = false;
   private capturing = false;
-  /** A capture found the page moved on from the layouts held here; wait for a fresh sync. */
   private awaitingFreshSync = false;
   private images = new Map<string, ImageEntry>();
   private failedKeys = new Set<string>();
@@ -214,7 +211,6 @@ export class Scheduler {
     this.pendingTop = null;
   }
 
-  /** Evicts every image; captures still in flight are evicted when they report back. */
   private forgetImages(): void {
     const ids = [...this.images.values()].filter((e) => e.image).map((e) => e.id);
     if (ids.length) this.actions.push({ type: "evict", ids });
@@ -384,10 +380,6 @@ export class Scheduler {
     }
   }
 
-  /**
-   * When the old screen and the target do not both fit, the old screen's images go, so the
-   * target can land; pointless when the target alone does not fit.
-   */
   private giveWay(target: Target, slice: Slice): boolean {
     const keys = visibleImageKeys(target.layout, target.top, this.viewRows);
     let bytes = 0;

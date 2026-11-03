@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import type { Page as BrowserPage } from "puppeteer-core";
 import { captureClipCss, type Geometry } from "./geometry.ts";
 import type { CaptureRef, CapturedImage, SyncedLayout } from "./layout.ts";
-import type { Doc } from "./markdown.ts";
+import { documentBaseUrl, type Doc } from "./markdown.ts";
 import { PAGE_BACKGROUND, type Theme } from "./theme.ts";
 
 const require = createRequire(import.meta.url);
@@ -253,8 +253,7 @@ const RUNTIME = String.raw`
 `;
 
 function shellHtml(mdDir: string, assets: Assets, nonce: string): string {
-  let base = pathToFileURL(mdDir).href;
-  if (!base.endsWith("/")) base += "/";
+  const base = documentBaseUrl(mdDir).href;
   const href = (p: string) => pathToFileURL(p).href;
   const config = {
     mermaidJs: href(assets.mermaidJs),
@@ -291,7 +290,6 @@ function shellHtml(mdDir: string, assets: Assets, nonce: string): string {
 
 export class Page {
   private viewport: { widthCssPx: number; deviceScaleFactor: number } | null = null;
-  /** How many wrappers the page holds for each key, as of the last sync. */
   private held = new Map<string, number>();
 
   private constructor(
@@ -317,7 +315,7 @@ export class Page {
     await this.page.goto(pathToFileURL(this.shellPath).href, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
   }
 
-  /** Makes the page show `doc` and reports where each block landed. Syncing the same doc twice changes nothing. */
+  /** Syncing the same doc twice changes nothing. */
   async sync(doc: Doc, geometry: Geometry): Promise<SyncedLayout> {
     const { viewportWidthCssPx: widthCssPx, deviceScaleFactor } = geometry;
     if (this.viewport?.widthCssPx !== widthCssPx || this.viewport.deviceScaleFactor !== deviceScaleFactor) {
@@ -353,10 +351,7 @@ export class Page {
     };
   }
 
-  /**
-   * Screenshots the slice with at least one row of page around it, on the capture grid. The
-   * blocks are located when the shot is taken, never from an older layout.
-   */
+  /** The blocks are located when the shot is taken, never from an older layout. */
   async capture(ref: CaptureRef): Promise<Capture> {
     const viewport = this.viewport;
     if (!viewport) throw new CaptureGone("the page has not been synced");

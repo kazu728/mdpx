@@ -44,7 +44,6 @@ export interface Slice {
   readonly rowEnd: number;
   readonly contentTopScreenPx: number;
   readonly capture: CaptureRef;
-  /** The most the image can take in the terminal. */
   readonly maxBytes: number;
 }
 
@@ -82,8 +81,8 @@ export interface Placement {
 }
 
 /**
- * The crop of a captured image that fills a placement. The image holds at least one row of
- * page around its content, so the crop stays inside it whatever row phase the content has now.
+ * The image holds at least one row of page around its content, so the crop stays inside it
+ * whatever row phase the content has now.
  */
 export function cropOf(p: Placement, image: CapturedImage): { y: number; h: number } {
   const h = Math.min(p.sourceHImgPx, image.heightImgPx);
@@ -221,10 +220,6 @@ export function anchorAt(layout: Layout, top: number): Anchor | null {
   return unit ? { block: unit.members[0]!, offset: top - unit.rowStart } : null;
 }
 
-/**
- * The top that keeps the anchored block where it was: the same (key, occurrence) if it is
- * still there, else the same key with the nearest occurrence, else `fallback`.
- */
 export function topFor(layout: Layout, anchor: Anchor | null, viewRows: number, fallback: number): number {
   if (!anchor) return clampTop(layout, fallback, viewRows);
   const { key, occurrence } = anchor.block;

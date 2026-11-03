@@ -77,12 +77,10 @@ type CaptureAction = Extract<Action, { type: "capture" }>;
 interface Env {
   doc: number;
   screen: number;
-  /** The pending sync, with the screen it was asked for. */
   sync: { screen: number } | null;
   capture: CaptureAction | null;
   /** Images the terminal holds: id -> bytes. */
   terminal: Map<number, number>;
-  /** A resize may show rows before their images arrive; nothing else may. */
   holeAllowed: boolean;
 }
 
@@ -91,7 +89,6 @@ interface World {
   env: Env;
 }
 
-/** The Scheduler's fields, as the checker copies them. A new field must be added here. */
 const FIELDS = [
   "actions", "awaitingFreshSync", "capturing", "dirty", "direction", "editStartedAt", "failedKeys", "failure", "follow",
   "geometry", "images", "latencyMs", "marks", "next", "nextId", "pendingTop", "shown",
@@ -204,7 +201,6 @@ function perform(w: World, actions: Action[]): void {
   }
 }
 
-/** Bytes the slices visible in these screens can take, each slice counted once. */
 function screensBytes(screens: { layout: Layout; top: number }[], viewRows: number): number {
   const slices = new Map<string, number>();
   for (const { layout, top } of screens) {
@@ -213,7 +209,6 @@ function screensBytes(screens: { layout: Layout; top: number }[], viewRows: numb
   return [...slices.values()].reduce((a, b) => a + b, 0);
 }
 
-/** The old screen and the target do not fit in storage together, so the old one may give way. */
 function crowded(w: World): boolean {
   const v = w.s.view();
   if (!v.shown || !v.target) return false;

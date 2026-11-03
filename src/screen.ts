@@ -37,12 +37,7 @@ function sanitizeTerminalLine(s: string): string {
   return s.replace(/[\x00-\x1f\x7f]/g, "?");
 }
 
-/**
- * One frame: drops the previous placements, paints the page background on every content row
- * (rows between blocks have no image), places the resident slices, marks changed blocks, and
- * draws the status line, all inside one synchronized update. `content` is the frame without
- * the drops, for telling whether anything changed.
- */
+/** `content` is the frame without the drops, for telling whether anything changed. */
 export function renderFrame(
   view: ViewState,
   filename: string,

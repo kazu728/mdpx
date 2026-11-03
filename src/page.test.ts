@@ -11,7 +11,6 @@ import { GEO } from "./test-geometry.ts";
 
 type Rect = { top: number; bottom: number } | null;
 
-/** Stands in for puppeteer's page and the runtime the shell installs in it. */
 class FakeBrowserPage {
   rects: [number, number][] = [];
   rect: Rect = null;
@@ -20,7 +19,6 @@ class FakeBrowserPage {
   connected = true;
   clips: { x: number; y: number; width: number; height: number }[] = [];
   syncCalls: { key: string; html?: string }[][] = [];
-  /** Answers the next sync with these keys missing, as a page that lost wrappers would. */
   missingOnce: string[] | null = null;
   failNextSync = false;
   runtime = {

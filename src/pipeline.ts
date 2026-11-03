@@ -18,7 +18,6 @@ export interface PageLike {
 
 type CaptureAction = Extract<Action, { type: "capture" }>;
 
-/** A scheduler event before the pipeline stamps its time. */
 export type Input = SchedulerEvent extends infer E ? (E extends unknown ? Omit<E, "at"> : never) : never;
 
 interface PipelineDeps {

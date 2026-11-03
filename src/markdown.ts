@@ -141,7 +141,6 @@ const VOID_ELEMENTS = new Set([
   "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr",
 ]);
 
-/** Elements an HTML fragment leaves open (negative when it closes more than it opens). */
 function netOpenElements(html: string): number {
   let depth = 0;
   const withoutComments = html.replace(/<!--[\s\S]*?-->/g, "");
@@ -173,13 +172,20 @@ function imageSources(html: string): string[] {
   return Array.from(html.matchAll(/<img\b[^>]*?\ssrc="([^"]*)"/gi), (m) => m[1]!);
 }
 
+/** The URL relative links in the document resolve against: the page's <base>. */
+export function documentBaseUrl(mdDir: string): URL {
+  const url = pathToFileURL(mdDir);
+  if (!url.pathname.endsWith("/")) url.pathname += "/";
+  return url;
+}
+
 async function imageVersions(html: string, mdDir: string): Promise<string> {
   const versions = await Promise.all(
     imageSources(html).map(async (src) => {
       // Resolved the way the page resolves it; a URL the browser cannot parse shows no image.
       let url: URL;
       try {
-        url = new URL(src, pathToFileURL(`${mdDir}/`));
+        url = new URL(src, documentBaseUrl(mdDir));
       } catch {
         return "";
       }

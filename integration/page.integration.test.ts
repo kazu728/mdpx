@@ -240,9 +240,7 @@ describe.skipIf(!exe)("page", () => {
       }
       return rows;
     }, shot.pngBase64);
-    // Every image px row of the logo is in the capture.
     expect(red.length).toBeGreaterThanOrEqual(Math.floor((img.bottom - img.top) * g.deviceScaleFactor) - 1);
-    // Changing only the logo changes the unit's image, so no stale pixels survive.
     const resized = await sync(logo(200), g);
     expect([...resized.slices.keys()]).not.toContain(unit.slices[0]!.imageKey);
   }, 30000);

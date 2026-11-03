@@ -63,7 +63,6 @@ describe("resolveGeometry", () => {
       const g = resolveGeometry({ cols, rows }, { cellHpx: 28, cellWpx: 14 }, limits);
       expect(g.raster.renderScale).toBe(FULL_SCALE);
       expect(need(g)).toBeLessThanOrEqual(limits.storageBytes);
-      // Two rows taller would not fit the storage, one screenshot or one relay frame.
       const taller = { ...g, raster: { ...g.raster, sliceRows: g.raster.sliceRows + 2 } };
       const tallerFits =
         need(taller) <= limits.storageBytes &&
