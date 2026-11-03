@@ -15,7 +15,6 @@ type Call =
   | { kind: "capture"; ref: CaptureRef; resolve(v: Capture): void; reject(e: unknown): void }
   | { kind: "reset"; resolve(v: void): void; reject(e: unknown): void };
 
-/** A page whose every call waits until the test answers it. */
 function fakePage() {
   const unclaimed: Call[] = [];
   const waiting: ((c: Call) => void)[] = [];
@@ -38,7 +37,6 @@ function fakePage() {
   return { page, next, unclaimed };
 }
 
-/** What the page would report for `doc`: blocks stacked 60 CSS px tall with 16 px gaps. */
 function layoutFor(doc: Doc, geometry: Geometry): SyncedLayout {
   let y = 32;
   const blocks = doc.blocks.map((b, i) => {
@@ -50,7 +48,7 @@ function layoutFor(doc: Doc, geometry: Geometry): SyncedLayout {
   return { raster: geometry.raster, theme: doc.theme, blocks, docHeightCss: y + 32 };
 }
 
-const SHOT: Capture = { base64: "UE5H", contentTopImgPx: 30, heightImgPx: 200 };
+const SHOT: Capture = { pngBase64: "UE5H", contentTopImgPx: 30, heightImgPx: 200 };
 
 const flush = () => new Promise((r) => setImmediate(r));
 const dirs: string[] = [];
@@ -82,7 +80,6 @@ async function setup(page?: Promise<PageLike>) {
     },
     now: () => (clock += 1),
   });
-  /** Answers the page until the document is on screen. */
   const display = async () => {
     pipeline.dispatch({ type: "fileChanged" });
     const sync = await fake.next();

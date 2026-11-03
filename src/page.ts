@@ -4,21 +4,18 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { TimeoutError, type Page as BrowserPage } from "puppeteer-core";
-import { captureGridCss, type Geometry } from "./geometry.ts";
+import { captureClipCss, type Geometry } from "./geometry.ts";
 import type { CaptureRef, CapturedImage, SyncedLayout } from "./layout.ts";
 import { PAGE_BACKGROUND, type Doc, type Theme } from "./markdown.ts";
 
 const require = createRequire(import.meta.url);
 
-/** The document, not Chrome, failed: a load timed out. */
 export class ContentError extends Error {}
 
-/** The blocks to capture are no longer where the layout said: a later sync or a reflow moved them. */
 export class CaptureGone extends Error {}
 
 export interface Capture extends CapturedImage {
-  /** PNG, base64. */
-  readonly base64: string;
+  readonly pngBase64: string;
 }
 
 export interface Assets {
@@ -226,10 +223,6 @@ function shellHtml(mdDir: string, assets: Assets, nonce: string): string {
 `;
 }
 
-/**
- * One page for the whole session, patched in place. Callers hand it documents and get back
- * where each block landed; they never see a file, a navigation or a wait.
- */
 export class Page {
   private viewport: { widthCssPx: number; deviceScaleFactor: number } | null = null;
 
@@ -250,7 +243,6 @@ export class Page {
     return opened;
   }
 
-  /** Reloads the shell and forgets every block. */
   async reset(): Promise<void> {
     this.viewport = null;
     try {
@@ -296,18 +288,16 @@ export class Page {
       [ref.last.key, ref.last.occurrence] as [string, number],
     );
     const dsf = viewport.deviceScaleFactor;
-    if (!rect || Math.round((rect.bottom - rect.top) * dsf) !== ref.heightImgPx) {
-      throw new CaptureGone("the blocks moved since they were laid out");
+    if (!rect || Math.round((rect.bottom - rect.top) * dsf) !== ref.runHeightImgPx) {
+      throw new CaptureGone("the blocks are gone or have another height than when they were laid out");
     }
-    const grid = captureGridCss(dsf);
     const contentTop = rect.top + ref.offsetCss;
-    const top = Math.floor(contentTop / grid) * grid - grid;
-    const bottom = Math.ceil((contentTop + ref.lengthCss) / grid) * grid + grid;
-    const base64 = await this.page.screenshot({
+    const { topCss: top, bottomCss: bottom } = captureClipCss(contentTop, ref.lengthCss, dsf);
+    const pngBase64 = await this.page.screenshot({
       clip: { x: 0, y: top, width: viewport.widthCssPx, height: bottom - top },
       optimizeForSpeed: true,
       encoding: "base64",
     });
-    return { base64, contentTopImgPx: (contentTop - top) * dsf, heightImgPx: Math.round((bottom - top) * dsf) };
+    return { pngBase64, contentTopImgPx: (contentTop - top) * dsf, heightImgPx: Math.round((bottom - top) * dsf) };
   }
 }

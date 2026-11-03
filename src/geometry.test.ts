@@ -4,7 +4,8 @@ import {
   CELL_CSS_PX,
   FULL_SCALE,
   captureGridCss,
-  sliceImageRows,
+  maxSliceImagePx,
+  maxSliceImageRows,
   GUTTER_COLS,
   detectGraphicsLimits,
   resolveGeometry,
@@ -15,10 +16,8 @@ import {
 const direct = detectGraphicsLimits({});
 const relayed = detectGraphicsLimits({ HERDR_ENV: "1" });
 
-/** The tallest image a full slice can need (see sliceImageRows). */
 function sliceImageHeight(g: Geometry): number {
-  const gridRows = captureGridCss(g.deviceScaleFactor) / CELL_CSS_PX;
-  return sliceImageRows(g.raster.sliceRows, gridRows) * g.raster.cellHpx * g.raster.renderScale;
+  return maxSliceImagePx(g.raster.sliceRows * CELL_CSS_PX, g.raster);
 }
 
 describe("detectGraphicsLimits", () => {
@@ -45,7 +44,7 @@ describe("resolveGeometry", () => {
   test("the tallest slice that still fits one screenshot with its page around it", () => {
     const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, direct);
     expect(sliceImageHeight(g)).toBeLessThanOrEqual(4096);
-    expect(sliceImageRows(g.raster.sliceRows + 1, 1) * 28).toBeGreaterThan(4096);
+    expect(maxSliceImageRows(g.raster.sliceRows + 1, 1) * 28).toBeGreaterThan(4096);
   });
 
   test("on the relay, a slice fits one frame and large screens trade resolution for room", () => {

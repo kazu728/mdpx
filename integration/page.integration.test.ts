@@ -74,15 +74,14 @@ function contentDifference(a: Capture, b: Capture, rows: number): Promise<number
       }
       return best;
     },
-    a.base64,
+    a.pngBase64,
     Math.round(a.contentTopImgPx),
-    b.base64,
+    b.pngBase64,
     Math.round(b.contentTopImgPx),
     rows,
   );
 }
 
-/** Rows of the PNG that are not plain page background. */
 function inkedRows(base64: string): Promise<number[]> {
   return chrome.page!.evaluate(async (s: string) => {
     const img = new Image();
@@ -149,7 +148,7 @@ describe.skipIf(!exe)("page", () => {
     for (const unit of layout.units) {
       for (const slice of unit.slices) {
         const shot = await page.capture(slice.capture);
-        const { width, height } = pngSize(shot.base64);
+        const { width, height } = pngSize(shot.pngBase64);
         expect(height).toBe(shot.heightImgPx);
         expect(width).toBeGreaterThanOrEqual(g.imgWidthPx);
         // Only page within one row of the content, except that a neighbor exactly one row away
@@ -157,7 +156,7 @@ describe.skipIf(!exe)("page", () => {
         const row = CELL_CSS_PX * g.deviceScaleFactor;
         const top = shot.contentTopImgPx;
         const bottom = top + slice.capture.lengthCss * g.deviceScaleFactor;
-        const inMargins = (await inkedRows(shot.base64)).filter(
+        const inMargins = (await inkedRows(shot.pngBase64)).filter(
           (y) => (y > top - row + 2 && y < top - 2) || (y > bottom + 2 && y < bottom + row - 2),
         );
         expect(inMargins).toEqual([]);

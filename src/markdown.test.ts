@@ -28,7 +28,6 @@ describe("renderDocument", () => {
     expect(b[0]).toBe(a[0]);
     expect(b[1]).not.toBe(a[1]);
     expect(b[2]).toBe(a[2]);
-    // Re-wrapping the source without changing the rendering keeps the key.
     expect((await keys("# T\n\nfirst\n\n\n\nsecond\n"))[2]).toBe(a[2]);
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CELL_CSS_PX, captureGridCss, resolveGeometry, type Geometry } from "./geometry.ts";
+import { CELL_CSS_PX, captureClipCss, resolveGeometry, type Geometry } from "./geometry.ts";
 import {
   anchorAt,
   buildLayout,
@@ -40,7 +40,6 @@ function layoutOf(specs: Spec[], g: Geometry = GEO): Layout {
   return buildLayout(synced(specs, g), g);
 }
 
-/** Deterministic pseudo-random numbers, so a failing case can be replayed. */
 function rng(seed: number): () => number {
   let s = seed >>> 0;
   return () => {
@@ -60,10 +59,8 @@ function randomSpecs(random: () => number, count: number): Spec[] {
 
 /** What the page captures for a slice of a unit whose top is at `unitTopCss` (see Page.capture). */
 function captureAt(slice: Slice, unitTopCss: number, g: Geometry): CapturedImage & { contentTopCss: number; topCss: number } {
-  const grid = captureGridCss(g.deviceScaleFactor);
   const contentTopCss = unitTopCss + slice.capture.offsetCss;
-  const topCss = Math.floor(contentTopCss / grid) * grid - grid;
-  const bottomCss = Math.ceil((contentTopCss + slice.capture.lengthCss) / grid) * grid + grid;
+  const { topCss, bottomCss } = captureClipCss(contentTopCss, slice.capture.lengthCss, g.deviceScaleFactor);
   return {
     contentTopCss,
     topCss,
@@ -109,10 +106,9 @@ describe("buildLayout", () => {
         expect(unit.slices[i]!.rowStart).toBe(unit.slices[i - 1]!.rowEnd);
       }
       for (const s of unit.slices) {
-        // Wherever the unit lands, the image fits the bytes reserved for it and one screenshot.
         for (const shift of [0, 3.3, 7.9, 15.99]) {
           const image = captureAt(s, unit.topScreenPx * (CELL_CSS_PX / g.raster.cellHpx) + shift, g);
-          expect(g.imgWidthPx * image.heightImgPx * 4).toBeLessThanOrEqual(s.bytes);
+          expect(g.imgWidthPx * image.heightImgPx * 4).toBeLessThanOrEqual(s.maxBytes);
           expect(image.heightImgPx).toBeLessThanOrEqual(4096);
         }
       }
@@ -162,9 +158,7 @@ describe("visiblePlacements", () => {
           const crop = cropOf(p, image);
           expect(crop.y).toBeGreaterThanOrEqual(0);
           expect(crop.y + crop.h).toBeLessThanOrEqual(image.heightImgPx);
-          // The first row shows the page px it should, relative to the slice's content (±1 rounding).
           expect(Math.abs(crop.y - (image.contentTopImgPx + p.offsetImgPx))).toBeLessThanOrEqual(1);
-          // Everything shown was within one row of the content when it was captured: blank page.
           const shownTopCss = image.topCss + crop.y / g.deviceScaleFactor;
           const shownBottomCss = image.topCss + (crop.y + crop.h) / g.deviceScaleFactor;
           expect(shownTopCss).toBeGreaterThanOrEqual(image.contentTopCss - CELL_CSS_PX - 1);
@@ -216,7 +210,6 @@ describe("prefetchOrder", () => {
       for (let i = 1; i < order.length; i++) {
         const [a, b] = [order[i - 1]!, order[i]!];
         expect(distance(a)).toBeLessThanOrEqual(distance(b));
-        // At equal distance, the side the view moves toward comes first.
         if (distance(a) === distance(b) && distance(a) > 0 && (a.rowStart >= bottom) !== (b.rowStart >= bottom)) {
           expect(a.rowStart >= bottom).toBe(direction > 0);
         }

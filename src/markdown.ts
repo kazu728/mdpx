@@ -86,7 +86,7 @@ function getRenderer(): Promise<Renderer> {
 }
 
 /** Escaping (not deleting) keeps `<<meta>meta ...>` from becoming a tag. */
-function stripMetaTags(html: string): string {
+function escapeMetaTags(html: string): string {
   return html.replace(/<(\/?)(meta)\b/gi, (_m, slash: string, word: string) => `&lt;${slash}${word}`);
 }
 
@@ -124,7 +124,6 @@ function createMarkdown(highlighter: Highlighter): MarkdownIt {
   return md;
 }
 
-/** Token ranges of the top-level blocks, in document order. */
 function topLevelRanges(tokens: readonly Token[]): Token[][] {
   const ranges: Token[][] = [];
   let current: Token[] = [];
@@ -146,7 +145,7 @@ const VOID_ELEMENTS = new Set([
 ]);
 
 /** Elements an HTML fragment leaves open (negative when it closes more than it opens). */
-function openElements(html: string): number {
+function netOpenElements(html: string): number {
   let depth = 0;
   const withoutComments = html.replace(/<!--[\s\S]*?-->/g, "");
   for (const m of withoutComments.matchAll(/<(\/?)([a-zA-Z][\w-]*)\b[^>]*?(\/?)>/g)) {
@@ -168,7 +167,7 @@ function groupOpenHtml(ranges: Token[][]): Token[][] {
     const html = range.filter((t) => t.type === "html_block").map((t) => t.content).join("");
     if (open > 0) groups.at(-1)!.push(...range);
     else groups.push([...range]);
-    open = Math.max(0, open + openElements(html));
+    open = Math.max(0, open + netOpenElements(html));
   }
   return groups;
 }
@@ -177,7 +176,6 @@ function imageSources(html: string): string[] {
   return Array.from(html.matchAll(/<img\b[^>]*?\ssrc="([^"]*)"/gi), (m) => m[1]!);
 }
 
-/** mtime and size of each local image, so overwriting the file re-keys the block. */
 async function imageVersions(html: string, mdDir: string): Promise<string> {
   const versions = await Promise.all(
     imageSources(html).map(async (src) => {
@@ -213,7 +211,7 @@ export async function renderDocument(
 
   const blocks = await Promise.all(
     groupOpenHtml(topLevelRanges(tokens)).map(async (range): Promise<Block> => {
-      const html = stripMetaTags(md.renderer.render(range, md.options, env));
+      const html = escapeMetaTags(md.renderer.render(range, md.options, env));
       const versions = await imageVersions(html, options.mdDir);
       const key = createHash("sha1")
         .update(`${options.theme}\0${html}\0${versions}`)

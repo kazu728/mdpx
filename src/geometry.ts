@@ -32,7 +32,6 @@ export interface Geometry {
   readonly raster: RasterSpec;
   readonly cols: number;
   readonly rows: number;
-  /** Rows above the status line. */
   readonly viewRows: number;
   readonly viewportWidthCssPx: number;
   readonly deviceScaleFactor: number;
@@ -47,10 +46,8 @@ export interface Geometry {
  */
 export const CELL_CSS_PX = 16;
 
-/** Column left of the page for change marks. */
 export const GUTTER_COLS = 1;
 
-/** Caps one screenshot independently of the terminal's limits. */
 const MAX_IMAGE_PX = 4096;
 
 /**
@@ -62,16 +59,36 @@ export function captureGridCss(deviceScaleFactor: number): number {
   return CELL_CSS_PX * (Number.isInteger(CELL_CSS_PX * deviceScaleFactor) ? 1 : 2);
 }
 
-/**
- * The tallest image a slice of `contentRows` rows can need: its rows rounded out to the grid
- * on both ends, plus one more grid step of page above and below.
- */
-export function sliceImageRows(contentRows: number, gridRows: number): number {
+/** What to screenshot for a slice: its content rounded out to the grid, plus one more grid step of page above and below. */
+export function captureClipCss(
+  contentTopCss: number,
+  lengthCss: number,
+  deviceScaleFactor: number,
+): { topCss: number; bottomCss: number } {
+  const grid = captureGridCss(deviceScaleFactor);
+  return {
+    topCss: Math.floor(contentTopCss / grid) * grid - grid,
+    bottomCss: Math.ceil((contentTopCss + lengthCss) / grid) * grid + grid,
+  };
+}
+
+/** The most rows `captureClipCss` can span for content of `contentRows` rows, wherever it sits on the grid. */
+export function maxSliceImageRows(contentRows: number, gridRows: number): number {
   return (Math.ceil(contentRows / gridRows) + 3) * gridRows;
+}
+
+/** The tallest image a slice of `lengthCss` can have. */
+export function maxSliceImagePx(lengthCss: number, raster: RasterSpec): number {
+  const gridRows = captureGridCss((raster.renderScale * raster.cellHpx) / CELL_CSS_PX) / CELL_CSS_PX;
+  const rows = maxSliceImageRows(Math.ceil(lengthCss / CELL_CSS_PX), gridRows);
+  return Math.ceil(rows * raster.cellHpx * raster.renderScale);
 }
 
 export const FULL_SCALE = 1;
 const REDUCED_SCALE = 0.5;
+
+/** An update keeps the old screen's images until the new screen's are in. */
+const SCREENS_HELD_IN_AN_UPDATE = 2;
 
 const HERDR_RELAY: GraphicsLimits = {
   frameBytes: 32 * 1024 * 1024 - 2 * 1024 * 1024,
@@ -100,10 +117,9 @@ function planAt(
 ): Plan | null {
   const imgWidthPx = Math.max(1, Math.round(widthPx * renderScale));
   const cellImg = cellHpx * renderScale;
-  // Slice edges must land on the capture grid.
   const quantum = captureGridCss((renderScale * cellHpx) / CELL_CSS_PX) / CELL_CSS_PX;
   const fits = (rows: number) => {
-    const h = sliceImageRows(rows, quantum) * cellImg;
+    const h = maxSliceImageRows(rows, quantum) * cellImg;
     return (
       h <= MAX_IMAGE_PX &&
       (limits.frameBytes === null || transferSize(imgWidthPx * h * 4) <= limits.frameBytes)
@@ -126,9 +142,11 @@ function resolvePlan(
   limits: GraphicsLimits,
 ): Plan {
   const full = planAt(widthPx, cellHpx, FULL_SCALE, limits);
-  // Only the relay is tight enough to trade resolution for room; an update holds the old
-  // and the new screen at once.
-  if (full && (limits.frameBytes === null || 2 * visibleBytes(full, cellHpx, viewRows) <= limits.storageBytes)) {
+  // Only the relay is tight enough to trade resolution for room.
+  if (
+    full &&
+    (limits.frameBytes === null || SCREENS_HELD_IN_AN_UPDATE * visibleBytes(full, cellHpx, viewRows) <= limits.storageBytes)
+  ) {
     return full;
   }
   return (

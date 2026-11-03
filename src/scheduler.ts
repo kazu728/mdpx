@@ -40,9 +40,7 @@ export type Action =
   | { type: "sync" }
   /** Screenshot the slice, transmit it as image `id`, then report `captured`. */
   | { type: "capture"; imageKey: string; id: number; ref: CaptureRef }
-  /** Free these images in the terminal. */
   | { type: "evict"; ids: number[] }
-  /** Reload the page from scratch. */
   | { type: "resetPage" };
 
 export interface Step {
@@ -70,7 +68,6 @@ export interface ViewState {
 }
 
 export const MARK_MS = 1500;
-/** Share of the terminal's image storage that prefetching may fill. */
 const PREFETCH_SHARE = 0.8;
 
 interface ImageEntry {
@@ -85,8 +82,9 @@ interface ImageEntry {
  * - At most one sync and one capture in flight.
  * - `shown` is replaced only by a layout whose visible slices are all resident at the top it
  *   will show, so the screen never shows a hole for a block it has.
- * - Ids are allocated here only, never reused, and an id is in `images` exactly while the
- *   terminal may hold it. Images are evicted with an action before their entry goes.
+ * - Ids are allocated here only and never reused. A resident id is in `images` exactly while
+ *   the terminal holds it, and is evicted with an action before its entry goes. A capture
+ *   forgotten in flight (by a resize or a refresh) is evicted when it lands.
  * - Resident and in-flight bytes stay within the terminal's storage. A slice visible in
  *   `shown` is never evicted.
  * - Images are keyed by content, not by version: a new layout reuses every slice whose key
@@ -104,7 +102,7 @@ export class Scheduler {
   private syncing = false;
   private capturing = false;
   /** A capture found the page moved on from the layouts held here; wait for a fresh sync. */
-  private stale = false;
+  private awaitingFreshSync = false;
   private images = new Map<string, ImageEntry>();
   private failedKeys = new Set<string>();
   private nextId = 1;
@@ -140,7 +138,7 @@ export class Scheduler {
         break;
       case "syncFailed":
         this.syncing = false;
-        this.stale = false;
+        this.awaitingFreshSync = false;
         this.failure = this.shown ? "update" : "render";
         break;
       case "captured":
@@ -247,7 +245,6 @@ export class Scheduler {
       }
     }
     to = clampTop(shown, to, this.viewRows);
-    // Like tail -f: G follows the end, and so does scrolling down onto it.
     this.follow =
       delta.kind === "bottom" ||
       ((delta.kind === "lines" || delta.kind === "halfpage") && this.direction > 0 && to === max);
@@ -257,9 +254,8 @@ export class Scheduler {
 
   private onSynced(synced: SyncedLayout): void {
     this.syncing = false;
-    this.stale = false;
+    this.awaitingFreshSync = false;
     if (!sameRaster(synced.raster, this.geometry.raster)) {
-      // Laid out for a screen that is gone.
       this.dirty = true;
       return;
     }
@@ -278,9 +274,8 @@ export class Scheduler {
     this.capturing = false;
     if (this.images.get(imageKey)?.id === id) this.images.delete(imageKey);
     if (gone) {
-      // The page moved on from the layout; only a fresh sync describes it again.
       this.dirty = true;
-      this.stale = true;
+      this.awaitingFreshSync = true;
       this.next = null;
       return;
     }
@@ -337,24 +332,22 @@ export class Scheduler {
   }
 
   private fetch(): void {
-    if (this.capturing || this.stale) return;
+    if (this.capturing || this.awaitingFreshSync) return;
     const target = this.next
       ? { layout: this.next, top: this.topForNext(this.next) }
       : this.shown && this.pendingTop !== null
         ? { layout: this.shown, top: this.pendingTop }
         : null;
     if (target) {
-      // Nothing is in flight here, so every entry is resident and the first absent key is the gap.
       const missing = [...visibleImageKeys(target.layout, target.top, this.viewRows)].find(
-        (key) => !this.images.has(key),
+        (key) => !this.images.get(key)?.image,
       );
       if (missing === undefined) return;
       const slice = target.layout.slices.get(missing)!;
-      if (!this.failedKeys.has(missing) && this.makeRoom(slice.bytes, this.protectedKeys(target))) {
+      if (!this.failedKeys.has(missing) && this.makeRoom(slice.maxBytes, this.protectedKeys(target))) {
         this.capture(slice);
       } else {
         this.giveUp(target.layout);
-        // Giving up the update leaves a pending scroll, and giving that up leaves prefetching.
         this.fetch();
       }
       return;
@@ -384,8 +377,8 @@ export class Scheduler {
     const keep = new Set<string>();
     let bytes = 0;
     for (const slice of prefetchOrder(shown, this.top, this.viewRows, this.direction)) {
-      if (bytes + slice.bytes > budget && keep.size > 0) break;
-      bytes += slice.bytes;
+      if (bytes + slice.maxBytes > budget && keep.size > 0) break;
+      bytes += slice.maxBytes;
       keep.add(slice.imageKey);
     }
     for (const key of keep) {
@@ -393,7 +386,7 @@ export class Scheduler {
       const slice = shown.slices.get(key)!;
       const protect = this.protectedKeys(null);
       for (const k of keep) protect.add(k);
-      if (this.makeRoom(slice.bytes, protect)) this.capture(slice);
+      if (this.makeRoom(slice.maxBytes, protect)) this.capture(slice);
       return;
     }
   }
@@ -404,7 +397,6 @@ export class Scheduler {
     return total;
   }
 
-  /** Evicts the least useful resident images until `bytes` more fit. False if they cannot. */
   private makeRoom(bytes: number, keep: Set<string>): boolean {
     let free = this.geometry.storageBytes - this.usedBytes();
     if (free >= bytes) return true;
@@ -430,7 +422,7 @@ export class Scheduler {
 
   private capture(slice: Slice): void {
     const id = this.nextId++;
-    this.images.set(slice.imageKey, { id, bytes: slice.bytes, image: null });
+    this.images.set(slice.imageKey, { id, bytes: slice.maxBytes, image: null });
     this.capturing = true;
     this.actions.push({ type: "capture", imageKey: slice.imageKey, id, ref: slice.capture });
   }

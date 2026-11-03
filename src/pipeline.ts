@@ -31,7 +31,6 @@ interface PipelineDeps {
   now?: () => number;
 }
 
-/** Runs the scheduler's actions against the page and the terminal, one page operation at a time. */
 export class Pipeline {
   private lastPlacements: PlacementId[] = [];
   private lastContent = "";
@@ -135,7 +134,7 @@ export class Pipeline {
       return;
     }
     if (this.deps.isShuttingDown()) return;
-    this.deps.term.write(transmit(id, shot.base64));
+    this.deps.term.write(transmit(id, shot.pngBase64));
     this.dispatch({
       type: "captured",
       imageKey,

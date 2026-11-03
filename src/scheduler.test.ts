@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { CELL_CSS_PX, captureGridCss, resolveGeometry, sliceImageRows, type Geometry } from "./geometry.ts";
-import { maxTop, visibleImageKeys, type CaptureRef, type SyncedLayout } from "./layout.ts";
+import { maxSliceImagePx, resolveGeometry, type Geometry } from "./geometry.ts";
+import { maxTop, visibleImageKeys, type SyncedLayout } from "./layout.ts";
 import type { BlockKind } from "./markdown.ts";
 import { MARK_MS, Scheduler, type Action, type ScrollDelta, type SchedulerEvent, type Step } from "./scheduler.ts";
 import { GEO } from "./test-geometry.ts";
@@ -27,17 +27,6 @@ const paragraphs = (n: number, prefix = "p", height = 60): Spec[] =>
 
 type CaptureAction = Extract<Action, { type: "capture" }>;
 
-/** The tallest image the page can return for this slice, as the layout reserves it. */
-function imageHeight(ref: CaptureRef, g: Geometry): number {
-  const gridRows = captureGridCss(g.deviceScaleFactor) / CELL_CSS_PX;
-  return Math.ceil(sliceImageRows(Math.ceil(ref.lengthCss / CELL_CSS_PX), gridRows) * g.raster.cellHpx * g.raster.renderScale);
-}
-
-/**
- * Plays the page and the terminal around a scheduler and checks the invariants after every
- * event: the terminal holds exactly the images the scheduler thinks it does, ids are never
- * reused, storage is never exceeded, and at most one sync and one capture are in flight.
- */
 class Session {
   readonly s: Scheduler;
   geometry: Geometry;
@@ -83,10 +72,10 @@ class Session {
     const v = this.view;
     expect(this.syncs).toBeLessThanOrEqual(1);
     expect(this.captures.length).toBeLessThanOrEqual(1);
-    // With nothing in flight, no update or scroll may be left waiting for work that never comes.
     if (!this.syncs && !this.captures.length) expect(["scrolling", "updating", "rendering"]).not.toContain(v.status);
     for (const { id } of v.images.values()) expect(this.terminal.has(id)).toBe(true);
-    const inflight = this.captures.reduce((n, a) => n + imageHeight(a.ref, v.geometry) * v.geometry.imgWidthPx * 4, 0);
+    expect(this.terminal.size).toBe(v.images.size);
+    const inflight = this.captures.reduce((n, a) => n + maxSliceImagePx(a.ref.lengthCss, v.geometry.raster) * v.geometry.imgWidthPx * 4, 0);
     let held = 0;
     for (const { id } of v.images.values()) held += this.terminal.get(id)!;
     expect(held + inflight).toBeLessThanOrEqual(v.geometry.storageBytes);
@@ -101,7 +90,6 @@ class Session {
     return this.send({ type: "fileChanged", at: this.tick() });
   }
 
-  /** The page answers the pending sync with the document as it is now. */
   sync(): Step {
     expect(this.syncs).toBe(1);
     this.syncs--;
@@ -110,7 +98,7 @@ class Session {
 
   deliver(): Step {
     const a = this.captures.shift()!;
-    const heightImgPx = imageHeight(a.ref, this.geometry);
+    const heightImgPx = maxSliceImagePx(a.ref.lengthCss, this.geometry.raster);
     this.terminal.set(a.id, heightImgPx * this.geometry.imgWidthPx * 4);
     this.captured.push(a.imageKey);
     const image = { contentTopImgPx: this.geometry.raster.cellHpx * 1.5, heightImgPx };
@@ -144,7 +132,6 @@ class Session {
     return [...visibleImageKeys(v.shown, v.top, v.geometry.viewRows)].every((k) => v.images.has(k));
   }
 
-  /** Block keys of the unit at the top of the view. */
   topBlock(): string | undefined {
     const v = this.view;
     return v.shown?.units.find((u) => u.rowEnd > v.top)?.members[0]?.key;
@@ -355,11 +342,9 @@ describe("resizes and failures", () => {
     expect(s.captures).toHaveLength(1);
     const stale = synced(s.doc, s.geometry);
     s.resize({ cols: 100, rows: 51 });
-    // The capture in flight lands after the resize: the terminal has it, so it is evicted.
     const landed = s.captures[0]!.id;
     s.deliver();
     expect(s.terminal.has(landed)).toBe(false);
-    // A sync that was laid out for the old width is ignored and redone.
     expect(s.syncs).toBe(1);
     s.syncs--;
     s.send({ type: "synced", layout: stale, at: s.tick() });
@@ -464,7 +449,6 @@ describe("random interleavings", () => {
         else if (r < 0.93) s.send({ type: "hardRefresh", at: s.tick() });
         else s.send({ type: "tick", at: s.tick(500) });
       }
-      // Quiet down: one more save, then let everything finish.
       s.save(doc);
       s.deliverAll();
       if (storage < 12_000_000) continue;

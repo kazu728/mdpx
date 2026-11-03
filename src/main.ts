@@ -13,7 +13,6 @@ import { sanitizeTerminalBlock, Term } from "./term.ts";
 
 const CELL_QUERY_MS = 200;
 const GRAPHICS_QUERY_TIMEOUT_MS = 200;
-// Short, because a save now redraws only the blocks that changed.
 const WATCH_DEBOUNCE_MS = 20;
 const CHROME_CLOSE_TIMEOUT_MS = 1500;
 const UNSUPPORTED_TERMINAL = "run this in a terminal that supports the kitty graphics protocol";

@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import { CELL_CSS_PX, captureGridCss, sliceImageRows, type Geometry, type RasterSpec } from "./geometry.ts";
+import { CELL_CSS_PX, maxSliceImagePx, type Geometry, type RasterSpec } from "./geometry.ts";
 import type { BlockKind, Theme } from "./markdown.ts";
 
-/** A top-level block as the page laid it out. */
 export interface PlacedBlock {
   readonly key: string;
   readonly kind: BlockKind;
@@ -10,7 +9,6 @@ export interface PlacedBlock {
   readonly heightCss: number;
 }
 
-/** What the page reports after a sync. */
 export interface SyncedLayout {
   readonly raster: RasterSpec;
   readonly theme: Theme;
@@ -29,12 +27,11 @@ export interface CaptureRef {
   readonly first: BlockRef;
   readonly last: BlockRef;
   /** The run's height when laid out. The page refuses a capture once the run has another height. */
-  readonly heightImgPx: number;
+  readonly runHeightImgPx: number;
   readonly offsetCss: number;
   readonly lengthCss: number;
 }
 
-/** Where a captured slice's content starts in its image, and how tall the image is. */
 export interface CapturedImage {
   readonly contentTopImgPx: number;
   readonly heightImgPx: number;
@@ -44,11 +41,10 @@ export interface Slice {
   readonly imageKey: string;
   readonly rowStart: number;
   readonly rowEnd: number;
-  /** Screen px of the slice's first content row, on the layout's scale. */
   readonly contentTopScreenPx: number;
   readonly capture: CaptureRef;
   /** The most the image can take in the terminal. */
-  readonly bytes: number;
+  readonly maxBytes: number;
 }
 
 /**
@@ -150,18 +146,16 @@ export function buildLayout(synced: SyncedLayout, g: Geometry): Layout {
       k === 0 ? rowStart : Math.floor(toScreenPx(topCss + k * g.raster.sliceRows * CELL_CSS_PX) / cellHpx),
     );
     const sliceCss = g.raster.sliceRows * CELL_CSS_PX;
-    const gridRows = captureGridCss(g.deviceScaleFactor) / CELL_CSS_PX;
     const unitSlices = starts.map((start, k): Slice => {
       const offsetCss = k * sliceCss;
       const lengthCss = Math.min(sliceCss, bottomCss - topCss - offsetCss);
-      const imageRows = sliceImageRows(Math.ceil(lengthCss / CELL_CSS_PX), gridRows);
       const slice: Slice = {
         imageKey: `${key}/${k}/${heightImgPx}`,
         rowStart: start,
         rowEnd: starts[k + 1] ?? rowEnd,
         contentTopScreenPx: toScreenPx(topCss + offsetCss),
-        capture: { first: members[0]!, last: members.at(-1)!, heightImgPx, offsetCss, lengthCss },
-        bytes: g.imgWidthPx * Math.ceil(imageRows * cellHpx * renderScale) * 4,
+        capture: { first: members[0]!, last: members.at(-1)!, runHeightImgPx: heightImgPx, offsetCss, lengthCss },
+        maxBytes: g.imgWidthPx * maxSliceImagePx(lengthCss, g.raster) * 4,
       };
       slices.set(slice.imageKey, slice);
       return slice;
@@ -186,7 +180,6 @@ export function buildLayout(synced: SyncedLayout, g: Geometry): Layout {
   };
 }
 
-/** The one visibility function: the scheduler checks coverage with it and the screen draws it. */
 export function visiblePlacements(layout: Layout, top: number, viewRows: number): Placement[] {
   const { cellHpx, renderScale } = layout.raster;
   const bottom = top + viewRows;
@@ -249,7 +242,6 @@ export function headingRows(layout: Layout): number[] {
   return layout.units.filter((u) => u.heading).map((u) => u.rowStart);
 }
 
-/** Every slice, nearest the view first; ties go the way the view is moving. */
 export function prefetchOrder(
   layout: Layout,
   top: number,

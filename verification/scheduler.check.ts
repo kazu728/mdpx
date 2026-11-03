@@ -10,12 +10,10 @@
  *
  * Usage: bun verification/scheduler.check.ts [--depth N]
  */
-import { CELL_CSS_PX, captureGridCss, resolveGeometry, sliceImageRows, type Geometry } from "../src/geometry.ts";
-import { visibleImageKeys, type CaptureRef, type Layout, type SyncedLayout } from "../src/layout.ts";
+import { CELL_CSS_PX, maxSliceImagePx, resolveGeometry, type Geometry } from "../src/geometry.ts";
+import { visibleImageKeys, type Layout, type SyncedLayout } from "../src/layout.ts";
 import type { BlockKind } from "../src/markdown.ts";
 import { Scheduler, type Action, type ScrollDelta, type SchedulerEvent } from "../src/scheduler.ts";
-
-// ---------- the bounded world ----------
 
 interface Spec {
   key: string;
@@ -47,7 +45,7 @@ type Storage = keyof typeof STORAGE;
 function screen(cols: number, rows: number, storage: Storage): Geometry {
   const g = resolveGeometry({ cols, rows }, { cellHpx: 20, cellWpx: 10 }, { frameBytes: null, storageBytes: 0 });
   const raster = { ...g.raster, sliceRows: SLICE_ROWS };
-  const largestSlice = g.imgWidthPx * sliceImageRows(SLICE_ROWS, 1) * 20 * 4;
+  const largestSlice = g.imgWidthPx * maxSliceImagePx(SLICE_ROWS * CELL_CSS_PX, raster) * 4;
   return { ...g, raster, storageBytes: largestSlice * STORAGE[storage] };
 }
 
@@ -63,7 +61,6 @@ const KEYS: ScrollDelta[] = [
   { kind: "heading", dir: 1 },
 ];
 
-/** What the page reports for a document: blocks stacked with GitHub's 16px gaps unless the spec says otherwise. */
 function synced(doc: Spec[], g: Geometry): SyncedLayout {
   let y = 32;
   const blocks = doc.map((s, i) => {
@@ -74,14 +71,6 @@ function synced(doc: Spec[], g: Geometry): SyncedLayout {
   });
   return { raster: g.raster, theme: "light", blocks, docHeightCss: y + 32 };
 }
-
-/** The tallest image the page can return for a slice; what the terminal then holds. */
-function imageHeight(ref: CaptureRef, g: Geometry): number {
-  const gridRows = captureGridCss(g.deviceScaleFactor) / CELL_CSS_PX;
-  return Math.ceil(sliceImageRows(Math.ceil(ref.lengthCss / CELL_CSS_PX), gridRows) * g.raster.cellHpx * g.raster.renderScale);
-}
-
-// ---------- state ----------
 
 type CaptureAction = Extract<Action, { type: "capture" }>;
 
@@ -104,8 +93,8 @@ interface World {
 
 /** The Scheduler's fields, as the checker copies them. A new field must be added here. */
 const FIELDS = [
-  "actions", "capturing", "dirty", "direction", "editStartedAt", "failedKeys", "failure", "follow",
-  "geometry", "images", "latencyMs", "marks", "next", "nextId", "pendingTop", "shown", "stale",
+  "actions", "awaitingFreshSync", "capturing", "dirty", "direction", "editStartedAt", "failedKeys", "failure", "follow",
+  "geometry", "images", "latencyMs", "marks", "next", "nextId", "pendingTop", "shown",
   "syncing", "top",
 ].sort();
 
@@ -172,13 +161,11 @@ function stateKey(w: World): string {
     layoutName(f.shown as Layout | null),
     layoutName(f.next as Layout | null),
     SCREENS.indexOf(f.geometry as Geometry),
-    f.top, f.pendingTop, f.follow, f.direction, f.dirty, f.syncing, f.capturing, f.stale, f.failure,
+    f.top, f.pendingTop, f.follow, f.direction, f.dirty, f.syncing, f.capturing, f.awaitingFreshSync, f.failure,
     [...f.failedKeys].sort(),
     [...f.images].map(([k, e]) => [k, rank.get(e.id), e.bytes, e.image !== null]).sort(),
   ]);
 }
-
-// ---------- transitions ----------
 
 class Violation extends Error {}
 
@@ -193,7 +180,6 @@ function residentIds(w: World): Set<number> {
   return new Set([...w.s.view().images.values()].map((i) => i.id));
 }
 
-/** Applies the scheduler's actions to the environment, checking each against the properties. */
 function perform(w: World, actions: Action[]): void {
   for (const a of actions) {
     switch (a.type) {
@@ -222,7 +208,6 @@ function dispatch(w: World, event: SchedulerEvent): void {
   const before = w.s.view();
   const step = w.s.dispatch(event);
   const after = w.s.view();
-  // Never evict an image the screen goes on showing.
   if (after.shown) {
     const showing = new Map([...visibleImageKeys(after.shown, after.top, after.geometry.viewRows)].map((k) => [before.images.get(k)?.id, k]));
     for (const a of step.actions) {
@@ -244,7 +229,7 @@ function checkState(w: World): void {
   const g = w.s.view().geometry;
   let used = 0;
   for (const b of w.env.terminal.values()) used += b;
-  if (w.env.capture) used += g.imgWidthPx * imageHeight(w.env.capture.ref, g) * 4;
+  if (w.env.capture) used += g.imgWidthPx * maxSliceImagePx(w.env.capture.ref.lengthCss, g.raster) * 4;
   if (used > g.storageBytes) throw new Violation(`terminal storage exceeded: ${used} > ${g.storageBytes} bytes`);
   const resident = residentIds(w);
   const held = [...w.env.terminal.keys()];
@@ -296,7 +281,7 @@ function moves(w: World): Move[] {
       label: `page delivers ${c.imageKey} as id ${c.id}`,
       apply: (x) => {
         const g = SCREENS[x.env.screen]!;
-        const heightImgPx = imageHeight(c.ref, g);
+        const heightImgPx = maxSliceImagePx(c.ref.lengthCss, g.raster);
         x.env.capture = null;
         x.env.terminal.set(c.id, g.imgWidthPx * heightImgPx * 4);
         dispatch(x, { type: "captured", imageKey: c.imageKey, id: c.id, image: { contentTopImgPx: 30, heightImgPx }, at });
@@ -342,7 +327,7 @@ function converges(start: World): string | null {
     } else if (w.env.capture) {
       const c = w.env.capture;
       const g = SCREENS[w.env.screen]!;
-      const heightImgPx = imageHeight(c.ref, g);
+      const heightImgPx = maxSliceImagePx(c.ref.lengthCss, g.raster);
       w.env.capture = null;
       w.env.terminal.set(c.id, g.imgWidthPx * heightImgPx * 4);
       dispatch(w, { type: "captured", imageKey: c.imageKey, id: c.id, image: { contentTopImgPx: 30, heightImgPx }, at: 0 });
@@ -357,8 +342,6 @@ function converges(start: World): string | null {
   if (v.status !== "idle") return `ends with status "${v.status}"`;
   return null;
 }
-
-// ---------- search ----------
 
 function check(storage: Storage, maxDepth: number): void {
   SCREENS = [screen(40, 7, storage), screen(40, 10, storage), screen(50, 7, storage)];
