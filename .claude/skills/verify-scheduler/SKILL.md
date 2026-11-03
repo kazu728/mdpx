@@ -95,8 +95,8 @@ against the copy, confirm it reports the violation, and discard the copy.
 | --- | --- |
 | all properties | `Scheduler` in `src/scheduler.ts`: `dispatch`, `view`, and every private method |
 | visibility and anchors | `buildLayout`, `visibleImageKeys`, `maxTop`, `clampTop`, `anchorAt`, `topFor`, `headingRows`, `prefetchOrder` in `src/layout.ts` |
-| screens | `resolveGeometry`, `sameRaster`, `sliceImageRows`, `captureGridCss` in `src/geometry.ts` |
+| screens | `resolveGeometry`, `sameRaster`, `maxSliceImagePx`, `maxSliceImageRows`, `captureGridCss` in `src/geometry.ts` |
 
-Last confirmed against the code at commit `3bdfe1c`. When any covered code has changed since
+Last confirmed against the code at commit `85659f9`. When any covered code has changed since
 that commit, run the check. Once it passes and you have confirmed that the world and the
 properties above still describe the code, move this commit forward. Do not move it otherwise.
