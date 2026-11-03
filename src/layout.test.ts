@@ -95,6 +95,25 @@ describe("buildLayout", () => {
     }
   });
 
+  test("a block that paints over the blocks after it, like a floated image, shares their unit", () => {
+    const g = GEO;
+    const synced: SyncedLayout = {
+      raster: g.raster,
+      theme: "light",
+      blocks: [
+        { key: "logo", kind: "other", topCss: 32, heightCss: 240 },
+        { key: "title", kind: "heading", topCss: 32, heightCss: 40 },
+        { key: "intro", kind: "other", topCss: 88, heightCss: 24 },
+        { key: "after", kind: "other", topCss: 300, heightCss: 24 },
+      ],
+      docHeightCss: 356,
+    };
+    const l = buildLayout(synced, g);
+    expect(l.units.map((u) => u.members.map((m) => m.key))).toEqual([["logo", "title", "intro"], ["after"]]);
+    expect(l.units[0]!.rowStart).toBe(Math.floor((32 * g.raster.cellHpx) / CELL_CSS_PX / g.raster.cellHpx));
+    expect(l.units[0]!.rowEnd).toBeGreaterThanOrEqual(Math.ceil(((32 + 240) * g.raster.cellHpx) / CELL_CSS_PX / g.raster.cellHpx));
+  });
+
   test("a tall unit's slices cover its rows once, each inside one screenshot", () => {
     for (const g of GEOMETRIES) {
       const tallCss = g.raster.sliceRows * CELL_CSS_PX * 3.5;

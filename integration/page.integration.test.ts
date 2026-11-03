@@ -205,6 +205,48 @@ describe.skipIf(!exe)("page", () => {
     expect(await browserPage.evaluate(() => (document.querySelector(".mermaid svg") as unknown as { mark?: boolean })?.mark)).toBe(true);
   }, 30000);
 
+  test("a floated README logo is captured whole, with the blocks it overlaps", async () => {
+    const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
+    const logo = (h: number) => `<img align="right" src="red.png" width="120" height="${h}">\n\n# Project\n\nOne line about it.\n\nMore text.\n`;
+    const layout = await sync(logo(240), g);
+    const img = await browserPage.evaluate(() => {
+      const r = document.querySelector("img")!.getBoundingClientRect();
+      return { top: r.top + scrollY, bottom: r.bottom + scrollY };
+    });
+    const unit = layout.units.find((u) => u.members.some((m) => m.key === layout.blockKeys[0]))!;
+    expect(unit.members.length).toBeGreaterThan(1);
+    expect(unit.rowStart * CELL_CSS_PX).toBeLessThanOrEqual(img.top);
+    expect(unit.rowEnd * CELL_CSS_PX).toBeGreaterThanOrEqual(img.bottom);
+    const shot = await page.capture(unit.slices[0]!.capture);
+    const red = await browserPage.evaluate(async (s: string) => {
+      const im = new Image();
+      im.src = "data:image/png;base64," + s;
+      await im.decode();
+      const c = document.createElement("canvas");
+      c.width = im.width;
+      c.height = im.height;
+      const ctx = c.getContext("2d")!;
+      ctx.drawImage(im, 0, 0);
+      const d = ctx.getImageData(0, 0, im.width, im.height).data;
+      const rows: number[] = [];
+      for (let y = 0; y < im.height; y++) {
+        for (let x = 0; x < im.width; x++) {
+          const i = (y * im.width + x) * 4;
+          if (d[i]! > 200 && d[i + 1]! < 80 && d[i + 2]! < 80) {
+            rows.push(y);
+            break;
+          }
+        }
+      }
+      return rows;
+    }, shot.pngBase64);
+    // Every image px row of the logo is in the capture.
+    expect(red.length).toBeGreaterThanOrEqual(Math.floor((img.bottom - img.top) * g.deviceScaleFactor) - 1);
+    // Changing only the logo changes the unit's image, so no stale pixels survive.
+    const resized = await sync(logo(200), g);
+    expect([...resized.slices.keys()]).not.toContain(unit.slices[0]!.imageKey);
+  }, 30000);
+
   test("a block that vanished from the page is sent again on the next sync", async () => {
     const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
     const md = "one\n\ntwo\n\nthree\n";

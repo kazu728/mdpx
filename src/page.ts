@@ -88,17 +88,60 @@ const RUNTIME = String.raw`
   const heights = new WeakMap();
   let syncing = false;
   let reflowTimer = 0;
-  const observer = new ResizeObserver((entries) => {
-    if (syncing) return;
-    for (const entry of entries) {
-      const h = entry.target.getBoundingClientRect().height;
-      if (Math.abs(h - (heights.get(entry.target) ?? h)) > 0.5) {
-        clearTimeout(reflowTimer);
-        reflowTimer = setTimeout(() => window.__mdpxReflow && window.__mdpxReflow(), config.reflowMs);
-        return;
+  // What a block paints, not just its box: a floated image overflows a wrapper that may be
+  // zero pixels tall, and it must be captured with the blocks it overlaps. Walking a block's
+  // content is slow, so how far it paints beyond its box is kept until the block or the
+  // page width changes; moving the block moves its overflow with it.
+  const overflow = new WeakMap();
+  function extent(w) {
+    const box = w.getBoundingClientRect();
+    let o = overflow.get(w);
+    if (!o || o.width !== innerWidth) {
+      o = { width: innerWidth, height: box.height, above: 0, below: 0 };
+      // Only a block whose content overflows needs the walk; scrollHeight knows without one.
+      if (w.scrollHeight > box.height + 1) {
+        const range = document.createRange();
+        range.selectNodeContents(w);
+        const ink = range.getBoundingClientRect();
+        if (ink.width > 0 || ink.height > 0) {
+          o.above = Math.max(0, box.top - ink.top);
+          o.below = Math.max(0, ink.bottom - box.bottom);
+        }
       }
+      overflow.set(w, o);
     }
+    return { top: box.top - o.above + scrollY, bottom: box.bottom + o.below + scrollY };
+  }
+  // A late image or diagram can change what a block paints without resizing its wrapper.
+  function scheduleReflowCheck(changed) {
+    for (const w of changed) overflow.delete(w);
+    if (syncing) return;
+    clearTimeout(reflowTimer);
+    reflowTimer = setTimeout(() => {
+      for (const w of wrappers()) {
+        const e = extent(w);
+        if (Math.abs(e.bottom - e.top - (heights.get(w) ?? 0)) > 0.5) {
+          if (window.__mdpxReflow) window.__mdpxReflow();
+          return;
+        }
+      }
+    }, config.reflowMs);
+  }
+  // Observing a block reports its size once; only a size that differs from the one measured counts.
+  const observer = new ResizeObserver((entries) => {
+    const changed = entries
+      .map((e) => e.target)
+      .filter((w) => Math.abs(w.getBoundingClientRect().height - (overflow.get(w)?.height ?? -1)) > 0.5);
+    if (changed.length) scheduleReflowCheck(changed);
   });
+  article.addEventListener(
+    "load",
+    (event) => {
+      const w = event.target.closest && event.target.closest(".mdpx-block");
+      scheduleReflowCheck(w ? [w] : []);
+    },
+    true,
+  );
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let mermaidLoad = null;
   let mermaidTheme = null;
@@ -177,9 +220,9 @@ const RUNTIME = String.raw`
         for (const w of fresh) observer.observe(w);
         await settle(fresh, theme);
         const rects = wrappers().map((w) => {
-          const r = w.getBoundingClientRect();
-          heights.set(w, r.height);
-          return [r.top + scrollY, r.height];
+          const e = extent(w);
+          heights.set(w, e.bottom - e.top);
+          return [e.top, e.bottom - e.top];
         });
         return { rects, docHeight: document.body.scrollHeight };
       } finally {
@@ -195,9 +238,15 @@ const RUNTIME = String.raw`
       const from = all.indexOf(a);
       const to = all.indexOf(b);
       if (to < from) return null;
+      let top = Infinity;
       let bottom = -Infinity;
-      for (let i = from; i <= to; i++) bottom = Math.max(bottom, all[i].getBoundingClientRect().bottom);
-      return { top: a.getBoundingClientRect().top + scrollY, bottom: bottom + scrollY };
+      for (let i = from; i <= to; i++) {
+        const e = extent(all[i]);
+        if (e.bottom - e.top <= 0) continue;
+        top = Math.min(top, e.top);
+        bottom = Math.max(bottom, e.bottom);
+      }
+      return top < bottom ? { top, bottom } : null;
     },
   };
 })

@@ -135,7 +135,7 @@ export function buildLayout(synced: SyncedLayout, g: Geometry): Layout {
   const units = groupBlocks(synced.blocks).map((indices): Unit => {
     const members = indices.map((i) => refs[i]!);
     const blocks = indices.map((i) => synced.blocks[i]!);
-    const topCss = blocks[0]!.topCss;
+    const topCss = Math.min(...blocks.map((b) => b.topCss));
     const bottomCss = Math.max(...blocks.map((b) => b.topCss + b.heightCss));
     const key = members.length === 1 ? members[0]!.key : digest(members.map((m) => m.key));
     const topScreenPx = toScreenPx(topCss);
