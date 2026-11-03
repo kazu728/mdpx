@@ -98,6 +98,6 @@ against the copy, confirm it reports the violation, and discard the copy.
 | visibility and anchors | `buildLayout`, `visibleImageKeys`, `maxTop`, `clampTop`, `anchorAt`, `topFor`, `headingRows`, `prefetchOrder` in `src/layout.ts` |
 | screens | `resolveGeometry`, `sameRaster`, `maxSliceImagePx`, `maxSliceImageRows`, `captureGridCss` in `src/geometry.ts` (and `Theme` in `src/theme.ts`, by type only) |
 
-Last confirmed against the code at commit `363c15e`. When any covered code has changed since
+Last confirmed against the code at commit `9110882`. When any covered code has changed since
 that commit, run the check. Once it passes and you have confirmed that the world and the
 properties above still describe the code, move this commit forward. Do not move it otherwise.
