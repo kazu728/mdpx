@@ -99,8 +99,8 @@ async function runApp(mdPath: string): Promise<void> {
     dir = tmp;
     const page = chrome
       .launch()
-      .then(() =>
-        Page.open(chrome.page!, {
+      .then((browserPage) =>
+        Page.open(browserPage, {
           mdDir,
           assets,
           dir: tmp,

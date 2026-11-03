@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import MarkdownIt from "markdown-it";
+import type { Theme } from "./theme.ts";
 import taskLists from "markdown-it-task-lists";
 import {
   bundledLanguagesInfo,
@@ -19,11 +20,8 @@ const katex: typeof import("@vscode/markdown-it-katex").default = require(
   "@vscode/markdown-it-katex",
 ).default;
 
-export type Theme = "light" | "dark";
 export type BlockKind = "heading" | "other";
 
-/** github-markdown-css's page background, also painted behind the images on rows they leave blank. */
-export const PAGE_BACKGROUND: Record<Theme, string> = { light: "#ffffff", dark: "#0d1117" };
 
 export interface Block {
   /**

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import type { Page as BrowserPage } from "puppeteer-core";
 import { Chrome, resolveExecutable } from "../src/chrome.ts";
 import { CELL_CSS_PX, resolveGeometry, type Geometry } from "../src/geometry.ts";
 import { buildLayout, type Layout } from "../src/layout.ts";
@@ -23,6 +24,7 @@ const PNG_IHDR_HEIGHT_OFFSET = 20;
 
 let dir: string;
 let chrome: Chrome;
+let browserPage: BrowserPage;
 let page: Page;
 let markdown: string;
 
@@ -43,7 +45,7 @@ async function sync(md: string, g: Geometry): Promise<Layout> {
  * Chrome's pixel snapping to have moved it by one row either way.
  */
 function contentDifference(a: Capture, b: Capture, rows: number): Promise<number> {
-  return chrome.page!.evaluate(
+  return browserPage.evaluate(
     async (x: string, ya: number, y: string, yb: number, n: number) => {
       const load = async (s: string) => {
         const img = new Image();
@@ -83,7 +85,7 @@ function contentDifference(a: Capture, b: Capture, rows: number): Promise<number
 }
 
 function inkedRows(base64: string): Promise<number[]> {
-  return chrome.page!.evaluate(async (s: string) => {
+  return browserPage.evaluate(async (s: string) => {
     const img = new Image();
     img.src = "data:image/png;base64," + s;
     await img.decode();
@@ -112,8 +114,8 @@ describe.skipIf(!exe)("page", () => {
     dir = await mkdtemp(join(tmpdir(), "mdpx-it-"));
     markdown = await readFile(FIXTURE, "utf8");
     chrome = new Chrome(exe!);
-    await chrome.launch();
-    page = await Page.open(chrome.page!, { mdDir: dirname(FIXTURE), assets: resolveAssets(), dir, onReflow: () => {} });
+    browserPage = await chrome.launch();
+    page = await Page.open(browserPage, { mdDir: dirname(FIXTURE), assets: resolveAssets(), dir, onReflow: () => {} });
   }, 60000);
 
   afterAll(async () => {
@@ -124,7 +126,7 @@ describe.skipIf(!exe)("page", () => {
   test("wrapping each block leaves GitHub's layout exactly as it was", async () => {
     const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
     await sync(markdown, g);
-    const drift = await chrome.page!.evaluate(() => {
+    const drift = await browserPage.evaluate(() => {
       const wrapped = document.querySelector("article.markdown-body")!;
       const plain = wrapped.cloneNode(true) as HTMLElement;
       for (const w of Array.from(plain.querySelectorAll(":scope > .mdpx-block"))) w.replaceWith(...Array.from(w.childNodes));
@@ -143,7 +145,7 @@ describe.skipIf(!exe)("page", () => {
   test("Mermaid becomes SVG, and every slice is a row of blank page, the block, and another row of blank page", async () => {
     const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
     const layout = await sync(markdown, g);
-    expect(await chrome.page!.evaluate(() => document.querySelectorAll(".mermaid svg").length)).toBe(1);
+    expect(await browserPage.evaluate(() => document.querySelectorAll(".mermaid svg").length)).toBe(1);
     expect(layout.units.length).toBeGreaterThan(10);
     for (const unit of layout.units) {
       for (const slice of unit.slices) {
@@ -189,18 +191,18 @@ describe.skipIf(!exe)("page", () => {
     const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
     const md = "intro\n\n```mermaid\ngraph TD; A-->B\n```\n\noutro\n";
     const first = await page.sync(await render(md), g);
-    await chrome.page!.evaluate(() => {
+    await browserPage.evaluate(() => {
       for (const w of Array.from(document.querySelectorAll(".mdpx-block"))) (w as unknown as { mark: boolean }).mark = true;
       (document.querySelector(".mermaid svg") as unknown as { mark: boolean }).mark = true;
     });
     expect(await page.sync(await render(md), g)).toEqual(first);
     expect(
-      await chrome.page!.evaluate(() =>
+      await browserPage.evaluate(() =>
         Array.from(document.querySelectorAll(".mdpx-block")).every((w) => (w as unknown as { mark?: boolean }).mark),
       ),
     ).toBe(true);
     await page.sync(await render("```mermaid\ngraph TD; A-->B\n```\n\nintro\n\noutro\n"), g);
-    expect(await chrome.page!.evaluate(() => (document.querySelector(".mermaid svg") as unknown as { mark?: boolean })?.mark)).toBe(true);
+    expect(await browserPage.evaluate(() => (document.querySelector(".mermaid svg") as unknown as { mark?: boolean })?.mark)).toBe(true);
   }, 30000);
 
   test("a capture from a layout the page has moved on from is refused", async () => {

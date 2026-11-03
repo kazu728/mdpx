@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderDocument, type Theme } from "./markdown.ts";
+import { renderDocument } from "./markdown.ts";
+import type { Theme } from "./theme.ts";
 
 let dir: string;
 beforeAll(async () => {

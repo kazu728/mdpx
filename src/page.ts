@@ -6,7 +6,8 @@ import { pathToFileURL } from "node:url";
 import { TimeoutError, type Page as BrowserPage } from "puppeteer-core";
 import { captureClipCss, type Geometry } from "./geometry.ts";
 import type { CaptureRef, CapturedImage, SyncedLayout } from "./layout.ts";
-import { PAGE_BACKGROUND, type Doc, type Theme } from "./markdown.ts";
+import type { Doc } from "./markdown.ts";
+import { PAGE_BACKGROUND, type Theme } from "./theme.ts";
 
 const require = createRequire(import.meta.url);
 

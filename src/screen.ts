@@ -2,7 +2,7 @@ import stringWidth from "string-width";
 import { FULL_SCALE, GUTTER_COLS } from "./geometry.ts";
 import { deletePlacement, place } from "./kitty.ts";
 import { cropOf, maxTop, visiblePlacements } from "./layout.ts";
-import { PAGE_BACKGROUND } from "./markdown.ts";
+import { PAGE_BACKGROUND } from "./theme.ts";
 import type { ViewState } from "./scheduler.ts";
 
 const ESC = "\x1b";

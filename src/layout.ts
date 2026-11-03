@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { CELL_CSS_PX, maxSliceImagePx, type Geometry, type RasterSpec } from "./geometry.ts";
-import type { BlockKind, Theme } from "./markdown.ts";
+import type { BlockKind } from "./markdown.ts";
+import type { Theme } from "./theme.ts";
 
 export interface PlacedBlock {
   readonly key: string;

@@ -49,11 +49,10 @@ function isSnap(executable: string): boolean {
 
 export class Chrome {
   private browser: Browser | null = null;
-  page: Page | null = null;
 
   constructor(private readonly executablePath: string) {}
 
-  async launch(): Promise<void> {
+  async launch(): Promise<Page> {
     // No --allow-file-access-from-files: body scripts could read local files over XHR.
     this.browser = await puppeteer.launch({
       executablePath: this.executablePath,
@@ -64,7 +63,7 @@ export class Chrome {
       handleSIGTERM: false,
       handleSIGHUP: false,
     });
-    this.page = (await this.browser.pages())[0] ?? (await this.browser.newPage());
+    return (await this.browser.pages())[0] ?? (await this.browser.newPage());
   }
 
   async close(): Promise<void> {
@@ -72,6 +71,5 @@ export class Chrome {
       await this.browser?.close();
     } catch {}
     this.browser = null;
-    this.page = null;
   }
 }
