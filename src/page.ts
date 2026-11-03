@@ -45,15 +45,21 @@ const STABLE_IMG_DECODE_MS = 1000;
 const STABLE_MERMAID_MS = 3000;
 const REFLOW_DEBOUNCE_MS = 50;
 
-interface SyncResult {
-  rects: [top: number, height: number][];
-  docHeight: number;
+/** A block the page already holds is sent without its HTML. */
+interface SyncBlock {
+  key: string;
+  html?: string;
 }
+
+type SyncResult =
+  | { rects: [top: number, height: number][]; docHeight: number }
+  /** Blocks sent without HTML that the page does not hold; nothing was changed. */
+  | { missing: string[] };
 
 declare global {
   interface Window {
     __mdpx: {
-      sync(blocks: { key: string; html: string }[], theme: Theme): Promise<SyncResult>;
+      sync(blocks: SyncBlock[], theme: Theme): Promise<SyncResult>;
       rect(first: [string, number], last: [string, number]): { top: number; bottom: number } | null;
     };
   }
@@ -131,14 +137,22 @@ const RUNTIME = String.raw`
   const wrappers = () => Array.from(article.children);
   window.__mdpx = {
     async sync(blocks, theme) {
+      const pool = new Map();
+      for (const w of wrappers()) {
+        const list = pool.get(w.dataset.key);
+        if (list) list.push(w); else pool.set(w.dataset.key, [w]);
+      }
+      const left = new Map(Array.from(pool, ([key, list]) => [key, list.length]));
+      const missing = new Set();
+      for (const b of blocks) {
+        const n = left.get(b.key) ?? 0;
+        if (n > 0) left.set(b.key, n - 1);
+        else if (b.html === undefined) missing.add(b.key);
+      }
+      if (missing.size) return { missing: Array.from(missing) };
       syncing = true;
       try {
         applyTheme(theme);
-        const pool = new Map();
-        for (const w of wrappers()) {
-          const list = pool.get(w.dataset.key);
-          if (list) list.push(w); else pool.set(w.dataset.key, [w]);
-        }
         const ordered = [];
         const fresh = [];
         for (const b of blocks) {
@@ -228,6 +242,8 @@ function shellHtml(mdDir: string, assets: Assets, nonce: string): string {
 
 export class Page {
   private viewport: { widthCssPx: number; deviceScaleFactor: number } | null = null;
+  /** How many wrappers the page holds for each key, as of the last sync. */
+  private held = new Map<string, number>();
 
   private constructor(
     private readonly page: BrowserPage,
@@ -248,6 +264,7 @@ export class Page {
 
   async reset(): Promise<void> {
     this.viewport = null;
+    this.held.clear();
     await this.page.goto(pathToFileURL(this.shellPath).href, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
   }
 
@@ -258,8 +275,22 @@ export class Page {
       await this.page.setViewport({ width: widthCssPx, height: VIEWPORT_HEIGHT_CSS_PX, deviceScaleFactor });
       this.viewport = { widthCssPx, deviceScaleFactor };
     }
-    const blocks = doc.blocks.map((b) => ({ key: b.key, html: b.html }));
-    const result = await this.page.evaluate((b, theme) => window.__mdpx.sync(b, theme), blocks, doc.theme);
+    // Unknown until this sync succeeds: a failure may leave any mix of old and new wrappers.
+    const held = this.held;
+    this.held = new Map();
+    const send = (resend: ReadonlySet<string>) => {
+      const seen = new Map<string, number>();
+      const blocks = doc.blocks.map((b): SyncBlock => {
+        const n = seen.get(b.key) ?? 0;
+        seen.set(b.key, n + 1);
+        return n < (held.get(b.key) ?? 0) && !resend.has(b.key) ? { key: b.key } : { key: b.key, html: b.html };
+      });
+      return this.page.evaluate((b, theme) => window.__mdpx.sync(b, theme), blocks, doc.theme);
+    };
+    let result = await send(new Set());
+    if ("missing" in result) result = await send(new Set(result.missing));
+    if ("missing" in result) throw new Error(`the page lost blocks it was just sent: ${result.missing.join(", ")}`);
+    for (const b of doc.blocks) this.held.set(b.key, (this.held.get(b.key) ?? 0) + 1);
     return {
       raster: geometry.raster,
       theme: doc.theme,

@@ -205,6 +205,20 @@ describe.skipIf(!exe)("page", () => {
     expect(await browserPage.evaluate(() => (document.querySelector(".mermaid svg") as unknown as { mark?: boolean })?.mark)).toBe(true);
   }, 30000);
 
+  test("a block that vanished from the page is sent again on the next sync", async () => {
+    const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
+    const md = "one\n\ntwo\n\nthree\n";
+    const first = await page.sync(await render(md), g);
+    await browserPage.evaluate(() => document.querySelectorAll(".mdpx-block")[1]!.remove());
+    const again = await page.sync(await render(md), g);
+    expect(again).toEqual(first);
+    expect(await browserPage.evaluate(() => Array.from(document.querySelectorAll(".mdpx-block"), (w) => w.textContent!.trim()))).toEqual([
+      "one",
+      "two",
+      "three",
+    ]);
+  }, 30000);
+
   test("a capture from a layout the page has moved on from is refused", async () => {
     const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
     const layout = await sync("one\n\ntwo\n", g);

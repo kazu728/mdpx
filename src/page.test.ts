@@ -20,10 +20,22 @@ class FakeBrowserPage {
   connected = true;
   clips: { x: number; y: number; width: number; height: number }[] = [];
   syncCalls: { key: string; html?: string }[][] = [];
+  /** Answers the next sync with these keys missing, as a page that lost wrappers would. */
+  missingOnce: string[] | null = null;
+  failNextSync = false;
   runtime = {
     sync: async (blocks: { key: string; html?: string }[]) => {
       this.syncCalls.push(blocks);
-      return { rects: this.rects.slice(0, blocks.length), docHeight: 1000 };
+      if (this.failNextSync) {
+        this.failNextSync = false;
+        throw new Error("evaluation failed");
+      }
+      if (this.missingOnce) {
+        const missing = this.missingOnce;
+        this.missingOnce = null;
+        return { missing };
+      }
+      return { rects: blocks.map((_, i) => this.rects[i] ?? [i * 50, 40]), docHeight: 1000 };
     },
     rect: () => this.rect,
   };
@@ -119,5 +131,37 @@ describe("Page.capture", () => {
     fake.connected = true;
     fake.closed = true;
     await expect(page.capture(ref(40))).rejects.toBe(broken);
+  });
+});
+
+describe("Page.sync", () => {
+  const sent = (fake: FakeBrowserPage) => fake.syncCalls.at(-1)!.map((b) => (b.html === undefined ? b.key : `${b.key}+html`));
+
+  test("sends the HTML only of blocks the page does not hold yet, counting duplicates", async () => {
+    const { fake, page } = await open();
+    await page.sync(doc("a", "b"), GEO);
+    expect(sent(fake)).toEqual(["a+html", "b+html"]);
+    await page.sync(doc("a", "new", "b", "a"), GEO);
+    expect(sent(fake)).toEqual(["a", "new+html", "b", "a+html"]);
+    await page.sync(doc("b"), GEO);
+    expect(sent(fake)).toEqual(["b"]);
+  });
+
+  test("resends the blocks the page says it lost, and everything after a failed sync or a reset", async () => {
+    const { fake, page } = await open();
+    await page.sync(doc("a", "b"), GEO);
+    fake.missingOnce = ["b"];
+    await page.sync(doc("a", "b", "c"), GEO);
+    expect(fake.syncCalls.at(-2)!.map((b) => b.html !== undefined)).toEqual([false, false, true]);
+    expect(sent(fake)).toEqual(["a", "b+html", "c+html"]);
+
+    fake.failNextSync = true;
+    await expect(page.sync(doc("a", "b", "c"), GEO)).rejects.toThrow("evaluation failed");
+    await page.sync(doc("a", "b", "c"), GEO);
+    expect(sent(fake)).toEqual(["a+html", "b+html", "c+html"]);
+
+    await page.reset();
+    await page.sync(doc("a"), GEO);
+    expect(sent(fake)).toEqual(["a+html"]);
   });
 });
