@@ -15,16 +15,11 @@ export interface ScreenSize {
   rows: number;
 }
 
-/**
- * Everything that decides the pixels of a captured image. Images captured under an equal
- * RasterSpec stay valid, so a resize that changes only the row count captures nothing.
- */
 export interface RasterSpec {
   readonly contentCols: number;
   readonly cellWpx: number;
   readonly cellHpx: number;
   readonly renderScale: number;
-  /** Rows of content in a full slice. Taller blocks are split. */
   readonly sliceRows: number;
 }
 
@@ -109,10 +104,6 @@ interface Plan {
  */
 const MIN_BLOCK_PITCH_CSS = 40;
 
-/**
- * The most image bytes one screen can need: its visible rows, the hidden part of the slice cut
- * by each edge of the view, and the page captured around each visible slice.
- */
 export function screenImageBytes(
   imgWidthPx: number,
   raster: Pick<RasterSpec, "cellHpx" | "renderScale" | "sliceRows">,
@@ -126,11 +117,9 @@ export function screenImageBytes(
   return imgWidthPx * Math.ceil(rows * raster.cellHpx * raster.renderScale) * 4;
 }
 
-/** Every slice height that fits one screenshot and one relay frame at this scale, tallest first. */
 function plansAt(widthPx: number, cellHpx: number, renderScale: number, limits: GraphicsLimits): Plan[] {
   const imgWidthPx = Math.max(1, Math.round(widthPx * renderScale));
   const cellImg = cellHpx * renderScale;
-  // Slices must end on the grid, so with a two-row grid they are an even number of rows.
   const quantum = Math.max(1, captureGridCss(cellImg / CELL_CSS_PX) / CELL_CSS_PX);
   const plans: Plan[] = [];
   for (let rows = Math.floor(MAX_IMAGE_PX / cellImg / quantum) * quantum; rows >= quantum; rows -= quantum) {
@@ -142,10 +131,6 @@ function plansAt(widthPx: number, cellHpx: number, renderScale: number, limits: 
   return plans;
 }
 
-/**
- * The tallest slices at full scale that one screen fits in; at reduced scale (the relay only)
- * just when no screen fits at full scale. When nothing fits, the plan that needs the least.
- */
 function resolvePlan(widthPx: number, cellHpx: number, viewRows: number, limits: GraphicsLimits): Plan {
   const scales = limits.frameBytes === null ? [FULL_SCALE] : [FULL_SCALE, REDUCED_SCALE];
   const need = (p: Plan) =>
@@ -157,7 +142,6 @@ function resolvePlan(widthPx: number, cellHpx: number, viewRows: number, limits:
   }
   const all = candidates.flat();
   if (all.length === 0) {
-    // Even one row overflows a relay frame; keep the smallest capture to minimize the overflow.
     return { renderScale: REDUCED_SCALE, imgWidthPx: Math.max(1, Math.round(widthPx * REDUCED_SCALE)), sliceRows: 2 };
   }
   return all.reduce((best, p) => (need(p) < need(best) ? p : best));

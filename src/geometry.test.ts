@@ -70,7 +70,6 @@ describe("resolveGeometry", () => {
         (limits.frameBytes === null || transferSize(g.imgWidthPx * sliceImageHeight(taller) * 4) <= limits.frameBytes);
       expect(tallerFits).toBe(false);
     }
-    // On the relay, a 5K screen does not fit at full resolution even once: only then, half.
     const huge = resolveGeometry({ cols: 300, rows: 80 }, { cellHpx: 32, cellWpx: 16 }, relayed);
     expect(huge.raster.renderScale).toBe(0.5);
     expect(need(huge)).toBeLessThanOrEqual(relayed.storageBytes);

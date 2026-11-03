@@ -179,7 +179,6 @@ describe.skipIf(!exe)("page", () => {
         if (!old) continue;
         const fresh = await page.capture(slice.capture);
         const rows = Math.floor(slice.capture.lengthCss * g.deviceScaleFactor);
-        // Antialiasing may differ in a few pixels; anything visible would be far more.
         expect(await contentDifference(old, fresh, rows)).toBeLessThan(0.002);
         compared++;
       }

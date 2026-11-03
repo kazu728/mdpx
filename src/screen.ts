@@ -37,7 +37,6 @@ function sanitizeTerminalLine(s: string): string {
   return s.replace(/[\x00-\x1f\x7f]/g, "?");
 }
 
-/** `content` is the frame without the drops, for telling whether anything changed. */
 export function renderFrame(
   view: ViewState,
   filename: string,
