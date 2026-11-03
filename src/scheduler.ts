@@ -60,7 +60,6 @@ export interface ViewState {
   readonly marks: ReadonlySet<string>;
   readonly follow: boolean;
   readonly status: Status;
-  readonly latencyMs: number | null;
   readonly target: Target | null;
 }
 
@@ -90,8 +89,6 @@ export class Scheduler {
   private nextId = 1;
   private marks = new Map<string, number>();
   private failure: "render" | "update" | "scroll" | null = null;
-  private editStartedAt: number | null = null;
-  private latencyMs: number | null = null;
   private actions: Action[] = [];
 
   constructor(geometry: Geometry) {
@@ -107,7 +104,6 @@ export class Scheduler {
       case "fileChanged":
         this.dirty = true;
         this.failedKeys.clear();
-        this.editStartedAt ??= event.at;
         break;
       case "resize":
         this.onResize(event.geometry);
@@ -151,7 +147,6 @@ export class Scheduler {
       marks: new Set(this.marks.keys()),
       follow: this.follow,
       status: this.status(),
-      latencyMs: this.latencyMs,
       target: this.target(),
     };
   }
@@ -284,10 +279,6 @@ export class Scheduler {
     this.top = top;
     this.pendingTop = null;
     this.failure = null;
-    if (!this.dirty && !this.syncing && this.editStartedAt !== null) {
-      this.latencyMs = at - this.editStartedAt;
-      this.editStartedAt = null;
-    }
   }
 
   private target(): Target | null {

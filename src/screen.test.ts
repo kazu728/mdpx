@@ -32,7 +32,6 @@ function view(shown: Layout | null, overrides: Partial<ViewState> = {}): ViewSta
     marks: new Set(),
     follow: false,
     status: "idle",
-    latencyMs: null,
     target: null,
     ...overrides,
   };
@@ -132,13 +131,13 @@ describe("status bar", () => {
     expect(statusLine(view(layoutOf(["a"])), `x${ESC}[31m\n\t.md`).startsWith("x?[31m??.md")).toBe(true);
   });
 
-  test("shows what the scheduler is doing, following, the last latency and low resolution", () => {
+  test("shows what the scheduler is doing, following and low resolution", () => {
     const shown = view(layoutOf(["a"]));
     expect(statusLine({ ...shown, status: "scrolling" })).toContain("scrolling…");
     expect(statusLine({ ...shown, status: "updating" })).toContain("updating");
     expect(statusLine({ ...shown, shown: null, status: "rendering" })).toContain("rendering…");
     expect(statusLine({ ...shown, status: "update failed" })).toContain("update failed");
-    expect(statusLine({ ...shown, follow: true, latencyMs: 41.6 })).toMatch(/follow {2}42ms/);
+    expect(statusLine({ ...shown, follow: true })).toContain("follow");
     const low = resolveGeometry({ cols: 400, rows: 120 }, { cellHpx: 40, cellWpx: 20 }, { frameBytes: 30 * 2 ** 20, storageBytes: 64 * 2 ** 20 });
     expect(statusLine(view(null, { geometry: low }))).toContain("low-res");
     expect(statusLine(shown)).not.toContain("low-res");
