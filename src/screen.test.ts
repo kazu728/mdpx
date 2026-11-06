@@ -83,6 +83,17 @@ describe("renderFrame", () => {
     }
   });
 
+  test("a pane wider than the article places it in the middle and keeps the mark in the gutter", () => {
+    const wide = resolveGeometry({ cols: 300, rows: 51 }, { cellHpx: 20, cellWpx: 10 });
+    const shown = layoutOf(["a"], wide);
+    const { escape } = renderFrame(view(shown, { geometry: wide, marks: new Set(["a"]) }), "a.md", []);
+    const [p] = visiblePlacements(shown, 0, wide.viewRows);
+    expect(wide.marginCols).toBeGreaterThan(0);
+    expect(escape).toContain(`${ESC}[${p!.screenRow + 1};${GUTTER_COLS + wide.marginCols + 1}H${ESC}_Ga=p,`);
+    expect(escape).toContain(`,c=${wide.raster.contentCols},`);
+    expect(escape).toContain(`${ESC}[${p!.screenRow + 1};1H▎`);
+  });
+
   test("identical blocks share one image with separate placements; missing images leave the page showing", () => {
     const shown = layoutOf(["same", "x", "same"]);
     const v = view(shown);

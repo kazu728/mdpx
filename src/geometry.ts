@@ -28,6 +28,7 @@ export interface Geometry {
   readonly cols: number;
   readonly rows: number;
   readonly viewRows: number;
+  readonly marginCols: number;
   readonly viewportWidthCssPx: number;
   readonly deviceScaleFactor: number;
   readonly imgWidthPx: number;
@@ -42,6 +43,8 @@ export interface Geometry {
 export const CELL_CSS_PX = 16;
 
 export const GUTTER_COLS = 1;
+
+export const ARTICLE_MAX_WIDTH_CSS = 980;
 
 const MAX_IMAGE_PX = 4096;
 
@@ -155,7 +158,9 @@ export function resolveGeometry(
   const cols = Math.max(1, screen.cols);
   const rows = Math.max(1, screen.rows);
   const viewRows = rows - 1;
-  const contentCols = Math.max(1, cols - GUTTER_COLS);
+  const availableCols = Math.max(1, cols - GUTTER_COLS);
+  const articleCols = Math.ceil((ARTICLE_MAX_WIDTH_CSS * cell.cellHpx) / CELL_CSS_PX / cell.cellWpx);
+  const contentCols = Math.min(availableCols, articleCols);
   const widthPx = contentCols * cell.cellWpx;
   const plan = resolvePlan(widthPx, cell.cellHpx, viewRows, limits);
   return {
@@ -169,6 +174,7 @@ export function resolveGeometry(
     cols,
     rows,
     viewRows,
+    marginCols: Math.floor((availableCols - contentCols) / 2),
     // Puppeteer clips to whole CSS px, so rounding up keeps the screenshot no narrower than the crop.
     viewportWidthCssPx: Math.ceil((widthPx * CELL_CSS_PX) / cell.cellHpx),
     deviceScaleFactor: (plan.renderScale * cell.cellHpx) / CELL_CSS_PX,

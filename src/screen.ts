@@ -58,7 +58,7 @@ export function renderFrame(
       const crop = cropOf(p, image);
       const placementId = (perImage.get(id) ?? 0) + 1;
       perImage.set(id, placementId);
-      out += cursorTo(p.screenRow + 1, GUTTER_COLS + 1);
+      out += cursorTo(p.screenRow + 1, GUTTER_COLS + geometry.marginCols + 1);
       out += place({
         id,
         placementId,
