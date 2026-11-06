@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Page as BrowserPage } from "puppeteer-core";
-import { captureClipCss, type Geometry } from "./geometry.ts";
+import { ARTICLE_MAX_WIDTH_CSS, captureClipCss, type Geometry } from "./geometry.ts";
 import type { CaptureRef, CapturedImage, SyncedLayout } from "./layout.ts";
 import { documentBaseUrl, type Doc } from "./markdown.ts";
 import { PAGE_BACKGROUND, type Theme } from "./theme.ts";
@@ -270,8 +270,9 @@ function shellHtml(mdDir: string, assets: Assets, nonce: string): string {
 <link id="mdpx-dark" rel="stylesheet" href="${href(assets.githubMarkdownCss.dark)}" disabled>
 <link rel="stylesheet" href="${href(assets.katexCss)}">
 <style>
-  html, body { margin: 0; padding: 0; background: ${PAGE_BACKGROUND.light}; }
-  .markdown-body { box-sizing: border-box; min-width: 200px; max-width: 980px; margin: 0 auto; padding: 32px; }
+  html, body { margin: 0; padding: 0; }
+  html { background: ${PAGE_BACKGROUND.light}; }
+  .markdown-body { box-sizing: border-box; min-width: 200px; max-width: ${ARTICLE_MAX_WIDTH_CSS}px; margin: 0 auto; padding: 32px; }
   .markdown-body > .mdpx-block:first-child > :first-child { margin-top: 0 !important; }
   .markdown-body > .mdpx-block:last-child > :last-child { margin-bottom: 0 !important; }
 </style>

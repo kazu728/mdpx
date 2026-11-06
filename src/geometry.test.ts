@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { transferSize } from "./kitty.ts";
 import {
+  ARTICLE_MAX_WIDTH_CSS,
   CELL_CSS_PX,
   FULL_SCALE,
   captureGridCss,
@@ -31,14 +32,35 @@ describe("detectGraphicsLimits", () => {
 });
 
 describe("resolveGeometry", () => {
-  test("16 CSS px span one cell, and the page fills every column right of the gutter", () => {
+  test("16 CSS px span one cell, and a pane narrower than the article fills every column right of the gutter", () => {
     const g = resolveGeometry({ cols: 120, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, direct);
     expect(g.raster.renderScale).toBe(FULL_SCALE);
     expect(g.deviceScaleFactor).toBe(28 / CELL_CSS_PX);
     expect(g.raster.contentCols).toBe(120 - GUTTER_COLS);
+    expect(g.marginCols).toBe(0);
     expect(g.imgWidthPx).toBe((120 - GUTTER_COLS) * 14);
     expect(g.viewportWidthCssPx * g.deviceScaleFactor).toBeGreaterThanOrEqual(g.imgWidthPx);
     expect(g.viewRows).toBe(39);
+  });
+
+  test("a pane wider than the article captures only the article, centered in the columns left over", () => {
+    const g = resolveGeometry({ cols: 300, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, direct);
+    expect(g.raster.contentCols).toBe(123);
+    expect(g.marginCols).toBe(Math.floor((300 - GUTTER_COLS - 123) / 2));
+    expect(g.imgWidthPx).toBe(123 * 14);
+    expect(g.viewportWidthCssPx).toBeGreaterThanOrEqual(ARTICLE_MAX_WIDTH_CSS);
+    expect((122 * 14 * CELL_CSS_PX) / 28).toBeLessThan(ARTICLE_MAX_WIDTH_CSS);
+  });
+
+  test("every full-window pane of a laptop or 4K screen keeps full resolution on the relay", () => {
+    for (const [widthPx, heightPx] of [[2560, 1664], [2940, 1912], [3420, 2224], [3840, 2160]] as const) {
+      for (let cellHpx = 24; cellHpx <= 36; cellHpx++) {
+        const cellWpx = Math.round(cellHpx / 2);
+        const screen = { cols: Math.floor(widthPx / cellWpx), rows: Math.floor(heightPx / cellHpx) };
+        const g = resolveGeometry(screen, { cellHpx, cellWpx }, relayed);
+        expect(g.raster.renderScale).toBe(FULL_SCALE);
+      }
+    }
   });
 
   test("the tallest slice that still fits one screenshot with its page around it", () => {
@@ -70,7 +92,7 @@ describe("resolveGeometry", () => {
         (limits.frameBytes === null || transferSize(g.imgWidthPx * sliceImageHeight(taller) * 4) <= limits.frameBytes);
       expect(tallerFits).toBe(false);
     }
-    const huge = resolveGeometry({ cols: 300, rows: 80 }, { cellHpx: 32, cellWpx: 16 }, relayed);
+    const huge = resolveGeometry({ cols: 300, rows: 130 }, { cellHpx: 32, cellWpx: 16 }, relayed);
     expect(huge.raster.renderScale).toBe(0.5);
     expect(need(huge)).toBeLessThanOrEqual(relayed.storageBytes);
   });
@@ -91,6 +113,15 @@ describe("resolveGeometry", () => {
     expect(sameRaster(a.raster, taller.raster)).toBe(true);
     expect(sameRaster(a.raster, wider.raster)).toBe(false);
     expect(sameRaster(a.raster, bigger.raster)).toBe(false);
+  });
+
+  test("a resize that only moves the margins around the article keeps the raster", () => {
+    for (const limits of [direct, relayed]) {
+      const wide = resolveGeometry({ cols: 200, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, limits);
+      const wider = resolveGeometry({ cols: 300, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, limits);
+      expect(sameRaster(wide.raster, wider.raster)).toBe(true);
+      expect(wider.marginCols).toBeGreaterThan(wide.marginCols);
+    }
   });
 
   test("a zero-column screen still captures a positive width", () => {

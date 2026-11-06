@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { Page as BrowserPage } from "puppeteer-core";
 import { Chrome, resolveExecutable } from "../src/chrome.ts";
-import { CELL_CSS_PX, resolveGeometry, type Geometry } from "../src/geometry.ts";
+import { ARTICLE_MAX_WIDTH_CSS, CELL_CSS_PX, resolveGeometry, type Geometry } from "../src/geometry.ts";
 import { buildLayout, type Layout } from "../src/layout.ts";
 import { renderDocument, type Doc } from "../src/markdown.ts";
 import { CaptureGone, Page, resolveAssets, type Capture } from "../src/page.ts";
@@ -165,6 +165,43 @@ describe.skipIf(!exe)("page", () => {
       }
     }
   }, 60000);
+
+  test("a pane wider than the article lays it out at its full width and captures it whole", async () => {
+    const wide = resolveGeometry({ cols: 300, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
+    const layout = await sync(markdown, wide);
+    const box = await browserPage.evaluate(() => {
+      const r = document.querySelector("article.markdown-body")!.getBoundingClientRect();
+      return { left: r.left, right: r.right, width: r.width, innerWidth };
+    });
+    expect(box.innerWidth).toBe(wide.viewportWidthCssPx);
+    expect(box.width).toBe(ARTICLE_MAX_WIDTH_CSS);
+    expect(box.left).toBeGreaterThanOrEqual(0);
+    expect(box.right).toBeLessThanOrEqual(box.innerWidth);
+    const shot = await page.capture([...layout.slices.values()][0]!.capture);
+    expect(pngSize(shot.pngBase64).width).toBeGreaterThanOrEqual(wide.imgWidthPx);
+  }, 30000);
+
+  test("the dark page stays dark beside the article", async () => {
+    const wide = resolveGeometry({ cols: 300, rows: 40 }, { cellHpx: 28, cellWpx: 14 }, LIMITS);
+    const doc = await renderDocument("one\n", { theme: "dark", mdDir: dirname(FIXTURE) });
+    await page.sync(doc, wide);
+    await browserPage.waitForFunction(() => (document.getElementById("mdpx-dark") as HTMLLinkElement).sheet !== null);
+    const layout = buildLayout(await page.sync(doc, wide), wide);
+    const shot = await page.capture([...layout.slices.values()][0]!.capture);
+    const edges = await browserPage.evaluate(async (s: string) => {
+      const im = new Image();
+      im.src = "data:image/png;base64," + s;
+      await im.decode();
+      const c = document.createElement("canvas");
+      c.width = im.width;
+      c.height = im.height;
+      const ctx = c.getContext("2d")!;
+      ctx.drawImage(im, 0, 0);
+      const rgb = (x: number) => Array.from(ctx.getImageData(x, im.height >> 1, 1, 1).data.slice(0, 3));
+      return [rgb(0), rgb(im.width - 1)];
+    }, shot.pngBase64);
+    expect(edges).toEqual([[13, 17, 23], [13, 17, 23]]);
+  }, 30000);
 
   for (const cellHpx of [27, 28]) {
     test(`${cellHpx}px cells: a block moved by an edit above still matches its old capture`, async () => {
