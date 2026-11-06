@@ -21,6 +21,7 @@ const FIXTURE = resolve(import.meta.dir, "fixtures/sample.md");
 const LIMITS = { frameBytes: null, storageBytes: 320_000_000 };
 const PNG_IHDR_WIDTH_OFFSET = 16;
 const PNG_IHDR_HEIGHT_OFFSET = 20;
+const RASTER_NOISE = 8;
 
 let dir: string;
 let chrome: Chrome;
@@ -40,13 +41,14 @@ async function sync(md: string, g: Geometry): Promise<Layout> {
 }
 
 /**
- * Share of differing pixels between the content rows of two captures of one slice, taken at
- * different row phases: the content is lined up by where each capture says it starts, allowing
- * Chrome's pixel snapping to have moved it by one row either way.
+ * Share of pixels with a channel more than RASTER_NOISE apart between the content rows of two
+ * captures of one slice, taken at different row phases: the content is lined up by where each
+ * capture says it starts, allowing Chrome's pixel snapping to have moved it by one row either way.
+ * Chrome shades one anti-aliased edge a few levels differently at another place on the page.
  */
 function contentDifference(a: Capture, b: Capture, rows: number): Promise<number> {
   return browserPage.evaluate(
-    async (x: string, ya: number, y: string, yb: number, n: number) => {
+    async (x: string, ya: number, y: string, yb: number, n: number, noise: number) => {
       const load = async (s: string) => {
         const img = new Image();
         img.src = "data:image/png;base64," + s;
@@ -69,7 +71,12 @@ function contentDifference(a: Capture, b: Capture, rows: number): Promise<number
           for (let c = 0; c < Math.min(p.w, q.w); c++) {
             const i = (ra * p.w + c) * 4;
             const j = (rb * q.w + c) * 4;
-            if (p.d[i] !== q.d[j] || p.d[i + 1] !== q.d[j + 1] || p.d[i + 2] !== q.d[j + 2]) diff++;
+            if (
+              Math.abs(p.d[i]! - q.d[j]!) > noise ||
+              Math.abs(p.d[i + 1]! - q.d[j + 1]!) > noise ||
+              Math.abs(p.d[i + 2]! - q.d[j + 2]!) > noise
+            )
+              diff++;
           }
         }
         best = Math.min(best, diff / (n * Math.min(p.w, q.w)));
@@ -81,6 +88,7 @@ function contentDifference(a: Capture, b: Capture, rows: number): Promise<number
     b.pngBase64,
     Math.round(b.contentTopImgPx),
     rows,
+    RASTER_NOISE,
   );
 }
 
